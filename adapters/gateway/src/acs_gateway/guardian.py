@@ -19,6 +19,7 @@ from acs.client import (
     FailPosture,
     Negotiated,
     Resolution,
+    SessionRefused,
     Undecided,
     audit_event,
     open_session,
@@ -209,6 +210,8 @@ class Wire:
         self.answer_seen = False
         self.answer_written = False
         self.answer_cause: str | None = None
+        # A decoded JSON object that is no JSON-RPC answer. The caller writes it verbatim with the outcome's cause.
+        self.body: dict[str, Any] | None = None
         self.sending = False
         self.stopped = False
         # A transcript write that raised. The caller re-raises it, so the step settles as the gateway's own error.
@@ -239,8 +242,11 @@ class Wire:
 
     def _answer(self, envelope: Any) -> None:
         if response_shape_problem(envelope) is not None:
-            # A body that isn't a JSON-RPC answer, such as a 429's detail, is no envelope (A.7). The caller writes
-            # the gap line with the outcome's cause instead.
+            # A body that isn't a JSON-RPC answer, such as a 429's detail, gets its cause only once acs.client has
+            # classified it, so the caller writes it then. A JSON object goes in verbatim, so a verifier sees what
+            # the Guardian sent. Anything else leaves a gap line.
+            if isinstance(envelope, dict):
+                self.body = envelope
             return
         self.answer_seen = True
         if self.token is not None and time.monotonic() >= self.token.deadline:
@@ -308,8 +314,15 @@ class GuardianClient:
         if wire.request_written and not wire.answer_seen and wire.error is None:
             # The ClientHello went out and no envelope came back, so its gap is explicit, as for a step. Nothing
             # else was written in between, since sessionStart follows only a ServerHello.
-            self.transcript.append(session.session_id, "resp", None,
-                                   cause=getattr(handshake, "cause", None) or "no_answer")
+            try:
+                self.transcript.append(session.session_id, "resp", wire.body,
+                                       cause=getattr(handshake, "cause", None) or "no_answer")
+            except Exception as e:  # noqa: BLE001
+                # The same refusal acs.client gives when the ClientHello line fails: the record is incomplete, so
+                # the session must not open.
+                fields = {"dir": "resp", "method": "handshake/hello", "error": str(e)}
+                audit_event("on_wire_failed", **fields)
+                handshake = session.handshake = SessionRefused("on_wire_failed", fields)
         hello = dict(handshake.server_hello) if isinstance(handshake, Negotiated) else None
         session.posture = self.posture(hello)
         audit_event("session_opened", session_id=session.session_id, epoch=session.epoch,
@@ -414,7 +427,7 @@ class GuardianClient:
             if wire.request_written:
                 # The request went out and no envelope came back, so the gap is explicit.
                 cause = "decision_timeout" if late else outcome.cause
-                if not write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=cause)):
+                if not write_line(token, lambda: self.transcript.append(session_id, "resp", wire.body, cause=cause)):
                     return None, request_id
             return (None if late else outcome), request_id
         if late:

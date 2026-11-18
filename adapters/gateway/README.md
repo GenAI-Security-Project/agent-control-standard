@@ -208,7 +208,7 @@ One gap remains by design. When an epoch bump lands between a turn's calls and t
 
 The lines come from acs.client's `on_wire` hook (issue #576), so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
 
-When a request went out and no envelope came back (a timeout, a lost connection, or an HTTP error whose body isn't a JSON-RPC answer, such as a 429), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. A request acs.client refused before sending, such as one over the Guardian's body cap, leaves no line, since nothing reached the Guardian.
+Any other body that decodes to a JSON object, whatever its HTTP status, is written verbatim too, with `"cause"` set to how acs.client settled it. A 429's `{"detail": ...}` gets `http_429_error`, and a 200 that isn't a JSON-RPC answer gets `malformed_response`. When a request went out and no JSON object came back (a timeout, a lost connection, or a body that isn't JSON or isn't an object), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. The ClientHello follows the same rules. A request acs.client refused before sending, such as one over the Guardian's body cap, leaves no line, since nothing reached the Guardian.
 
 An answer that arrived after the deadline keeps its envelope, since the Guardian chained it, and its line adds `"cause": "decision_timeout"`. An answer that arrived in time but became late behind its own line (a slow disk), or that the gateway found late when the step settled, is withheld like any late answer. Its line was already written without a cause, so the next line marks it:
 
@@ -216,7 +216,7 @@ An answer that arrived after the deadline keeps its envelope, since the Guardian
 {"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}
 ```
 
-`discards` names the request whose answer, on the line before, the gateway did not carry out. This cause line is a lab convention until issue #577 settles it.
+`discards` names the request whose answer, on the line before, the gateway did not carry out. This cause line is a lab convention until issue #577 settles it. When the discards line itself can't be written, the step still denies as `decision_timeout` and the session retires (`session_retired` with cause `discard_unwritten`), so no later line follows the unmarked answer.
 
 **Audit.** The gateway writes audit lines through acs.client `audit_event`, as `ACS_AUDIT {json}` on stderr and in `ACS_AUDIT_FILE`. The `acs_audit_event` field names the event:
 
@@ -242,7 +242,7 @@ An answer that arrived after the deadline keeps its envelope, since the Guardian
 | `unsupported_tool_choice` | A tool_choice outside the allowlist |
 | `unsupported_tool_type` | A tool declaration that isn't a function tool |
 | `gateway_step_error` | A fault in the gateway's own gating code. Shadow forwards the traffic unchanged, enforce answers 500 |
-| `session_retired` | A claimed step the loop stopped waiting for. The session leaves the map, its remaining steps deny, and the next request for the conversation opens a fresh session. Fields: `session_id`, `method`, `request_id` (the claimed step's), `in_flight` (true when a transcript write or the send had already started and may still land), and `cause`: `step_hung` (the worker passed one more decision timeout) or `request_cancelled` (the request was cancelled while the worker was still landing) |
+| `session_retired` | A claimed step the loop stopped waiting for. The session leaves the map, its remaining steps deny, and the next request for the conversation opens a fresh session. Fields: `session_id`, `method`, `request_id` (the claimed step's), `in_flight` (true when a transcript write or the send had already started and may still land), and `cause`: `step_hung` (the worker passed one more decision timeout), `request_cancelled` (the request was cancelled while the worker was still landing), or `discard_unwritten` (a withheld late answer's discards line couldn't be written) |
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
 | `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |

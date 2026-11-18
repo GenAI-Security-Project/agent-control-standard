@@ -160,7 +160,8 @@ def test_a_step_whose_transcript_line_fails_denies(gateway, guardian, upstream, 
 
 
 # A tampered answer is an envelope, so its line carries it verbatim (test_transcript_wiring.py).
-@pytest.mark.parametrize("tool,cause", [("slow_tool", "decision_timeout"), ("rate_limited_tool", "http_429_error")])
+# A body that is a JSON object is written verbatim with its cause (test_transcript_wiring.py).
+@pytest.mark.parametrize("tool,cause", [("slow_tool", "decision_timeout"), ("list_body_tool", "http_500_error")])
 def test_a_step_without_a_usable_answer_leaves_an_explicit_gap_in_the_transcript(gateway, harness_guardian, upstream,
                                                                                   tmp_path, tool, cause):
     upstream.reply(response_body(call_item(tool, {}, "call_1")))

@@ -43,10 +43,59 @@ def test_a_tampered_answer_is_written_verbatim(gateway, harness_guardian, upstre
     assert lines[-1]["envelope"]["result"]["decision"] == "allow" and "cause" not in lines[-1]
 
 
-def test_a_body_that_is_no_envelope_keeps_its_gap_line(gateway, harness_guardian, upstream, tmp_path):
-    upstream.reply(response_body(call_item("rate_limited_tool", {}, "call_1")))
+@pytest.mark.parametrize("tool,body,cause", [
+    ("rate_limited_tool", {"detail": "rate limited"}, "http_429_error"),
+    ("odd_body_tool", {"detail": "not an answer"}, "malformed_response"),
+])
+def test_an_object_body_is_written_verbatim_with_its_cause(gateway, harness_guardian, upstream, audit, tmp_path, tool,
+                                                         body, cause):
+    upstream.reply(response_body(call_item(tool, {}, "call_1")))
     gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post("/v1/responses", json=finbot_request())
-    assert transcript_lines(tmp_path)[-1] == {"dir": "resp", "envelope": None, "cause": "http_429_error"}
+    applied = [e for e in audit() if e["acs_audit_event"] == "decision_applied"][0]
+    assert applied["cause"] == cause
+    assert transcript_lines(tmp_path)[-1] == {"dir": "resp", "envelope": body, "cause": cause}
+
+
+def test_a_body_that_is_no_object_keeps_its_gap_line(gateway, harness_guardian, upstream, tmp_path):
+    upstream.reply(response_body(call_item("list_body_tool", {}, "call_1")))
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian()).post("/v1/responses", json=finbot_request())
+    assert transcript_lines(tmp_path)[-1] == {"dir": "resp", "envelope": None, "cause": "http_500_error"}
+
+
+def test_a_failed_hello_is_written_with_its_cause(gateway, harness_guardian, upstream, audit, tmp_path):
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_FAIL_HELLOS="1")).post(
+        "/v1/responses", json=finbot_request())
+    opened = [e for e in audit() if e["acs_audit_event"] == "session_opened"][0]
+    lines = transcript_lines(tmp_path)
+    assert lines[0]["dir"] == "req" and lines[0]["envelope"]["method"] == "handshake/hello"
+    assert lines[1] == {"dir": "resp", "envelope": {"detail": "rate limited"}, "cause": opened["cause"]}
+    assert len(lines) == 2
+
+
+class FailingHelloAnswer:
+    """Writes the ClientHello, then fails on the line that answers it, like a disk that fills mid-handshake."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if direction == "resp":
+            raise OSError("disk full")
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_hello_gap_line_that_cannot_be_written_refuses_the_session(gateway, harness_guardian, upstream, audit,
+                                                                      tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_FAIL_HELLOS="1"))
+    client.app.state.gateway.guardian.transcript = FailingHelloAnswer(client.app.state.gateway.guardian.transcript)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    response = client.post("/v1/responses", json=finbot_request())
+    assert response.status_code == 200
+    opened = [e for e in audit() if e["acs_audit_event"] == "session_opened"][0]
+    assert (opened["handshake"], opened["cause"]) == ("SessionRefused", "on_wire_failed")
+    failed = [e for e in audit() if e["acs_audit_event"] == "on_wire_failed"]
+    assert [(e["dir"], e["method"]) for e in failed] == [("resp", "handshake/hello")]
 
 
 def test_a_request_line_is_written_before_the_send(gateway, guardian, upstream, tmp_path, monkeypatch):

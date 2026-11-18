@@ -111,8 +111,13 @@ def _inject(request: dict) -> dict | None:
     if count_file:
         with open(count_file, "a", encoding="utf-8") as f:
             f.write(f"{request.get('method')}\n")
-    if _tool(request.get("params") or {}) == "rate_limited_tool":
+    tool = _tool(request.get("params") or {})
+    if tool == "rate_limited_tool":
         return {"__harness_status__": 429}
+    if tool == "list_body_tool":
+        return {"__harness_status__": 500, "__harness_body__": ["not", "an", "object"]}
+    if tool == "odd_body_tool":
+        return {"__harness_status__": 200, "__harness_body__": {"detail": "not an answer"}}
     return None
 
 
@@ -153,7 +158,7 @@ def _install_hooks() -> None:
 
 def respond(self: Any, status: int, body: dict) -> None:
     if "__harness_status__" in body:
-        return _respond(self, body["__harness_status__"], {"detail": "rate limited"})
+        return _respond(self, body["__harness_status__"], body.get("__harness_body__", {"detail": "rate limited"}))
     return _respond(self, status, body)
 
 
