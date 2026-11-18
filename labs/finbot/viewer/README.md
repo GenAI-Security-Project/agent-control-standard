@@ -1,28 +1,37 @@
 # FinBot Lab Decision Viewer
 
-The decision viewer shows every step the lab gateway governs as it happens, one row per step, so a lab session reads like a live log of what the Guardian decided and whether its answer verifies. It is read only. Issue #586 tracks it, and BUILD_PLAN Appendix A.12 names what it must paint.
+The decision viewer shows every step the lab gateway governs as it happens, one row per step, with the Guardian's signed decision and whether acs-verify accepts it. <!-- claim:C-04 --> It is read only. Issue #586 tracks it, and BUILD_PLAN Appendix A.12 names what it must paint.
 
 ## What it shows
 
-Each row carries the time, the method, the tool, the decision, the reason codes, the signature algorithm, and a verify mark. The page polls every 500 ms and needs no reload. A large label above the table names the latest beat:
+Each row carries the time, the method, the tool, the decision, the reason codes, the signature algorithm, and a check mark. The page polls every 500 ms and needs no reload. A large label above the table names the latest beat:
 
-`handshake`, `first_allow`, `shadow_decision`, `deny`, `allow_after_fix`, `ask_pending`, `ask_resolved`, `modify`, `digest_mismatch`, `forge_passes_hmac`, `forge_fails_mldsa`, `keys_only_verify`, `downgrade_refused`.
+`handshake`, `first_allow`, `shadow_decision`, `deny`, `allow_after_fix`, `ask_pending`, `ask_resolved`, `modify`, `digest_mismatch`, `forge_passes_hmac`, `forge_fails_mldsa`, `keys_only_verify`, `downgrade_refused`. <!-- claim:C-03 --> <!-- claim:C-04 --> <!-- claim:C-05 -->
 
 With ACS off the gateway writes no transcript, so the page reads "no ACS record". An epoch bump, such as `lab mode off`, starts that count again.
 
-The verify mark is a word, so its meaning never rests on color:
+### The decision and what the gateway applied
+
+The decision column holds the decision in the Guardian's answer, as the transcript recorded it. The audit log is the gateway's own word on what it did, and no signature covers it, so it never changes that column. <!-- claim:N-04 --> When the gateway applied something else, the cell shows it underneath. A shadow row says the gateway forwarded the call. A row reads conflict, in white on red, when the audit line names a Guardian decision the answer doesn't hold, or says the gateway allowed a call the answer didn't allow.
+
+### The check mark
+
+The mark is a word, so its meaning never rests on color:
 
 | Mark | Means |
 |---|---|
-| verified | The answer verifies under ML-DSA-65 with the key document, bound to its request, with the key live at the request's time |
-| failed | The answer doesn't verify, or it is an HMAC answer in a session whose ServerHello verified under ML-DSA-65 |
-| not checked | No key document is loaded, or the answer is HMAC-signed |
-| unsigned | The answer carries no signature |
+| verified | acs-verify, run over the whole session file with the key document, accepted the session, and this answer carries an ML-DSA-65 signature it checked <!-- claim:C-04 --> |
+| key warning | As verified, but acs-verify warned, such as for a key the key document now revokes. The note gives the warning <!-- claim:C-04 --> |
+| failed | acs-verify failed the session at this row. The note gives its code <!-- claim:C-04 --> |
+| not checked | Nothing here could check this row: no key document, an HMAC session, a session too long for the viewer, or a session that failed at another row |
+| unsigned | The answer carries no signature, in a session that passed, or in one nothing here could check |
 | no answer | No usable answer came back, and the note says why |
 
-The verdict is acs-verify's own (`acs.testing.verify`), run on each request and answer pair with `--keys-only`. The audit chain spans a whole session, so `lab verify` checks it over the transcript.
+acs-verify (`acs.testing.verify`) runs over every line the viewer has read from a session file each time the file grows, so its own rules judge every row: the signature under the key its key_id names, the request binding and hash, the key's validity at the request's own time, a request_id seen twice, a request from another session, a cause on a signed answer, and a discards line away from its answer. <!-- claim:C-04 --> It runs keys only, and lab verify checks the audit chain over the finished transcript. When the key document changes on disk, the viewer reads it again and judges every session again.
 
-An HMAC decision is never marked verified here. The viewer holds no HMAC secret, and anyone holding that secret can write an HMAC answer, the agent side included (specification section 8.6). That gap is the point of module 7.
+A session is judged only when its first signed answer names ML-DSA-65. The viewer holds no HMAC secret, and anyone holding that secret can write an HMAC answer, the agent side included (specification section 8.6), so an HMAC session reads not checked and never verified. In a session judged under ML-DSA-65, an HMAC or unsigned answer fails. <!-- claim:C-04 -->
+
+A replay miss is a row of its own, noted as the recorded neutral reply. <!-- claim:C-08 -->
 
 ## Run it
 
@@ -36,17 +45,35 @@ It binds `127.0.0.1:8095` and prints `ACS_VIEWER_LISTENING port=<port>` once it 
 | Setting | Default | Purpose |
 |---|---|---|
 | `ACS_TRANSCRIPT_DIR` | required | The gateway's transcript directory |
-| `ACS_AUDIT_FILE` | unset | The gateway's audit log. Unset, rows carry no shadow or applied decisions and no ASK rows |
-| `ACS_GUARDIAN_KEYS` | unset | The Guardian's key document. Unset or unusable, every ML-DSA-65 answer reads not checked |
+| `ACS_AUDIT_FILE` | unset | The gateway's audit log. Unset, rows show no applied decision and no ASK rows |
+| `ACS_GUARDIAN_KEYS` | unset | The Guardian's key document. Unset or unusable, every row reads not checked |
 | `ACS_GUARDIAN_KEY_ID`, `ACS_GUARDIAN_KEY_FINGERPRINT` | unset | The same pin the gateway puts on the key document |
-| `ACS_VIEWER_VERIFY_DIR` | `verify` beside the transcript directory | Where the module 7 commands write their results |
+| `ACS_VIEWER_VERIFY_DIR` | `verify` beside the transcript directory | Where the module 7 commands write their results <!-- claim:C-03 --> |
 | `ACS_VIEWER_PAINT_LOG` | unset, so off | Where the page logs each beat it paints, for the video shoot |
 
 The viewer runs as the gateway's user, since the gateway writes its logs with mode 0600.
 
+## Limits
+
+Every store is bounded, so a junk or endless log costs bounded memory and bounded time per poll:
+
+| Bound | Value |
+|---|---|
+| Bytes read from one log per poll | 256 KiB. The next poll carries on |
+| Longest line | 1 MiB. A longer line is one unreadable row, cut short |
+| Rows kept | 5000. The oldest go first |
+| Rows in one answer to the page | 500. The page asks again at once while more wait |
+| Rows on the page | 1000. The oldest go first |
+| Session files followed | 200, the most recently changed |
+| Lines judged per session | 4000 lines or 32 MiB. Past it the session's rows read not checked, and the note names the lab command that checks the whole file |
+| Audit lines waiting for their step | 10000 |
+| A silent connection | dropped after 10 seconds |
+
+A run of unreadable lines is one row with a count.
+
 ## Safety
 
-The logs hold text an attacker can shape through the model or the Guardian, so every string the viewer serves escapes control characters, bidi overrides and other invisible characters (issue #468). The page writes text with `textContent` only and loads nothing from another origin.
+The logs hold text an attacker can shape through the model or the Guardian, so every string the viewer serves escapes control characters, bidi overrides and other invisible characters, exactly once (issue #468). The page writes text with `textContent` and text nodes only, maps each decision through a fixed set before it names a style, and loads nothing from another origin.
 
 A localhost bind doesn't stop a page on another site from reaching the viewer through DNS rebinding. Every request must name `127.0.0.1`, `localhost` or `[::1]` in its Host header, and a paint must come from the page's own origin. The viewer never writes, renames, truncates or locks a log. Its one write is the paint log, and only when `ACS_VIEWER_PAINT_LOG` is set.
 
@@ -58,13 +85,13 @@ Each of these is a lab convention, off the default ACS path, until its issue set
 - ML-DSA-65 response signing and the `x_acs_lab_response_algorithm` negotiation (issue #316).
 - The request hash `x_acs_lab_request_sha256` in each answer (issue #13).
 - The gateway's discards line, which marks an answer the gateway withheld (issue #577).
-- The module 7 result files in the verify directory, one JSON object each, accepted for LAB-16 (plan LAB-13, open question 1):
+- The module 7 result files, one JSON object each, accepted for LAB-16 (plan LAB-13, open question 1). <!-- claim:C-03 -->
 
 ```json
 {"kind": "forge", "algorithm": "HMAC-SHA256", "result": "verified", "entry": 7, "detail": "a forged allow verifies"}
 ```
 
-`kind` is `forge`, `keys_only` or `downgrade`, `algorithm` is `HMAC-SHA256` or `ML-DSA-65`, `result` is `verified`, `broken` or `refused`, and `entry` is a transcript line or null. A file of any other shape is skipped.
+`kind` is `forge`, `keys_only` or `downgrade`, `algorithm` is `HMAC-SHA256` or `ML-DSA-65`, `result` is `verified`, `broken` or `refused`, and `entry` is a transcript line or null. A file of any other shape is skipped. <!-- claim:C-03 --> <!-- claim:C-04 --> <!-- claim:C-05 -->
 
 ## Test it
 
