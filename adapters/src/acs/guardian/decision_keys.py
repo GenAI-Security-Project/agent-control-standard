@@ -111,12 +111,18 @@ def load_signing_key(path: str, key_id: str) -> MLDSA65SigningKey:
     """The signing key in an owner-only, non-symlink seed file. Every refusal names ACS_GUARDIAN_SIGNING_KEY_FILE."""
     # The one reader every secret goes through: opened once, never through a symlink or a FIFO, and checked through
     # that descriptor (reviews R-M2, CR3-2).
-    raw = read_trusted_file(path, setting=SIGNING_KEY_FILE_ENV, max_bytes=65, mode_rule=owner_only,
+    # The cap leaves room past the 65 valid bytes, so a seed with a CRLF ending reaches the content checks and is
+    # refused for its line ending, not for its size (final review M1).
+    raw = read_trusted_file(path, setting=SIGNING_KEY_FILE_ENV, max_bytes=128, mode_rule=owner_only,
                             refused=DecisionKeyError)
     try:
         text = raw.decode("ascii")
     except UnicodeDecodeError:
         text = ""
+    if "\r" in text:
+        raise DecisionKeyError(f"{SIGNING_KEY_FILE_ENV} {path!r} has a CRLF line ending. It must hold 64 lowercase "
+                               "hex characters and at most one LF. Fix: remove the carriage return, as with "
+                               f"dos2unix {path}")
     if not _SEED_HEX.fullmatch(text):
         # The content is the private key, so no part of it reaches the message.
         raise DecisionKeyError(f"{SIGNING_KEY_FILE_ENV} {path!r} must hold 64 lowercase hex characters, "

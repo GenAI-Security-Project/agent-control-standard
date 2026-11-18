@@ -88,6 +88,19 @@ def test_load_signing_key_refuses_bad_hex(tmp_path, content):
         load_signing_key(str(path), KEY_ID)
 
 
+def test_a_crlf_seed_is_refused_for_its_line_ending(tmp_path):
+    # Final review M1: a Windows-copied seed was refused as oversized, which sent the operator after the wrong fix.
+    seed = "ab" * 32
+    path = tmp_path / "crlf.key"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(seed.encode("ascii") + b"\r\n")
+    with pytest.raises(DecisionKeyError, match="ACS_GUARDIAN_SIGNING_KEY_FILE .*CRLF") as caught:
+        load_signing_key(str(path), KEY_ID)
+    assert "larger than" not in str(caught.value)
+    assert seed not in str(caught.value)
+
+
 def test_load_signing_key_refuses_a_missing_file(tmp_path):
     with pytest.raises(DecisionKeyError, match="ACS_GUARDIAN_SIGNING_KEY_FILE"):
         load_signing_key(str(tmp_path / "absent.key"), KEY_ID)
