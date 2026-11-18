@@ -11,7 +11,7 @@ import time
 import uuid
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -47,7 +47,14 @@ from acs_gateway.apply import (
 )
 from acs_gateway.approver import CHOICES, TIMEOUT, Approvals
 from acs_gateway.config import STEP_GRACE_S, GatewayConfig, check_client_state_dirs
-from acs_gateway.guardian import TOOL_CALL_REQUEST, TOOL_CALL_RESULT, GuardianClient, StepResult, StepToken
+from acs_gateway.guardian import (
+    SESSION_END,
+    TOOL_CALL_REQUEST,
+    TOOL_CALL_RESULT,
+    GuardianClient,
+    StepResult,
+    StepToken,
+)
 from acs_gateway.sessions import (
     CachedOutcome,
     Session,
@@ -150,12 +157,17 @@ class Gateway:
         self._ungoverned_arrivals = 0
         # Spans (LAB-09). Off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, and then nothing here waits on the exporter.
         self.tracing = Tracing.from_config(config)
+        # The loop the model port runs on. Session locks belong to it, so every sessionEnd runs there, even one an
+        # epoch bump schedules from another thread.
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self._ending: set[Future] = set()
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
         # acs.client blocks on sockets, so Guardian calls run on workers of their own, never the default pool. Each
         # startup gets a fresh executor, since shutdown ends the last one.
         executor = self.executor = ThreadPoolExecutor(max_workers=self.config.workers, thread_name_prefix="acs-gateway")
+        self.loop = asyncio.get_running_loop()
         try:
             if self.guardian is not None:
                 check_client_state_dirs(os.environ)
@@ -170,14 +182,77 @@ class Gateway:
                 yield
         finally:
             self.http = None
-            executor.shutdown(wait=False, cancel_futures=True)
-            if self.tracing.enabled:
-                # Flush queued spans, waiting at most TRACING_CLOSE_S so a hung Jaeger never holds the exit (LAB-09).
-                await asyncio.get_running_loop().run_in_executor(None, self.tracing.close, TRACING_CLOSE_S)
+            try:
+                await self._end_all()
+            finally:
+                self.loop = None
+                executor.shutdown(wait=False, cancel_futures=True)
+                if self.tracing.enabled:
+                    # Flush queued spans, waiting at most TRACING_CLOSE_S so a hung Jaeger never holds the exit
+                    # (LAB-09). This runs after every sessionEnd, so their spans are in the flush.
+                    await asyncio.get_running_loop().run_in_executor(None, self.tracing.close, TRACING_CLOSE_S)
 
     def _evicted(self, session: Session) -> None:
         _audit("session_evicted", session_id=session.session_id, epoch=session.epoch,
                max_sessions=self.config.max_sessions)
+        self._schedule_end(session, "abandoned")
+
+    def _end_bound(self, session: Session) -> float:
+        """How long ending one session may take at each of its two waits, the lock and the step."""
+        timeout = session.posture.timeout_for(SESSION_END) if session.posture else self.config.decision_timeout_s
+        return timeout + _STEP_GRACE_S
+
+    def _schedule_end(self, session: Session, reason: str) -> None:
+        """Send steps/sessionEnd for a session the gateway just dropped, without waiting for it (rehearsal R9).
+
+        The drop itself is already done. A session that never negotiated and started sends nothing, and neither does
+        off mode. Safe to call from any thread.
+        """
+        if self.guardian is None or self.loop is None or session.ending or not _opened(session.handshake):
+            return
+        session.ending = True
+        future = asyncio.run_coroutine_threadsafe(self._end_session(session, reason), self.loop)
+        self._ending.add(future)
+        future.add_done_callback(self._ending.discard)
+
+    async def _end_session(self, session: Session, reason: str) -> None:
+        """sessionEnd under the session lock, after any request still holding it, each wait bounded. A failure is
+        audited as session_ended with its cause, and the transcript records it like any step's."""
+        bound = self._end_bound(session)
+        try:
+            await asyncio.wait_for(session.lock.acquire(), bound)
+        except asyncio.TimeoutError:
+            _audit("session_ended", session_id=session.session_id, reason=reason, cause="lock_timeout",
+                   request_id=None)
+            return
+        try:
+            token = StepToken(time.monotonic() + bound - _STEP_GRACE_S)
+            try:
+                future = asyncio.get_running_loop().run_in_executor(
+                    self.executor, functools.partial(self.guardian.end, session, reason, token))
+                result = await asyncio.wait_for(asyncio.shield(future), bound)
+                cause, request_id = result.cause, result.request_id
+            except asyncio.TimeoutError:
+                # The worker never came back. Stop it writing or sending anything more, as for a hung step.
+                if not token.cancel():
+                    token.retire()
+                cause, request_id = "decision_timeout", token.request_id
+            except Exception as e:  # noqa: BLE001
+                cause, request_id = "adapter_exception", token.request_id
+                _audit("gateway_step_error", phase="session_end", session_id=session.session_id, error=repr(e))
+            _audit("session_ended", session_id=session.session_id, reason=reason, cause=cause, request_id=request_id)
+        finally:
+            session.lock.release()
+
+    async def _end_all(self) -> None:
+        """At shutdown, end every session still held and wait for every end under way, together bounded."""
+        held = self.sessions.held()
+        for session in held:
+            self._schedule_end(session, "cancelled")
+        pending = [asyncio.wrap_future(f) for f in list(self._ending)]
+        if pending:
+            bound = 2 * max([self._end_bound(s) for s in held] or [self.config.decision_timeout_s + _STEP_GRACE_S])
+            await asyncio.wait(pending, timeout=bound)
 
     async def _read_body(self, request: Request) -> bytes | None:
         """The request body, or None once it passes the size limit."""
@@ -194,8 +269,11 @@ class Gateway:
         return b"".join(chunks)
 
     def bump_epoch(self) -> int:
+        dropped = self.sessions.held()
         epoch = self.sessions.bump_epoch()
         _audit("epoch_bumped", epoch=epoch)
+        for session in dropped:
+            self._schedule_end(session, "cancelled")
         return epoch
 
     async def not_found(self, request: Request) -> Response:
@@ -1118,6 +1196,7 @@ class Gateway:
         # in_flight says a line or the send started before retirement and may still land, so a reader expects it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
+        self._schedule_end(session, "cancelled" if cause == "request_cancelled" else "error")
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny",
                 causes: list[str] | None = None) -> None:

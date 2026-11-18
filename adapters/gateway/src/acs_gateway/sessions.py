@@ -155,6 +155,8 @@ class Session:
     # Order of creation across epochs, so an arrival on a newer session for the same conversation counts as later
     # (round 2, R5 and R6).
     ordinal: int = 0
+    # Set once the gateway scheduled steps/sessionEnd, so a session is never ended twice.
+    ending: bool = False
 
     @property
     def busy(self) -> bool:
@@ -202,6 +204,10 @@ class SessionMap:
         session.retired = True
         for key in [k for k, s in self._sessions.items() if s is session]:
             del self._sessions[key]
+
+    def held(self) -> list[Session]:
+        """Every session in the map, in LRU order."""
+        return list(self._sessions.values())
 
     def bump_epoch(self) -> int:
         """Forget every session and cached outcome, so a call_id seen before is gated afresh under a new session."""

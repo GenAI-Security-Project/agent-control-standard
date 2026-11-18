@@ -69,6 +69,8 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             return {**base, "decision": "defer", "reasoning": "later", "reason_codes": ["deferred"],
                     "defer_details": {"reason": "low_confidence", "resolution_method": "timeout",
                                       "resolution_timeout_ms": 1000}}
+    if method == "steps/sessionEnd" and os.environ.get("HARNESS_SLOW_END_S"):
+        time.sleep(float(os.environ["HARNESS_SLOW_END_S"]))
     if method == "steps/toolCallResult":
         if tool == "get_vendor_details":
             return {**base, "decision": "modify", "reasoning": "bank account removed",
@@ -111,6 +113,8 @@ def _inject(request: dict) -> dict | None:
     if count_file:
         with open(count_file, "a", encoding="utf-8") as f:
             f.write(f"{request.get('method')}\n")
+    if request.get("method") == "steps/sessionEnd" and os.environ.get("HARNESS_FAIL_END") == "1":
+        return {"__harness_status__": 503}
     tool = _tool(request.get("params") or {})
     if tool == "rate_limited_tool":
         return {"__harness_status__": 429}

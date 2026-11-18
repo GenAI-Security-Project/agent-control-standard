@@ -187,6 +187,8 @@ Tool arguments come from the model, which an attacker can steer, so the page esc
 
 Each agent run is one ACS session, keyed on the SHA-256 of the system text (the `instructions` field, or the first system or developer item) and the first user message. The gateway opens it with the handshake and then `steps/sessionStart`, so the session's chain roots there. One lock per session keeps its steps in order.
 
+Whenever the gateway drops a session it sends `steps/sessionEnd`, so a verifier can check the transcript's tail. The `reason` follows session-end.json: `abandoned` for an eviction, `error` for a retirement (`cancelled` when the request itself was cancelled), and `cancelled` for an epoch bump or a graceful shutdown. It goes out under the session lock, after any request still holding it, and its lines are written like any step's. The drop never waits for it. Waiting for the lock and the answer are each bounded by the decision timeout plus one second, and shutdown waits at most twice that. A failure or a timeout is audited as `session_ended` with its cause and recorded in the transcript. A session that never negotiated and started, such as one the Guardian refused, sends nothing, and off mode sends nothing.
+
 A session whose handshake or sessionStart failed denies every step, and the next request for it, at least a second after the failure, retries once under a fresh session_id, audited as `session_retried`.
 
 FinBot's agents resend their whole history every turn. The gateway caches each gated item's outcome on (session_id, call_id) and reapplies it on every resend, so a redacted value never reappears and no item is governed twice.
@@ -206,7 +208,7 @@ One gap remains by design. When an epoch bump lands between a turn's calls and t
 {"dir": "resp", "envelope": {"jsonrpc": "2.0", "result": {"decision": "deny", "...": "..."}}}
 ```
 
-The lines come from acs.client's `on_wire` hook (issue #576), so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
+The lines come from acs.client's `on_wire` hook (issue #576), so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`, and ends with `steps/sessionEnd` once the gateway drops the session. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
 
 Any other body that decodes to a JSON object, whatever its HTTP status, is written verbatim too, with `"cause"` set to how acs.client settled it. A 429's `{"detail": ...}` gets `http_429_error`, and a 200 that isn't a JSON-RPC answer gets `malformed_response`. When a request went out and no JSON object came back (a timeout, a lost connection, or a body that isn't JSON or isn't an object), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. The ClientHello follows the same rules. A request acs.client refused before sending, such as one over the Guardian's body cap, leaves no line, since nothing reached the Guardian.
 
@@ -246,6 +248,7 @@ An answer that arrived after the deadline keeps its envelope, since the Guardian
 | `session_retried` | A failed handshake or sessionStart was retried under a new session_id |
 | `sessions_full` | Every session was busy, so a new conversation got 503 |
 | `session_evicted` | The session cap evicted the least recently used session |
+| `session_ended` | The gateway sent `steps/sessionEnd` for a session it dropped. Fields: `session_id`, `reason`, `request_id`, and `cause`, which is null when the Guardian answered and otherwise says why not (`decision_timeout`, an `http_*` cause, `lock_timeout` when the session lock never came free) |
 | `epoch_bumped` | The epoch moved |
 | `replay_miss` | Replay answered with the miss response. `cause` is `no_recording`, `placeholder_mismatch`, `placeholder_unfilled` or `unreadable_request`, with `step`, `branch` and `stream`, and `scenario` when a line matched but couldn't be filled |
 | `capture_skipped` | Capture wrote no line for a successful exchange. `cause` is `unreadable_request`, `unreadable_response`, `unmapped_id` (the answer would still carry a user id or namespace), `invalid_line` (the loader would reject the line), or `superseded_attempt` (a later byte-identical attempt replaced this one) |

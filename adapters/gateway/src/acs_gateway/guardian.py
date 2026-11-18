@@ -34,9 +34,10 @@ from acs_gateway.sessions import Session
 from acs_gateway.transcript import Transcript
 
 SESSION_START = "steps/sessionStart"
+SESSION_END = "steps/sessionEnd"
 TOOL_CALL_REQUEST = "steps/toolCallRequest"
 TOOL_CALL_RESULT = "steps/toolCallResult"
-METHODS = [SESSION_START, TOOL_CALL_REQUEST, TOOL_CALL_RESULT]
+METHODS = [SESSION_START, TOOL_CALL_REQUEST, TOOL_CALL_RESULT, SESSION_END]
 PLATFORM = "openai-responses-gateway"
 
 @dataclass(frozen=True)
@@ -440,6 +441,14 @@ class GuardianClient:
                     raise _DiscardUnwritten(request_id) from e
             return None, request_id
         return outcome, request_id
+
+    def end(self, session: Session, reason: str, token: StepToken) -> StepResult:
+        """steps/sessionEnd for a session the gateway is dropping, as one more step of it (rehearsal finding R9).
+
+        reason is session-end.json's: abandoned for an eviction, error or cancelled for a retirement, cancelled for an
+        epoch bump or a shutdown. Never raises, like step.
+        """
+        return self.step(session, SESSION_END, {"reason": reason}, token)
 
     def discard_late(self, session_id: str, request_id: str, token: StepToken | None) -> None:
         """Mark the answer on the line before as withheld for lateness (lab convention, issue #577)."""
