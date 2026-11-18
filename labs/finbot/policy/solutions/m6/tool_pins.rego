@@ -7,12 +7,19 @@
 # issue #531.
 package finbot
 
-# A version that is present and pinned for none of this tool's declarations.
+# A version that is present and pinned for none of this tool's declarations. A registry entry with no digests list
+# pins nothing, so it matches no version. The check negates a named rule, since `not version in <digests>` over a
+# missing list would never fire.
 deny_codes contains "tool_content_hash_mismatch" if {
 	registered
-	version := input.payload.tool.version
-	is_string(version)
-	not version in data.finbot_lab.tools[tool_name].digests
+	version_readable
+	not version_pinned
+}
+
+version_pinned if {
+	digests := data.finbot_lab.tools[tool_name].digests
+	is_array(digests)
+	input.payload.tool.version in digests
 }
 
 # No version, or one that isn't a string. A result of a call the gateway never gated after an epoch bump carries

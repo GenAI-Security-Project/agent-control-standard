@@ -57,3 +57,16 @@ test_non_string_version_denies if {
 test_any_pinned_digest_allows if {
 	verdict_for(call(tool("get_vendor_details", "sha256:d2"))) == {"decision": "allow"}
 }
+
+# A registry entry without a usable digests list pins nothing, so no version can match it.
+test_entry_without_digests_denies if {
+	every entry in [{}, {"digest": ["sha256:aa"]}, true, {"digests": "sha256:aa"}, {"digests": []}] {
+		mismatch_with_entry(entry)
+	}
+}
+
+mismatch_with_entry(entry) if {
+	v := finbot.verdict with input as call(tool("finmail__send_email", "sha256:aa"))
+		with data.finbot_lab.tools as {"finmail__send_email": entry}
+	v.reason_codes == ["tool_content_hash_mismatch"]
+}

@@ -8,7 +8,10 @@
 #
 #   {"tool": {"name": "finmail__send_email", "version": "sha256:3f1c..."}, "arguments": {...}}
 #
-# Deny with tool_content_hash_mismatch on calls and results alike. Think about a step that carries no version.
+# Deny with tool_content_hash_mismatch on calls and results alike. Think about a step that carries no version, and
+# a registry entry with no digests list. Negate a named rule, never an expression over a value that may be
+# missing: OPA binds the value before the not, so `not is_string(input.payload.tool.version)` with no version fails
+# the body and the step goes through.
 package finbot
 
 # The starter's body never matches, so a poisoned declaration goes through. Replace false with the rule.

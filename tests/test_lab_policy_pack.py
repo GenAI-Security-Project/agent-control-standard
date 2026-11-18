@@ -101,3 +101,20 @@ def test_data_json_holds_the_wp6_keys() -> None:
     assert set(data) == {"finbot_lab"}
     assert set(data["finbot_lab"]) == {"tools", "vendor_domains", "payment_ask_threshold", "egress_allow"}
     assert data["finbot_lab"]["payment_ask_threshold"] == 5000
+
+
+DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+@pytest.mark.parametrize("registry", ["data.json", "tools/fixtures/registry.json"])
+def test_every_registry_entry_pins_digests(registry: str) -> None:
+    # Module 6 matches a version only against a digests list. An entry without one registers the tool and pins
+    # nothing, so the guard keeps a hand edit from leaving a tool pinned to no declaration.
+    document = json.loads((PACK / registry).read_text())
+    tools = document["finbot_lab"]["tools"] if registry == "data.json" else document
+    assert isinstance(tools, dict)
+    for name, entry in tools.items():
+        assert isinstance(entry, dict) and set(entry) == {"digests"}, f"{registry}: {name} is {entry!r}"
+        digests = entry["digests"]
+        assert isinstance(digests, list) and digests, f"{registry}: {name} has no digests"
+        assert all(isinstance(d, str) and DIGEST.fullmatch(d) for d in digests), f"{registry}: {name} {digests!r}"
