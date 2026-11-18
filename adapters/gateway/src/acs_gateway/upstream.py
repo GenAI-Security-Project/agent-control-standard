@@ -226,11 +226,17 @@ def _token(outcome: Any, result: bool) -> str:
     return "m"
 
 
+def call_ids(items: Any) -> list[str]:
+    """The call_ids of the function calls among an upstream reply's output items, read before gating removes any. A
+    whole answer passes its output list and a stream passes each item as it decides it, so both count the same calls
+    (rehearsal R7)."""
+    return [i["call_id"] for i in items if isinstance(i, dict) and i.get("type") == "function_call"
+            and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(items, list) else []
+
+
 def reply_call_ids(reply: Any) -> list[str]:
-    """The call_ids of the function calls in an upstream reply, read before gating removes any."""
-    output = reply.get("output") if isinstance(reply, dict) else None
-    return [i["call_id"] for i in output if isinstance(i, dict) and i.get("type") == "function_call"
-            and isinstance(i.get("call_id"), str) and i["call_id"]] if isinstance(output, list) else []
+    """call_ids for a whole answer."""
+    return call_ids(reply.get("output") if isinstance(reply, dict) else None)
 
 
 def note_reply_calls(session: Session, call_ids: list[str], body: Any) -> None:

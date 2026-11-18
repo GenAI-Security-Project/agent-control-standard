@@ -67,6 +67,7 @@ from acs_gateway.transcript import ModelInputLog, Transcript
 from acs_gateway.upstream import (
     BRANCH_HEADER,
     UpstreamSource,
+    call_ids,
     note_reply_calls,
     off_branch,
     reply_call_ids,
@@ -354,7 +355,7 @@ class Gateway:
                 return sent
             media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
             if 200 <= sent.status_code < 300 and media == "text/event-stream":
-                return await self._governed_stream(key, pins, sent, hold)
+                return await self._governed_stream(key, pins, sent, hold, body)
             # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
             upstream = await self._read_answer(sent)
         else:
@@ -401,11 +402,11 @@ class Gateway:
         return _relay(upstream, reply if changed else None)
 
     async def _governed_stream(self, key: str, pins: list[Session], upstream: httpx.Response,
-                               hold: AskHold) -> Response:
+                               hold: AskHold, body: dict[str, Any]) -> Response:
         """A streamed answer (issue #578). Text streams as it arrives and each call reaches the client only as the item
         its decision produced. The session lock is held for the life of the stream, so the session's steps stay in
         order, and the response owns the lock, the pins and the upstream from here on, releasing them however the
-        stream ends."""
+        stream ends. body is the request, which places the stream's removed calls for replay's branch tokens."""
         headers = _client_headers(upstream.headers, decoded=True)
         stack = contextlib.AsyncExitStack()
         session: Session | None = None
@@ -441,8 +442,14 @@ class Gateway:
         # GovernedStream hands the listener a receive that sets the hold's disconnect event first, the same event a
         # non-streamed hold reads (round 4).
         hold.poll = None
-        editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes,
-                              decide=functools.partial(self._gate_item, session, asks=hold), audit=_audit,
+        reply_calls: list[str] = []
+
+        async def decide(item: dict[str, Any]) -> Any:
+            # Read before gating, as the whole answer reads reply_call_ids, so a removed call still counts.
+            reply_calls.extend(call_ids([item]))
+            return await self._gate_item(session, item, hold)
+
+        editor = StreamEditor(enforce=self.enforce, limit=self.config.max_body_bytes, decide=decide, audit=_audit,
                               audit_fields={"session_id": session.session_id},
                               idle_timeout=self.config.stream_idle_timeout_s,
                               deadline=self.config.stream_deadline_s if self.enforce else None)
@@ -464,9 +471,14 @@ class Gateway:
                         # Whatever ended the drain, nothing records on after the lock is released.
                         await editor.abort()
                     finally:
-                        await stack.aclose()
-                        for pinned in owned:
-                            pinned.active -= 1
+                        try:
+                            # The whole answer's rule, applied once every call the stream reached is decided, so the
+                            # next request's branch keeps a removed call's d (issue #579, rehearsal R7).
+                            note_reply_calls(session, reply_calls, body)
+                        finally:
+                            await stack.aclose()
+                            for pinned in owned:
+                                pinned.active -= 1
 
         return GovernedStream(editor.edit(upstream.aiter_bytes()), cleanup, status_code=upstream.status_code,
                               headers=headers, watch=hold.watch)

@@ -1,7 +1,11 @@
 """Branch tokens come from the session's own outcome records, never from text in the request (fix round 2, R1)."""
 import json
 
-from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body
+from conftest import NEUTRAL, SSE, call_item, finbot_request, message_item, response_body
+from streams import encode, stream_events
+
+from acs_gateway.sessions import conversation_key
+from acs_gateway.upstream import session_branch
 
 
 def lines(tmp_path):
@@ -76,6 +80,43 @@ def test_a_removed_call_is_d_in_the_place_it_was_gated(gateway, guardian, upstre
     # A retry of the first request comes after its calls were gated, and still carries no token for them.
     client.post("/v1/responses", json=finbot_request())
     assert [line["branch"] for line in lines(tmp_path)] == ["", "d,a,a", ""]
+
+
+def test_a_call_removed_from_a_stream_takes_its_branch_token(gateway, guardian, upstream):
+    """Rehearsal R7: a streamed answer places its removed calls by the same rule as a whole answer, so the next
+    request's branch keeps the d."""
+    upstream.reply(SSE(encode(stream_events(call_item("bash", {"command": "rm -rf /"}, "call_bash")))))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    streamed = {**finbot_request(), "stream": True}
+    with client.stream("POST", "/v1/responses", json=streamed) as r:
+        b"".join(r.iter_bytes())
+    session = client.app.state.gateway.sessions.peek(conversation_key(streamed))
+    assert session is not None and session.calls["call_bash"].outcome == "removed"
+    assert session_branch(session, finbot_request({"role": "user", "content": "And then?"})) == "d"
+
+
+def test_the_whole_answer_path_gives_the_same_d(gateway, guardian, upstream):
+    """The control for the test above: the same removal answered whole."""
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_bash")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    body = finbot_request()
+    client.post("/v1/responses", json=body)
+    session = client.app.state.gateway.sessions.peek(conversation_key(body))
+    assert session_branch(session, finbot_request({"role": "user", "content": "And then?"})) == "d"
+
+
+def test_a_streamed_reply_sends_the_same_branch_header_as_a_whole_one(gateway, guardian, upstream, tmp_path):
+    """The header capture and replay key on, for the conversation test_a_removed_call_is_d_in_the_place_it_was_gated
+    runs whole, with its first reply streamed."""
+    client = capture(gateway, tmp_path, guardian)
+    upstream.reply(SSE(encode(stream_events(call_item("get_vendor_details", {"vendor_id": 7}, "call_1"),
+                                            call_item("bash", {"command": "rm -rf /"}, "call_2")))))
+    upstream.reply(response_body(message_item("done")))
+    with client.stream("POST", "/v1/responses", json={**finbot_request(), "stream": True}) as r:
+        b"".join(r.iter_bytes())
+    kept = call_item("get_vendor_details", {"vendor_id": 7}, "call_1")
+    client.post("/v1/responses", json=finbot_request(kept, output("call_1", "{}")))
+    assert lines(tmp_path)[-1]["branch"] == "d,a,a"
 
 
 def test_shadow_records_only_a(gateway, guardian, upstream, tmp_path):
