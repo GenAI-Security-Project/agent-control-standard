@@ -100,6 +100,8 @@ class GatewayConfig:
     ask_max_s: float = MAX_ASK_S
     upstream_mode: str = "live"
     upstream_key_file: Path | None = None
+    # A key file on a model port off loopback, allowed by ACS_UPSTREAM_KEY_SHARED=1 (lab convention, issue #588).
+    upstream_key_shared: bool = False
     recordings_dir: Path | None = None
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
     upstream_model: str | None = None
@@ -139,10 +141,18 @@ class GatewayConfig:
                              f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
         upstream_mode, key_file, recordings, scenario = _upstream_settings(env)
         listen_host = env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1"
-        if key_file is not None and not _loopback(listen_host):
+        shared = env.get("ACS_UPSTREAM_KEY_SHARED", "").strip()
+        if shared not in ("", "0", "1"):
+            raise ValueError(f"ACS_UPSTREAM_KEY_SHARED must be 0 or 1, got {shared!r}")
+        key_shared = key_file is not None and not _loopback(listen_host)
+        if key_shared and shared != "1":
             # The model port takes no client credential, so with a key file anyone who reaches it spends the
-            # operator's key. Loopback keeps that to this host (security scan F1 and F2).
-            raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got {listen_host!r}")
+            # operator's key. Loopback keeps that to this host (security scan F1 and F2). Lab convention: the lab
+            # bundle binds every address on a container network whose only other member is the agent, and says so
+            # with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
+            raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got "
+                             f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client that can reach "
+                             "the model port may spend the key")
         model = env.get("ACS_UPSTREAM_MODEL", "").strip()
         replay_scenario = env.get("ACS_REPLAY_SCENARIO", "").strip() if upstream_mode == "replay" else ""
         if replay_scenario and not _SCENARIO.fullmatch(replay_scenario):
@@ -162,6 +172,7 @@ class GatewayConfig:
             admin_port=int(admin_port) if admin_port else None,
             admin_token_file=Path(token_file) if token_file else None,
             listen_host=listen_host,
+            upstream_key_shared=key_shared,
             listen_port=listen_port,
             max_sessions=_positive_int(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             max_body_bytes=_positive_int(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),

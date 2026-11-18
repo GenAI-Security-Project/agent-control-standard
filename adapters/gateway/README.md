@@ -95,7 +95,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 
 `ACS_CAPTURE=1` turns live into capture, the spelling the lab bundle uses. Each mode sits under the gateway's one upstream client, so gating, the transcript and the audit log work the same whichever mode answered.
 
-**The model key.** In live and capture, `ACS_UPSTREAM_KEY_FILE` names a file holding the real model key. The gateway replaces the client's `Authorization` header with `Bearer <key>` on the upstream request only, so the client (FinBot sends `lab-dummy`) never holds the key. The file must be a regular file, not a symlink, mode 0600 or 0400, owned by the gateway's uid, one key on one line, and outside any git work tree. The key never reaches a recording, the model input log, an audit line or an error message. Replay refuses a key file. The model port asks callers for no credential, so with a key file anyone who reaches the port spends the key: every local user, and every container that shares the gateway's network namespace. The gateway therefore refuses to start with a key file unless `ACS_GATEWAY_HOST` is a loopback address.
+**The model key.** In live and capture, `ACS_UPSTREAM_KEY_FILE` names a file holding the real model key. The gateway replaces the client's `Authorization` header with `Bearer <key>` on the upstream request only, so the client (FinBot sends `lab-dummy`) never holds the key. The file must be a regular file, not a symlink, mode 0600 or 0400, owned by the gateway's uid, one key on one line, and outside any git work tree. The key never reaches a recording, the model input log, an audit line or an error message. Replay refuses a key file. The model port asks callers for no credential, so with a key file anyone who reaches the port spends the key: every local user, and every container that shares the gateway's network namespace. The gateway therefore refuses to start with a key file unless `ACS_GATEWAY_HOST` is a loopback address, or `ACS_UPSTREAM_KEY_SHARED=1` says the operator accepts that. Set it only when the model port sits on a container network whose only other member is the agent, as in the lab bundle, where FinBot alone shares the gateway's network. The gateway then writes one startup line saying every client that can reach the model port spends the key.
 
 **Recordings.** Each line is one JSON object (A.8):
 
@@ -252,7 +252,8 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_UPSTREAM_URL` | `https://api.openai.com/v1` | Model base URL. The gateway posts to `<base>/responses` |
 | `ACS_UPSTREAM` | `live` | `live` (or `openai`), `capture` or `replay` |
 | `ACS_CAPTURE` | `0` | `1` turns live into capture. Refused with replay. `0` is refused with `ACS_UPSTREAM=capture` |
-| `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only, and only with a loopback `ACS_GATEWAY_HOST` |
+| `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only, and only with a loopback `ACS_GATEWAY_HOST` unless `ACS_UPSTREAM_KEY_SHARED=1` |
+| `ACS_UPSTREAM_KEY_SHARED` | `0` | `1` allows a key file with a model port off loopback, for a container network whose only other member is the agent. Lab convention |
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
 | `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64. Empty means the default, and only capture checks it |
 | `ACS_REPLAY_SCENARIO` | None | In replay, load only `<ACS_RECORDINGS_DIR>/<scenario>.jsonl`, which must exist. Same name rules as the capture scenario. Other modes ignore it |
@@ -310,6 +311,7 @@ Each of these is the gateway's own choice where the specification is silent or a
 | The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
 | `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
 | Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | Issue #579 |
+| `ACS_UPSTREAM_KEY_SHARED=1` lets a key file serve a model port off loopback, off by default | LAB-15, issue #588, sets it for the bundle's live mode |
 | Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | Issue #579 |
 
 Spans (LAB-09, issue #582) build on this gateway as a separate module.

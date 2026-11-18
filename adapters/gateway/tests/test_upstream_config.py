@@ -135,3 +135,34 @@ def test_a_key_file_is_accepted_on_a_loopback_model_port(tmp_path, host):
 
 def test_a_model_port_off_loopback_without_a_key_file_is_unchanged(tmp_path):
     assert config(tmp_path, ACS_GATEWAY_HOST="0.0.0.0").listen_host == "0.0.0.0"
+
+
+def test_the_shared_key_opt_in_allows_a_model_port_off_loopback(tmp_path):
+    """Round 2, R4b: the lab bundle binds 0.0.0.0 on a container network whose only other member is FinBot, so an
+    explicit ACS_UPSTREAM_KEY_SHARED=1 lifts the loopback rule. Without it the refusal stands."""
+    path = str(key_file(tmp_path))
+    with pytest.raises(ValueError, match="ACS_UPSTREAM_KEY_SHARED"):
+        config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0")
+    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST"):
+        config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0", ACS_UPSTREAM_KEY_SHARED="0")
+    c = config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0", ACS_UPSTREAM_KEY_SHARED="1")
+    assert (c.listen_host, c.upstream_key_shared) == ("0.0.0.0", True)
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "2"])
+def test_the_shared_key_opt_in_takes_only_0_or_1(tmp_path, value):
+    with pytest.raises(ValueError, match="ACS_UPSTREAM_KEY_SHARED must be 0 or 1"):
+        config(tmp_path, ACS_UPSTREAM_KEY_SHARED=value)
+
+
+def test_a_shared_key_says_so_once_at_startup(tmp_path, capfd):
+    from acs_gateway.upstream import UpstreamSource
+
+    path = str(key_file(tmp_path))
+    UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0",
+                          ACS_UPSTREAM_KEY_SHARED="1"))
+    err = capfd.readouterr().err
+    assert err.count("\n") == 1
+    assert "every client that can reach the model port" in err and KEY not in err
+    UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path))
+    assert capfd.readouterr().err == ""

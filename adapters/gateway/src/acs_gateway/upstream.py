@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import threading
 import zlib
 from collections.abc import Iterator
@@ -784,6 +785,10 @@ class UpstreamSource:
         # Replay answers from recordings, so a model name has nothing to choose there.
         self.model = config.upstream_model if self.mode != "replay" else None
         self._key = read_key_file(config.upstream_key_file) if config.upstream_key_file is not None else None
+        if config.upstream_key_shared:
+            # One line, so the operator who opted in sees what the opt-in means. The key itself is never written.
+            sys.stderr.write(f"acs-gateway: ACS_UPSTREAM_KEY_SHARED=1, so every client that can reach the model port "
+                             f"on {config.listen_host} spends the model key\n")
         self._store = None
         self._capture_path = None
         if self.mode == "capture":
