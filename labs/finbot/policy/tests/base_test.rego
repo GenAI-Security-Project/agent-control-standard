@@ -145,6 +145,14 @@ test_unicode_scheme_blocked if {
 	egress_blocked_for("http\u017f://status.example/")
 }
 
+# Node reads a backslash as a slash and Python's urlsplit doesn't, so the two send these URLs to different hosts.
+# Any backslash denies rather than picking a parser.
+test_backslash_anywhere_blocked if {
+	every url in [`https://status.example\@evil.example/`, `https://status.example/health\check`] {
+		egress_blocked_for(url)
+	}
+}
+
 test_uppercase_allowed_host if {
 	v := finbot.verdict with input as fetch("HTTPS://STATUS.EXAMPLE:443/health") with data.finbot_lab.tools as tools
 		with data.finbot_lab.egress_allow as ["status.example"]
