@@ -292,3 +292,22 @@ def test_a_streamed_retry_that_overtakes_its_first_attempt_keeps_the_retrys_bran
         thread.join()
     client.post("/v1/responses", json=finbot_request(kept, output("call_2", "{}")))
     assert [line["branch"] for line in lines(tmp_path)] == ["", "d,a,a"]
+
+
+def test_an_arrival_from_a_forgotten_session_never_clears_the_retrys_d():
+    """Round 2, R6: an attempt that passed its input phase on a session later bumped or evicted, then finished on the
+    new session after the retry, is superseded there. It must not take the retry's removed call out of the branch."""
+    from acs_gateway.sessions import CachedOutcome, SessionMap
+    from acs_gateway.upstream import note_arrival, note_reply_calls
+
+    sessions = SessionMap()
+    body = finbot_request()
+    old = sessions.get("k")
+    stale = note_arrival(old, body)
+    sessions.bump_epoch()
+    new = sessions.get("k")
+    retry = note_arrival(new, body)
+    new.calls["call_3"] = CachedOutcome("removed", "bash", None)
+    note_reply_calls(new, ["call_3"], body, retry)
+    note_reply_calls(new, [], body, stale)
+    assert session_branch(new, finbot_request({"role": "user", "content": "And then?"})) == "d"

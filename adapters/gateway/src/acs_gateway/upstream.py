@@ -268,11 +268,12 @@ def note_reply_calls(session: Session, call_ids: list[str], body: Any, arrival: 
     last, not the one that finished last: a client retries an attempt it gave up on, which can still finish after
     the retry, so a reply whose request a later arrival at the same position has replaced places nothing (final
     review I-1). Capture keeps the line of the same attempt, so the two agree. An arrival counted on another
-    session, before an epoch bump or an eviction, says nothing about this one.
+    session, one later bumped or evicted, is superseded here too, since a retry on this session may already have
+    placed its calls (round 2, R6). No arrival, after a fault before the input phase finished, places as before.
     """
     position = _position(body)
-    if (arrival is not None and arrival.session is session
-            and session.latest_arrival.get(position, 0) > arrival.number):
+    if arrival is not None and (arrival.session is not session
+                                or session.latest_arrival.get(position, 0) > arrival.number):
         return
     kept = set(call_ids)
     for call_id, outcome in session.calls.items():
