@@ -244,22 +244,57 @@ class Pinning(unittest.TestCase):
         with self.assertRaisesRegex(KeyDocumentError, "regular file"):
             load_response_keys(self.dir)
 
-    def test_a_document_another_user_owns_loads(self) -> None:
-        # Review round 4 CR2: the Guardian owns its 0644 document, and the client runs as someone else. The fingerprint
-        # pin, not the owner, is what stops a swapped key.
+    def _owned_by_another_user(self):
+        """Every fstat the reader makes, file and directory both, reports another uid, as a non-root test can't chown."""
         from types import SimpleNamespace
         from unittest import mock
         from acs.client import _secrets
-        path = self.write()
         real_fstat = os.fstat
 
         def fstat(fd):
             st = real_fstat(fd)
             return SimpleNamespace(st_mode=st.st_mode, st_uid=os.geteuid() + 1, st_size=st.st_size)
 
-        with mock.patch.object(_secrets.os, "fstat", side_effect=fstat):
+        return mock.patch.object(_secrets.os, "fstat", side_effect=fstat)
+
+    def test_a_document_another_user_owns_loads_with_a_fingerprint_pin(self) -> None:
+        # Review round 4 CR2: the Guardian owns its 0644 document, and the client runs as someone else, as in the
+        # LAB-15 container layout. The fingerprint pin is what stops a swapped key there.
+        path = self.write()
+        with self._owned_by_another_user():
             keys = load_response_keys(path, fingerprint=self.fingerprint)
         self.assertEqual(keys.key_id, KEY_ID)
+
+    def test_a_document_another_user_owns_is_refused_without_a_pin(self) -> None:
+        # Final review security F1: without a pin the owner is the only thing tying the document to the operator, so
+        # someone else's document is refused, and the message names both ways to fix it.
+        path = self.write()
+        with self._owned_by_another_user():
+            with self.assertRaises(KeyDocumentError) as caught:
+                load_response_keys(path)
+            with self.assertRaises(KeyDocumentError):
+                response_keys_from_env({"ACS_RESPONSE_ALGORITHMS": "ML-DSA-65", "ACS_GUARDIAN_KEYS": path})
+        message = str(caught.exception)
+        self.assertIn("owned by uid", message)
+        self.assertIn("ACS_GUARDIAN_KEY_FINGERPRINT", message)
+
+    def test_a_document_in_another_users_directory_is_refused_without_a_pin(self) -> None:
+        from unittest import mock
+        from acs.client import _secrets
+        path = self.write()
+        real_fstat = os.fstat
+        dir_ino = os.stat(self.dir).st_ino
+
+        def fstat(fd):
+            from types import SimpleNamespace
+            st = real_fstat(fd)
+            uid = os.geteuid() + 1 if st.st_ino == dir_ino else st.st_uid
+            return SimpleNamespace(st_mode=st.st_mode, st_uid=uid, st_size=st.st_size)
+
+        with mock.patch.object(_secrets.os, "fstat", side_effect=fstat):
+            with self.assertRaisesRegex(KeyDocumentError, "directory .* owned by uid .*ACS_GUARDIAN_KEY_FINGERPRINT"):
+                load_response_keys(path)
+            self.assertEqual(load_response_keys(path, fingerprint=self.fingerprint).key_id, KEY_ID)
 
     def test_a_fifo_is_refused_without_blocking(self) -> None:
         # Review CR3-2. The reader opens with O_NONBLOCK, so this returns at once instead of waiting for a writer.

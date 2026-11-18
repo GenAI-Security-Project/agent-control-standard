@@ -71,15 +71,15 @@ def not_writable_by_others(setting: str, path: str, mode: int) -> str | None:
     return None
 
 
-def _owner_problem(setting: str, path: str, uid: int, what: str) -> str | None:
+def _owner_problem(setting: str, path: str, uid: int, what: str, remedy: str = "") -> str | None:
     if hasattr(os, "geteuid") and uid not in (os.geteuid(), 0):
         return (f"{setting} {path!r}: {what} is owned by uid {uid}, but this process runs as uid {os.geteuid()}. "
-                "Refusing it")
+                f"Refusing it{remedy}")
     return None
 
 
 def _directory_problem(setting: str, path: str, directory: str, st: os.stat_result,
-                       require_owner: bool) -> str | None:
+                       require_owner: bool, owner_remedy: str = "") -> str | None:
     """Whoever can replace a file in the directory can replace the file. Read from the directory's own descriptor.
 
     Group write is allowed, since mkdir under the common umask 002 gives 0775 and the group is the user's own. A
@@ -91,7 +91,7 @@ def _directory_problem(setting: str, path: str, directory: str, st: os.stat_resu
         return (f"{setting} {path!r} sits in directory {directory!r}, which is world-writable without the sticky "
                 f"bit (mode {oct(stat.S_IMODE(mode))}). Move the file or chmod o-w {directory}")
     if require_owner:
-        return _owner_problem(setting, path, st.st_uid, f"its directory {directory!r}")
+        return _owner_problem(setting, path, st.st_uid, f"its directory {directory!r}", owner_remedy)
     return None
 
 
@@ -104,7 +104,7 @@ def _open_flags() -> int:
 
 
 def _open_in_directory(path: str, *, setting: str, require_owner: bool, refused: type[Exception],
-                       unreadable: type[Exception]) -> int:
+                       unreadable: type[Exception], owner_remedy: str = "") -> int:
     """Open the file through one descriptor on its directory, so every path component is resolved once.
 
     The directory is opened with O_DIRECTORY, so the kernel resolves "link/.." the way it will for the file, and its
@@ -122,7 +122,7 @@ def _open_in_directory(path: str, *, setting: str, require_owner: bool, refused:
         raise unreadable(f"{setting} {path!r}: its directory {directory!r} cannot be opened ({e})") from e
     try:
         try:
-            problem = _directory_problem(setting, path, directory, os.fstat(dfd), require_owner)
+            problem = _directory_problem(setting, path, directory, os.fstat(dfd), require_owner, owner_remedy)
         except OSError as e:
             raise unreadable(f"{setting} {path!r}: its directory {directory!r} cannot be read ({e})") from e
         if problem:
@@ -151,28 +151,29 @@ def _open_by_path(path: str, *, setting: str, refused: type[Exception], unreadab
 
 def read_trusted_file(path: str, *, setting: str, max_bytes: int, mode_rule: ModeRule,
                       refused: type[Exception], unreadable: type[Exception] | None = None,
-                      require_owner: bool = True) -> bytes:
+                      require_owner: bool = True, owner_remedy: str = "") -> bytes:
     """The bytes of a secret or trusted file, read once and checked through descriptors, never through the path again.
 
     The one reader for the HMAC secret, the Guardian's ML-DSA-65 seed, and the key document (issue #576). It opens
     the file's directory once and the file inside it with O_NOFOLLOW so a symlink is refused, O_NONBLOCK so a FIFO
     can't hang it, and O_BINARY where defined. It requires a directory that is not world-writable unless sticky, a
     regular file, and the caller's mode rule. With require_owner, which secrets pass, the file and its directory
-    must belong to this user or root. A public file such as the key document passes False, and the fingerprint pin
-    covers an owner swap there. It reads at most max_bytes. A problem with the file raises refused. Any OSError and a
+    must belong to this user or root. A key document passes False only when a fingerprint pin covers an owner swap.
+    owner_remedy is appended to an owner refusal, so the message can name the caller's other way out. It reads at
+    most max_bytes. A problem with the file raises refused. Any OSError and a
     file past max_bytes raise unreadable, which defaults to refused. Every message names setting.
     """
     unreadable = unreadable or refused
     if _OPENS_IN_DIRECTORY:
         fd = _open_in_directory(path, setting=setting, require_owner=require_owner, refused=refused,
-                                unreadable=unreadable)
+                                unreadable=unreadable, owner_remedy=owner_remedy)
     else:
         fd = _open_by_path(path, setting=setting, refused=refused, unreadable=unreadable)
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise refused(f"{setting} {path!r} is not a regular file")
-        problem = (_owner_problem(setting, path, st.st_uid, "the file") if require_owner else None) \
+        problem = (_owner_problem(setting, path, st.st_uid, "the file", owner_remedy) if require_owner else None) \
             or mode_rule(setting, path, stat.S_IMODE(st.st_mode))
         if problem:
             raise refused(problem)

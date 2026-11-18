@@ -192,11 +192,16 @@ def load_response_keys(path: str | os.PathLike, *, key_id: str | None = None,
     name = os.fspath(path)
     # The document decides which key verifies every decision, so whoever can rewrite it can forge them. It goes
     # through the one reader for trusted files: no symlink, no FIFO, a regular file with no group or other write, in a
-    # directory that isn't world-writable unless sticky. It is public and the Guardian owns it, so a client running
-    # as another user must still read it, and no owner is checked. The fingerprint pin covers an owner swap
-    # (reviews CR2, CR3-3, round 4 CR2).
+    # directory that isn't world-writable unless sticky (reviews CR2, CR3-3). Something must also tie the document to
+    # the operator. Without a fingerprint pin that is ownership: the file and its directory belong to this user or
+    # root, as for a secret. With a pin the owner isn't checked, since a client running as another user, as in a
+    # container that reads the Guardian's document, must still read it and the pin already catches a swapped key
+    # (round 4 CR2, final review security F1).
     data = read_trusted_file(name, setting=KEY_DOCUMENT_ENV, max_bytes=MAX_DOCUMENT_BYTES,
-                             mode_rule=not_writable_by_others, refused=KeyDocumentError, require_owner=False)
+                             mode_rule=not_writable_by_others, refused=KeyDocumentError,
+                             require_owner=fingerprint is None,
+                             owner_remedy=(". Give the document and its directory to this user or root, or set "
+                                           f"{KEY_FINGERPRINT_ENV} to the key's fingerprint"))
     try:
         document = json.loads(data.decode("utf-8"))
     except (ValueError, RecursionError) as exc:
