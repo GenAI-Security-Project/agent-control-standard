@@ -35,6 +35,10 @@ import (
 // because its MCP id is already awaiting a response.
 const reasonMCPCallPending = "mcp_call_pending"
 
+// reasonMCPResultUnreadable is the reason code of a wrapped MCP response
+// denied because its result or error does not decode.
+const reasonMCPResultUnreadable = "mcp_result_unreadable"
+
 // DefaultAskTimeout is the ask_details.timeout_seconds of an Ask when
 // Options.AskTimeout is zero.
 const DefaultAskTimeout = 5 * time.Minute
@@ -140,6 +144,18 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 			Reasoning:   "Another tools/call with this MCP id is still awaiting its response, so their results could not be told apart.",
 			ReasonCodes: []string{reasonMCPCallPending},
 		}}, nil
+	}
+	if errors.Is(err, errMCPResultUnreadable) {
+		// The response answers its call, which no longer awaits one.
+		answered, mErr := jsonv2.Marshal(state)
+		if mErr != nil {
+			return guardian.PolicyDecision{}, mErr
+		}
+		return guardian.PolicyDecision{Decision: acs.Decision{
+			Disposition: acs.Deny,
+			Reasoning:   "The result policy cannot check this MCP response: " + err.Error() + ".",
+			ReasonCodes: []string{reasonMCPResultUnreadable},
+		}, State: answered}, nil
 	}
 	if err != nil {
 		return guardian.PolicyDecision{}, err

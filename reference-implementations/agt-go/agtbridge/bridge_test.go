@@ -723,3 +723,34 @@ func TestWrappedMCPToolCalls(t *testing.T) {
 		t.Fatalf("an MCP method AGT has no gate for got %+v", d.Decision)
 	}
 }
+
+// A response the bridge cannot decode is denied, and it still answers its
+// call, so a later call under the same MCP id is decided on its own.
+func TestWrappedMCPUndecodableResponse(t *testing.T) {
+	e := newEngine(t, agtbridge.Options{})
+	var state json.RawMessage
+	decide := func(payload any) guardian.PolicyDecision {
+		t.Helper()
+		in := input(t, "protocols/MCP/tools/call", payload)
+		in.Session.PolicyState = state
+		d, err := e.Decide(context.Background(), in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.State != nil {
+			state = d.State
+		}
+		return d
+	}
+	call := map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "Bash", "arguments": map[string]any{"command": "ls"}}}
+	if d := decide(call); d.Disposition != acs.Allow {
+		t.Fatalf("a benign command through MCP got %+v", d.Decision)
+	}
+	broken := map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": "token ghp_abcdef123456 here"}}
+	if d := decide(broken); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "mcp_result_unreadable") {
+		t.Fatalf("an MCP result that does not decode got %+v", d.Decision)
+	}
+	if d := decide(call); d.Disposition != acs.Allow {
+		t.Fatalf("a call under the answered MCP id got %+v", d.Decision)
+	}
+}

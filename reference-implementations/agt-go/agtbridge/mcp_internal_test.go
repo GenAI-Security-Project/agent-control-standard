@@ -125,6 +125,61 @@ func TestProjectionKeepsEveryMCPResultShape(t *testing.T) {
 	}
 }
 
+// The policy cannot check a response whose result does not decode, so
+// project refuses it. The response still answers its call.
+func TestProjectionRefusesAnUndecodableResponse(t *testing.T) {
+	for name, result := range map[string]map[string]any{
+		"content_not_a_list":    {"content": "token ghp_abcdef123456"},
+		"is_error_not_bool":     {"content": []any{}, "isError": "true"},
+		"content_missing":       {"structuredContent": map[string]any{"a": 1}},
+		"content_null":          {"content": nil},
+		"type_empty":            {"resultType": "", "content": []any{}},
+		"type_null":             {"resultType": nil, "content": []any{}},
+		"type_not_a_string":     {"resultType": 1, "content": []any{}},
+		"unknown_type":          {"resultType": "partial", "content": []any{}},
+		"input_required_empty":  {"resultType": "input_required"},
+		"input_requests_null":   {"resultType": "input_required", "inputRequests": nil},
+		"input_requests_list":   {"resultType": "input_required", "inputRequests": []any{}},
+		"request_state_number":  {"resultType": "input_required", "requestState": 7},
+		"request_state_and_bad": {"resultType": "input_required", "requestState": "s", "inputRequests": "x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := policyState{MCPCalls: map[string]string{"1": "Read"}}
+			response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
+			if p, err := project(response, &state); !errors.Is(err, errMCPResultUnreadable) {
+				t.Fatalf("got %v, projected as %s", err, p.req.Params.Payload)
+			}
+			if len(state.MCPCalls) != 0 {
+				t.Fatalf("the answered call is still pending: %v", state.MCPCalls)
+			}
+		})
+	}
+}
+
+// An MCP error response has no result. Its message and data reach the policy
+// as outputs of a failed call, and the response answers its call.
+func TestProjectionKeepsAnMCPError(t *testing.T) {
+	state := policyState{MCPCalls: map[string]string{"1": "Read"}}
+	response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32000, "message": "denied", "data": map[string]any{"path": "/etc"}}})
+	p, err := project(response, &state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result acs.ToolCallResultPayload
+	if err := jsonv2.Unmarshal(p.req.Params.Payload, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitStatus != exitFailure || len(result.Outputs) != 2 || string(result.Outputs[0].Value) != `"denied"` || string(result.Outputs[1].Value) != `{"path":"/etc"}` {
+		t.Fatalf("projected as %s", p.req.Params.Payload)
+	}
+	if !slices.Equal(p.outputs, []string{"/error/message", "/error/data"}) {
+		t.Fatalf("output paths %v", p.outputs)
+	}
+	if len(state.MCPCalls) != 0 {
+		t.Fatalf("the answered call is still pending: %v", state.MCPCalls)
+	}
+}
+
 // Two calls in flight under one MCP id would make their results
 // indistinguishable, so the second is refused until the first is answered.
 func TestProjectionRefusesAPendingID(t *testing.T) {
@@ -175,6 +230,42 @@ func TestProjectionCanonicalizesMCPIDs(t *testing.T) {
 			}
 			if _, err := project(response(tt.equivalent), &state); err != nil {
 				t.Fatalf("equivalent response id: %v", err)
+			}
+		})
+	}
+}
+
+// An input_required result (MCP 2026-07-28) has no content. Its input
+// requests reach the policy as an output.
+func TestProjectionKeepsAnInputRequiredResult(t *testing.T) {
+	requests := json.RawMessage(`{"login":{"method":"elicitation/create","params":{"message":"name?"}}}`)
+	for name, tt := range map[string]struct {
+		result map[string]any
+		// want is the projected outputs, by pointer into the message.
+		want map[string]string
+	}{
+		"requests_and_state": {result: map[string]any{"resultType": "input_required", "inputRequests": requests, "requestState": "opaque"}, want: map[string]string{"/result/inputRequests": `{"login":{"method":"elicitation/create","params":{"message":"name?"}}}`}},
+		"state_only":         {result: map[string]any{"resultType": "input_required", "requestState": "opaque"}, want: map[string]string{}},
+		"complete_named":     {result: map[string]any{"resultType": "complete", "content": []any{map[string]any{"type": "text", "text": "data"}}}, want: map[string]string{"/result/content/0/text": `"data"`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "result": tt.result})
+			state := policyState{MCPCalls: map[string]string{"1": "Read"}}
+			p, err := project(response, &state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result acs.ToolCallResultPayload
+			if err := jsonv2.Unmarshal(p.req.Params.Payload, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(p.outputs) != len(tt.want) {
+				t.Fatalf("output paths %v, want %v", p.outputs, tt.want)
+			}
+			for i, path := range p.outputs {
+				if got := string(result.Outputs[i].Value); got != tt.want[path] {
+					t.Fatalf("output %s is %s, want %s", path, got, tt.want[path])
+				}
 			}
 		})
 	}
