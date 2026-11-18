@@ -68,7 +68,7 @@ def test_an_endpoint_builds_a_live_tracer_of_its_own():
         # The gateway's provider is its own, so nothing else in the process starts exporting.
         assert not isinstance(trace.get_tracer_provider(), type(tracing.provider))
     finally:
-        tracing.shutdown()
+        tracing.close(10.0)
 
 
 def test_a_session_trace_id_is_its_session_id():
@@ -97,7 +97,7 @@ def test_a_failing_exporter_never_touches_a_request_and_logs_once(gateway, upstr
                     assert response.json() == response_body(message_item("ok"))
                 assert tracing.provider.force_flush(10_000)
     finally:
-        tracing.shutdown()
+        tracing.close(10.0)
     failing = [r for r in caplog.records if r.name == "acs_gateway.telemetry"]
     assert [r.getMessage() for r in failing] == [
         "acs-gateway: span export to http://127.0.0.1:9 is failing, so spans are dropped until it recovers"]
@@ -176,7 +176,7 @@ def test_tracing_leaves_the_exporter_loggers_level_alone(caplog):
              "opentelemetry.exporter.otlp.common.http"]
     before = {name: logging_module.getLogger(name).level for name in names}
     tracing = Tracing.from_config(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}))
-    tracing.shutdown()
+    tracing.close(10.0)
     assert {name: logging_module.getLogger(name).level for name in names} == before
     # Another exporter's records on the same logger still get through (CR7).
     with caplog.at_level(logging_module.WARNING):

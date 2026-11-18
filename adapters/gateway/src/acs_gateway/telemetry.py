@@ -150,10 +150,6 @@ class Tracing:
             _LOG.warning("acs-gateway: a span could not be recorded (%s), and requests go on unchanged",
                          type(error).__name__)
 
-    def shutdown(self) -> None:
-        if self.provider is not None:
-            self.provider.shutdown()
-
     def close(self, timeout_s: float) -> None:
         """Flush and shut down on a daemon thread, returning after timeout_s at most.
 

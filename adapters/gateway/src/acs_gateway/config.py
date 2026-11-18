@@ -71,6 +71,8 @@ def _port(env: Mapping[str, str], name: str) -> int | None:
     if not (raw.isascii() and raw.isdigit()) or not 1 <= int(raw) <= 65535:
         raise ValueError(f"{name} must be a port from 1 to 65535 in plain ASCII digits, got {raw!r}")
     return int(raw)
+
+
 def _otlp_endpoint(env: Mapping[str, str]) -> str | None:
     """OTEL_EXPORTER_OTLP_ENDPOINT, the URL of an OTLP HTTP receiver such as Jaeger's port 4318, or None.
 

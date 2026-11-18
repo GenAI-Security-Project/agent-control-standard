@@ -28,7 +28,7 @@ def test_one_session_is_one_jaeger_trace(gateway, guardian, upstream, audit):
         assert client.post("/v1/responses", json=finbot_request()).status_code == 200
         assert tracing.provider.force_flush(10_000)
     finally:
-        tracing.shutdown()
+        tracing.close(10.0)
     session_id = next(e["session_id"] for e in audit() if e["acs_audit_event"] == "session_opened")
     trace_id = uuid.UUID(session_id).hex
     names: set[str] = set()
