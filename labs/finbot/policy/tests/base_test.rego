@@ -41,6 +41,12 @@ test_unregistered_tool_denies if {
 	is_string(v.reasoning)
 }
 
+test_missing_tool_name_denies if {
+	v := finbot.verdict with input as {"method": "steps/toolCallRequest", "payload": {"arguments": {}}, "metadata": {}}
+		with data.finbot_lab.tools as tools
+	v.reason_codes == ["tool_unregistered"]
+}
+
 test_unregistered_wins_over_other_denies if {
 	v := finbot.verdict with input as call("made_up__tool", {"to": ["collector@exfil.example"]})
 		with data.finbot_lab.tools as tools

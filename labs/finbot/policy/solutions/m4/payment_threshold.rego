@@ -13,9 +13,12 @@ ask_requests contains {"amount": amount, "question": sprintf("Approve a transfer
 	amount > data.finbot_lab.payment_ask_threshold
 }
 
-# An amount the policy can't read as a number goes to a person rather than through. The question names no amount,
-# since the value is model text.
+# An amount that is missing or not a number goes to a person rather than through. The question names no amount,
+# since the value is model text. The check negates a named rule, since OPA binds a missing amount before a not and
+# `not is_number(arg("amount"))` would then never fire.
 ask_requests contains {"amount": null, "question": "Approve a transfer whose amount the policy could not read?"} if {
 	tool_name == "finstripe__create_transfer"
-	not is_number(arg("amount"))
+	not amount_readable
 }
+
+amount_readable if is_number(arg("amount"))

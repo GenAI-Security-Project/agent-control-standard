@@ -20,7 +20,11 @@ arg(name) := input.payload.arguments[name].value
 
 # The registry holds every tool FinBot declares, filled by tools/pins.py from a real run. A name it doesn't hold
 # denies before any module runs, so a tool nobody reviewed never reaches a module that would let it through.
-tool_unregistered if not data.finbot_lab.tools[tool_name]
+registered if data.finbot_lab.tools[tool_name]
+
+# Negate a named rule, never an expression over a value that may be missing. OPA binds a missing value before the
+# not, so `not data.finbot_lab.tools[tool_name]` with no tool name fails the body and the step would allow.
+tool_unregistered if not registered
 
 # One fixed sentence per A.10 reason code. The reasoning never repeats text from the step, which the model wrote.
 reasons := {

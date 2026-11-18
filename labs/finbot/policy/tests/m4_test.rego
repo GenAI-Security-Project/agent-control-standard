@@ -58,6 +58,11 @@ test_non_number_amount_asks if {
 	verdict_for(transfer("9000")).decision == "ask"
 }
 
+test_missing_amount_asks if {
+	inp := json.remove(transfer(7500), ["payload/arguments/amount"])
+	verdict_for(inp).decision == "ask"
+}
+
 test_deny_beats_ask if {
 	v := finbot.verdict with input as transfer(7500) with data.finbot_lab.tools as {}
 	v.reason_codes == ["tool_unregistered"]
