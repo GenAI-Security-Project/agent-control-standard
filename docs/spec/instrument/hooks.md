@@ -1,6 +1,6 @@
 # Hooks
 
-ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` namespace, the Inspect-pillar `agbom/*` methods, and the `system/ping` liveness method. This page catalogs each hook: when it fires, the canonical schema, the disposition contract, and the audit-chain implications.
+ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` namespace. This shared catalog also documents [`agbom/snapshot`](#agbomsnapshot) and [`agbom/changed`](#agbomchanged), which belong to the [Inspect pillar](../inspect/README.md#wire-methods), and the `system/ping` liveness method. Each entry describes its trigger, schema, disposition contract, and chain implications. The Inspect and liveness methods are not Instrument control hooks.
 
 The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0/hooks). Common envelope rules — `request_id`, `timestamp`, `acs_version`, `metadata`, signature handling, replay protection — are documented in [Specification §3](./specification.md#3-wire-format) and [§10.3](./specification.md#103-replay-protection).
 

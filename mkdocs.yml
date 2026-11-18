@@ -97,7 +97,7 @@ nav:
     - Instrument:
       - Overview: spec/instrument/README.md
       - Supported Hooks: spec/instrument/hooks.md
-      - ACS specification: spec/instrument/specification.md
+      - Protocol and hooks contract: spec/instrument/specification.md
       - Instrument MCP: spec/instrument/extend_mcp.md
       - Instrument A2A: spec/instrument/a2a/extend_a2a.md
     - Trace:
@@ -108,6 +108,8 @@ nav:
       - OCSF Implementation Examples: spec/trace/OCSF/implementation_examples.md
     - Inspect:
       - Overview: spec/inspect/README.md
+      - agbom/snapshot: spec/inspect/snapshot.md
+      - agbom/changed: spec/inspect/changed.md
       - AgBOM with CycloneDX: spec/inspect/extend_cyclonedx.md
       - AgBOM with SPDX: spec/inspect/extend_spdx.md
       - AgBOM with SWID: spec/inspect/extend_swid.md

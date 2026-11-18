@@ -15,10 +15,12 @@ The `agbom/*` namespace is reserved by [Specification §3](../instrument/specifi
 
 | Method | Direction | Trigger |
 |---|---|---|
-| `agbom/snapshot` | Observed → Guardian | Once after `sessionStart`, before any content-bearing hook; and after any handshake renegotiation. Carries the full AgBOM. |
-| `agbom/changed` | Observed → Guardian | Whenever a component is added, removed, or version-changed mid-session. Carries either a full snapshot or a diff (`added[]`, `removed[]`, `changed[]`). |
+| [`agbom/snapshot`](../instrument/hooks.md#agbomsnapshot) | Observed to Guardian | Once after `sessionStart`, before any content-bearing hook; and after any handshake renegotiation. Carries the full AgBOM. |
+| [`agbom/changed`](../instrument/hooks.md#agbomchanged) | Observed to Guardian | Whenever a component is added, removed, or version-changed mid-session. Carries either a full snapshot or a diff (`added[]`, `removed[]`, `changed[]`). |
 
 Both methods follow the standard ACS request envelope and are written into the SessionContext audit chain — AgBOM mutation is part of the security-relevant history of the session. Decisions are normally `allow`; Guardians MAY return `deny` to refuse a session whose component graph contains a banned component, or to block a hot-swap.
+
+These are Inspect methods, not Instrument control hooks. Their [shared envelope reference](../instrument/specification.md#3-wire-format) and linked catalog entries describe their wire contract.
 
 `agbom/changed` is part of the **ACS-Inspect-Dynamic** profile extension. Deployments that claim only **ACS-Inspect** emit a single snapshot and do not track mid-session mutations.
 
