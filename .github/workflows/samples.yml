@@ -1,0 +1,71 @@
+# Runs the samples' own tests, including their schema conformance suite.
+#
+# `testpaths = ["tests"]` in pyproject.toml scopes the docs deploy gate to the
+# guards it was written for, so a suite under samples/ is never collected there.
+# CONTRIBUTING.md names the failure mode directly: a test written outside tests/
+# "never runs in CI and will pass review looking like coverage it does not
+# provide." This workflow is what stops that from being true here.
+#
+# The conformance suite needs jsonschema, which is not in uv.lock. Installing it
+# in the deploy gate's environment would put a dependency in front of the site
+# build for no benefit to the site, so it is installed here instead, in a job
+# nothing else depends on.
+#
+# No workflow expression appears inside a `run:` block. The two in the
+# concurrency group are an integer pull request number and a ref name GitHub
+# validates, and a concurrency group is not a shell context.
+#
+# Scoped by path. A documentation or schema-only change should not pay for this.
+name: Samples
+
+on:
+  pull_request:
+    paths:
+      - "samples/**"
+      - "specification/v0.1.0/**"
+      - ".github/workflows/samples.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "samples/**"
+      - "specification/v0.1.0/**"
+      - ".github/workflows/samples.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: samples-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-guardian-fastmcp:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: samples/python-guardian-fastmcp
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 3.11 is the floor the sample's README states. Pinned to a minor rather
+      # than a moving 3.x so a runner image bump cannot quietly change what the
+      # sample is proven against.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # The sample itself is stdlib-only by design. pytest runs the suite and
+      # jsonschema is what the conformance tests validate with; neither is a
+      # dependency of the sample code.
+      - name: Install the test-only dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # test_conformance.py loads specification/v0.1.0/ off disk by relative
+      # path, so this proves the sample still matches the schemas in this
+      # repository rather than a copy of them.
+      - name: Run the tests
+        run: python -m pytest . -q
