@@ -88,6 +88,27 @@ def test_main_exit_codes(tmp_path: Path) -> None:
     assert pins.main(["--model-log", str(tmp_path / "missing.jsonl"), "--data", str(data)]) == 2
 
 
+
+EMPTY_LOGS = {
+    "empty": "",
+    "blank": "\n  \n",
+    "no-function-tools": '{"tools": []}\n{"tools": [{"type": "web_search"}]}\n',
+    "no-tools-key": '{"input": "hi"}\n',
+}
+
+
+@pytest.mark.parametrize("log", EMPTY_LOGS.values(), ids=EMPTY_LOGS.keys())
+def test_main_fails_on_a_log_that_pins_no_tools(tmp_path: Path, log: str, capsys: pytest.CaptureFixture[str]) -> None:
+    data = tmp_path / "data.json"
+    data.write_text(json.dumps({"finbot_lab": {"tools": {"old": {"digests": ["sha256:00"]}}, "vendor_domains": [],
+                                               "payment_ask_threshold": 5000, "egress_allow": []}}))
+    before = data.read_text()
+    model_log = tmp_path / "model-inputs.jsonl"
+    model_log.write_text(log)
+    assert pins.main(["--model-log", str(model_log), "--data", str(data)]) == 2
+    assert "pins no tools" in capsys.readouterr().err
+    assert data.read_text() == before
+
 # Interface pins. The policy reads these stack interfaces, so each test fails when the gateway or the Guardian
 # changes one and the pack would silently stop matching.
 

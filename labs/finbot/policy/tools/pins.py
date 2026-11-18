@@ -14,7 +14,8 @@ Usage, from the gateway's environment:
     uv run --project adapters/gateway --locked python labs/finbot/policy/tools/pins.py \\
         --model-log <model-inputs.jsonl> --data labs/finbot/policy/data.json
 
-Exit 0 when data.json was written, 2 on an unreadable log or data file or a declaration the gateway can't digest.
+Exit 0 when data.json was written, 2 on an unreadable log or data file, a log that pins no tools, or a
+declaration the gateway can't digest. data.json is left unchanged on exit 2.
 Owner: the ACS lab maintainers (issue #585).
 """
 from __future__ import annotations
@@ -105,6 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         pins = build_pins(_read_log(args.model_log))
+        if not pins:
+            # An empty registry denies every step, so a capture run that pinned nothing must not report success.
+            raise PinsError(f"{args.model_log} pins no tools: it holds no request body that declares a function tool")
         write_tools(args.data, pins)
     except (PinsError, OSError, ValueError) as e:
         print(f"pins: {e}", file=sys.stderr)
