@@ -22,17 +22,21 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 
-ID_ROW = re.compile(r"^\|\s*([CN]-\d{2})\s*\|", re.M)
+# Up to three spaces may lead a table row, as in CommonMark, so an indented row is still read.
+ID_ROW = re.compile(r"^ {0,3}\|\s*([CN]-\d{2})\s*\|", re.M)
 SIGN_HEADING = re.compile(r"^## Sign-off$", re.M)
 SIGN_HEADER = "| Signed by | Date | Commit | Ledger sha256 |"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
-BLOCK_OPEN = re.compile(r"^```(claims-[a-z-]+)\s*$", re.M)
-# An evidence cell that opens with one of these says the work is still to do.
-PLACEHOLDER_LEAD = frozenset({"tbd", "tba", "todo"})
+# Any fence form a reader would see as a block: backticks or tildes, three or more, indented up to three spaces.
+# Only the plain ``` form is parsed, so every other form counts as a second block or a block below the sign-off.
+BLOCK_OPEN = re.compile(r"^ {0,3}(?:`{3,}|~{3,})\s*(claims-[a-z-]+)\s*$", re.M)
+# An evidence cell that opens with one of these, once punctuation and link syntax are gone, says the work is still
+# to do.
+PLACEHOLDER_LEAD = ("tbd", "tba", "tbc", "todo", "pending", "not yet", "to be confirmed", "to be determined")
 # An evidence cell that is only one of these says nothing was checked.
-PLACEHOLDER_WORDS = frozenset({"tbd", "tba", "todo", "n/a", "na", "pending", "none"})
+PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
 
 
 @dataclass(frozen=True)
@@ -118,10 +122,11 @@ def _cell_text(cell: str) -> str:
 
 
 def _placeholder(evidence: str) -> bool:
-    if not re.search(r"[^\W_]", evidence):
+    """True for evidence with no letter or digit, or one that is or opens with a placeholder word."""
+    bare = " ".join(re.sub(r"[\W_]+", " ", LINK.sub(r"\1", evidence).lower()).split())
+    if not bare:
         return True
-    words = evidence.lower().split()
-    return words[0].strip(".:;,!") in PLACEHOLDER_LEAD or evidence.lower().strip(" .:;,!") in PLACEHOLDER_WORDS
+    return bare in PLACEHOLDER_WORDS or any(bare == w or bare.startswith(w + " ") for w in PLACEHOLDER_LEAD)
 
 
 def _unconfirmed(text: str) -> tuple[str, ...]:
@@ -132,7 +137,7 @@ def _unconfirmed(text: str) -> tuple[str, ...]:
     """
     rows = []
     for line in text.splitlines():
-        cells = _cells(line) if line.startswith("|") else []
+        cells = _cells(line) if re.match(r" {0,3}\|", line) else []
         if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
             # The gate reads cells as a reader sees them, so an entity or emphasis can't hide a word from it.
             shown = [_cell_text(c) for c in cells]
@@ -200,7 +205,7 @@ class Finding:
 
 # The one allowlist of scanned file types: prose an attendee reads. Code comments and identifiers make no claim to
 # attendees, so code is never scanned, and neither are test directories (the ledger's exclusion list names them).
-SCANNED = frozenset({".md", ".html", ".txt"})
+SCANNED = frozenset({".md", ".markdown", ".html", ".htm", ".txt"})
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
@@ -223,7 +228,18 @@ IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x11
 # The Braille blank draws as a space but isn't default-ignorable, so it is listed on its own.
 BLANKS = frozenset({0x2800})
 # The Markdown extensions mkdocs.yml enables that ship with Python-Markdown and change what a reader sees.
-MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list")
+# md_in_html renders Markdown inside a raw HTML block that carries markdown="1", which _prepare adds.
+MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list", "md_in_html")
+# Fence lines, so the pre-render steps never touch code. A block-quote prefix may lead them.
+QUOTE_PREFIX = re.compile(r"^((?: {0,3}> ?)*)")
+FENCE_OPEN = re.compile(r" {0,3}(`{3,}|~{3,})")
+# A line GitHub reads as a list item. Only a bullet or an ordered list starting at 1 may interrupt a paragraph.
+LIST_MARKER = re.compile(r" {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
+INTERRUPTS = re.compile(r" {0,3}(?:[-*+]|1[.)])[ \t]+\S")
+# Block-level HTML whose content GitHub renders as Markdown after a blank line.
+MD_HTML_BLOCKS = ("address|article|aside|blockquote|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|"
+                  "footer|form|header|hgroup|li|main|nav|ol|p|section|summary|ul")
+HTML_OPEN = re.compile(rf"^( {{0,3}})<({MD_HTML_BLOCKS})(?=[\s>])(?![^>]*\bmarkdown\s*=)([^>]*)>", re.I)
 # Each of these elements is one unit, so one marker clears only the block it sits in.
 BLOCKS = frozenset(
     "address article aside blockquote body caption dd details dialog div dl dt fieldset figcaption figure footer "
@@ -419,6 +435,44 @@ def _walk(html_text: str) -> list[Unit]:
     return walker.units
 
 
+def _prepare(source: str) -> str:
+    """Two pre-render steps where Python-Markdown reads less than GitHub shows. Fenced code is left alone.
+
+    A list item right after a paragraph line starts a list on GitHub, while Python-Markdown folds it into the
+    paragraph, so a blank line goes before it. Markdown inside a raw HTML block renders on GitHub, while
+    Python-Markdown keeps it as raw text, so each block-level opening tag gets markdown="1" for md_in_html.
+    """
+    out: list[str] = []
+    fence: str | None = None
+    previous = ""
+    in_list = False
+    for line in source.splitlines():
+        prefix = QUOTE_PREFIX.match(line).group(1)
+        body = line[len(prefix):]
+        opener = FENCE_OPEN.match(body)
+        if fence is not None:
+            if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence):
+                fence = None
+            out.append(line)
+            previous = line
+            continue
+        if opener:
+            fence = opener.group(1)
+        elif not body.strip():
+            in_list = False
+        elif LIST_MARKER.match(body):
+            prev_body = previous[len(QUOTE_PREFIX.match(previous).group(1)):]
+            if (not in_list and INTERRUPTS.match(body) and prev_body.strip() and not prev_body.startswith("    ")
+                    and not re.match(r" {0,3}(?:#|\||<)", prev_body)):
+                out.append(prefix.rstrip())
+            in_list = True
+        else:
+            line = prefix + HTML_OPEN.sub(r'\1<\2 markdown="1"\3>', body)
+        out.append(line)
+        previous = line
+    return "\n".join(out) + "\n"
+
+
 def _render(source: str) -> str:
     if markdown is None:
         raise RuntimeError("Python-Markdown isn't installed, so Markdown files can't be checked")
@@ -459,7 +513,7 @@ def _source_lines(source: str, units: list[Unit]) -> None:
 def _units(text: str, suffix: str) -> list[Unit]:
     """Markdown is rendered and HTML is parsed, so each block is a unit. Plain text is one unit per line."""
     if suffix == ".md":
-        units = _walk(_render(text))
+        units = _walk(_render(_prepare(text)))
         _source_lines(text, units)
         return units
     if suffix == ".html":

@@ -774,7 +774,7 @@ def test_prose_file_is_scanned(tree, name):
 
 
 def test_scanned_types_are_one_explicit_allowlist():
-    assert lab_claims.SCANNED == frozenset({".md", ".html", ".txt"})
+    assert lab_claims.SCANNED == frozenset({".md", ".markdown", ".html", ".htm", ".txt"})
 
 
 @pytest.mark.parametrize("name", ["tests/a.md", "viewer/tests/a.md", "cli/test/a.txt"])
@@ -785,3 +785,104 @@ def test_test_directories_are_not_scanned(tree, name):
 def test_ledger_exclusions_name_test_directories(tree):
     _, ledger = tree
     assert {"**/tests/**", "**/test/**"} <= set(lab_claims.load_ledger(ledger).exclude)
+
+
+# ---------------------------------------------------------------- Fix round 5: where GitHub shows more
+
+R5_CAUGHT = [
+    # F1: a list right after a paragraph line starts a list on GitHub, so each item is its own unit.
+    ("list_after_para.md", "What the lab shows:\n- The gateway can forge an allow.\n"
+                           "- Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->\n", "unledgered"),
+    ("list_after_para_star.md", "Notes:\n* The gateway can forge an allow.\n* Signed with ML-DSA-65. <!-- claim:C-02 -->\n",
+     "unledgered"),
+    ("ol_after_para.md", "Steps:\n1. The lab fails closed.\n2. Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->\n",
+     "unledgered"),
+    ("list_after_para_N10.md", "Notes:\n- ACS isn't compared with AGT. <!-- claim:N-10 -->\n"
+                               "- The lab is ACS-Core conformant.\n", "banned"),
+    ("list_after_para_N06.md", "Hooks:\n- It sends 4 of the 7 minimum hooks. <!-- claim:N-06 -->\n"
+                               "- ACS interoperates with other agent stacks.\n", "banned"),
+    ("list_after_para_star_N06.md", "Hooks:\n* It sends 4 of 7 hooks. <!-- claim:N-06 -->\n* Built with AGT.\n", "banned"),
+    ("ol_after_para_N06.md", "Hooks:\n1. It sends 4 of 7 hooks. <!-- claim:N-06 -->\n2. Built with AGT.\n", "banned"),
+    ("quote_list_after_para.md", "> Notes:\n> - The gateway can forge an allow.\n"
+                                 "> - Signed with ML-DSA-65. <!-- claim:C-02 -->\n", "unledgered"),
+]
+for tag in ("<details>\n<summary>Notes</summary>\n", "<div align=\"center\">\n"):
+    close = "</details>" if tag.startswith("<details") else "</div>"
+    label = "details" if tag.startswith("<details") else "div"
+    R5_CAUGHT += [
+        # F2: Markdown inside a raw HTML block renders on GitHub after a blank line.
+        (f"{label}_bold_agt.md", f"{tag}\nWe looked at the **Agent Governance** Toolkit.\n\n{close}\n", "banned"),
+        (f"{label}_link.md", f"{tag}\nACS [interoperates](https://x) with other stacks.\n\n{close}\n", "banned"),
+        (f"{label}_bold_core.md", f"{tag}\nThe lab is **ACS-Core** conformant.\n\n{close}\n", "banned"),
+        (f"{label}_merge.md", f"{tag}\nSigned with ML-DSA-65. <!-- claim:C-02 -->\n\n"
+                              f"The gateway can forge an allow.\n\n{close}\n", "unledgered"),
+    ]
+
+
+@pytest.mark.parametrize("name,body,kind", R5_CAUGHT, ids=[c[0] for c in R5_CAUGHT])
+def test_round_5_github_reading_is_caught(tree, name, body, kind):
+    assert kind in _kinds(_scan(tree, {name: body}))
+
+
+R5_PASSES = [
+    ("list_marked_items.md", "Notes:\n- The lab fails closed in enforce mode. <!-- claim:C-09 -->\n"
+                             "- Signed with ML-DSA-65. <!-- claim:C-02 -->\n"),
+    ("year_line.md", "The work began in\n2026. It continues.\n"),
+    ("details_marked.md", "<details>\n<summary>Notes</summary>\n\nSigned with ML-DSA-65. <!-- claim:C-02 -->\n\n</details>\n"),
+    ("fence_list.md", "```\nNotes:\n- verify it\n```\n"),
+    ("fence_div.md", "```\n<div>\nverify\n</div>\n```\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", R5_PASSES, ids=[c[0] for c in R5_PASSES])
+def test_round_5_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+def test_list_after_paragraph_points_at_each_item(tree):
+    findings = _scan(tree, {"a.md": "Notes:\n- Fine. <!-- claim:C-02 -->\n- The lab fails closed.\n"})
+    assert [(f.kind, f.line) for f in findings] == [("unledgered", 3)]
+
+
+@pytest.mark.parametrize("name", ["a.markdown", "a.htm"])
+def test_other_prose_spellings_are_scanned(tree, name):
+    body = "<p>The lab is ACS-Crypto ready.</p>\n" if name.endswith(".htm") else "The lab is ACS-Crypto ready.\n"
+    assert "banned" in _kinds(_scan(tree, {name: body}))
+
+
+@pytest.mark.parametrize("cell", ["(TBD)", "TODO(rock)", "[TBD](x)", "TBC", "Not yet", "not yet checked",
+                                  "To be confirmed", "Pending review", "?"])
+def test_sign_gate_refuses_wrapped_placeholders(tree, capsys, cell):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, cell)
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "unconfirmed C-15" in capsys.readouterr().out
+
+
+def test_indented_claim_row_is_read(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8").replace("| C-15 |", " | C-15 |", 1)
+    ledger.write_text(text.replace("| No second implementation runs in the lab. |", "| Unconfirmed: x |"),
+                      encoding="utf-8")
+    assert "C-15" in lab_claims.load_ledger(ledger).unconfirmed
+
+
+@pytest.mark.parametrize("opener,closer", [("````", "````"), ("~~~", "~~~"), ("   ```", "```")])
+def test_other_fence_forms_of_a_ledger_block_count(tree, opener, closer):
+    root, ledger = tree
+    extra = f"{opener}claims-triggers\nzzz\n{closer}\n\n"
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("## Claims\n", extra + "## Claims\n", 1),
+                      encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_tilde_block_below_the_sign_off_is_refused(tree):
+    root, ledger = tree
+    ledger.write_text(ledger.read_text(encoding="utf-8") + "\n~~~claims-banned\nfoo\n~~~\n", encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_ledger_names_the_renderer_divergences():
+    text = _section("What the tests enforce and what only a reader catches")
+    assert "more text" not in text and "not GitHub's renderer" in text
+    assert "list" in text and "markdown=\"1\"" in text

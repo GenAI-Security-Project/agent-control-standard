@@ -132,7 +132,7 @@ Windows
 
 ## Scan exclusions
 
-The check scans prose an attendee reads: Markdown, HTML and plain-text files (`.md`, `.html`, `.txt`). It never scans code, such as `.py`, `.rego`, `.sh`, `.js`, `.css`, `.yaml` and `.json` files or script and style inside a page, because code comments and identifiers make no claim to attendees. Below, one glob per line, relative to the scanned directory, excludes prose files too. Test directories are excluded for the same reason as code. The ledger itself is never scanned.
+The check scans prose an attendee reads: Markdown, HTML and plain-text files (`.md`, `.markdown`, `.html`, `.htm`, `.txt`). It never scans code, such as `.py`, `.rego`, `.sh`, `.js`, `.css`, `.yaml` and `.json` files or script and style inside a page, because code comments and identifiers make no claim to attendees. Below, one glob per line, relative to the scanned directory, excludes prose files too. Test directories are excluded for the same reason as code. The ledger itself is never scanned.
 
 ```claims-exclude
 **/tests/**
@@ -146,7 +146,7 @@ policy/tools/inputs/**
 
 ## What the tests enforce and what only a reader catches
 
-The check reads Markdown as Python-Markdown renders it and reads HTML as a browser parses it, then matches the text a reader sees. Each block is one unit: a paragraph, a list item, a table row, a heading or a code block. A plain-text file is matched one line at a time. Code files and test directories aren't scanned (see Scan exclusions). A marker counts only inside a real HTML comment, so a marker in a code span, in a code block or after an escaped angle bracket doesn't count.
+The check reads Markdown as Python-Markdown renders it and reads HTML as a browser parses it, then matches the text a reader sees. Each block is one unit: a paragraph, a list item, a table row, a heading or a code block. Markdown, HTML and plain-text files are scanned (`.md`, `.markdown`, `.html`, `.htm`, `.txt`). A plain-text file is matched one line at a time. Code files and test directories aren't scanned (see Scan exclusions). A marker counts only inside a real HTML comment, so a marker in a code span, in a code block or after an escaped angle bracket doesn't count.
 
 The test enforces these:
 
@@ -162,7 +162,7 @@ Only a reader catches these:
 - A paraphrase that avoids every banned phrase and every trigger.
 - A banned phrase split across lines in a plain-text file, which is matched one line at a time.
 - Code and tests, which aren't scanned. Text that code shows an attendee, such as a CLI message or a page built by script, is a reader's job.
-- Markdown that Python-Markdown reads differently from GitHub, such as a fence inside a block quote. The check then reads more text as prose, not less, but a reader confirms what the page shows.
+- Any other place where Markdown renders differently on GitHub. Python-Markdown is not GitHub's renderer. The check handles two known cases before rendering: a list that starts right after a paragraph line gets a blank line, so each item is its own unit, and a block-level HTML tag such as `<details>` or `<div>` gets `markdown="1"`, so the Markdown inside it renders. A reader confirms what the page shows for anything else.
 - Deliberate obfuscation by someone with commit access. The check exists to catch an accidental overclaim. Hiding one on purpose is a reviewer's job.
 - An edit to this ledger made after signing with a recomputed digest. The digest has no key, so anyone can recompute it.
 - Anything outside the repository: the deck, the narration, the run sheets, and the words spoken in a recording.
