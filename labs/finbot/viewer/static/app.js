@@ -163,6 +163,18 @@ function apply(data) {
   paintOn = data.paint === true;
   let newest = null;
   for (const row of data.rows) {
+    if (row.gone) {
+      // The file no longer holds this row: deleted, replaced or edited. The server reads it again from the start,
+      // so whatever the file still holds comes back as new rows.
+      const group = groups.get(row.id);
+      if (group) {
+        if (group === lastPainted) lastPainted = null;
+        group.remove();
+        groups.delete(row.id);
+      }
+      paintedBeat.delete(row.id);
+      continue;
+    }
     if (draw(row)) newest = groups.get(row.id);
     if (row.beat && paintedBeat.get(row.id) !== row.beat) {
       paintedBeat.set(row.id, row.beat);

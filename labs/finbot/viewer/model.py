@@ -31,6 +31,7 @@ from __future__ import annotations
 import collections
 import dataclasses
 import datetime
+import hashlib
 import json
 import os
 import stat
@@ -41,6 +42,7 @@ from pathlib import Path
 from typing import Any
 
 HANDSHAKE_METHOD = "handshake/hello"
+PING_METHOD = "system/ping"
 ML_DSA_65 = "ML-DSA-65"
 AUDIT_PREFIX = b"ACS_AUDIT "
 # The one cause the gateway puts on an answer it withheld for coming late, and on a discards line.
@@ -68,22 +70,23 @@ MAX_ROWS_PER_ANSWER = 500
 # Session files followed, the most recently changed first.
 MAX_SESSIONS = 200
 # A session longer than this is not judged here, since acs-verify reads the whole session on every change. Its rows
-# read not checked and say to run lab verify. 2000 lines is about 1000 steps, far past a lab scenario. acs-verify
-# judged 4000 signed lines in 0.36 seconds (round 2 probe), so 2000 keeps one judge near the poll's budget.
+# read not checked and say to run lab verify. 2000 lines is about 1000 steps, far past a lab scenario, and 2000 lines
+# of typical gateway lines come to 5 MiB. Measured in round 3, one judge at the cap, which reads the file from disk,
+# hashes it and runs acs-verify, took 0.19 seconds on typical lines and 0.24 seconds on lines filling 7.8 MiB.
 MAX_SESSION_LINES = 2000
-MAX_SESSION_BYTES = 32 * 1024 * 1024
+MAX_SESSION_BYTES = 8 * 1024 * 1024
 # The longest text a row carries for an unreadable line or a note.
 MAX_TEXT_CHARS = 400
 # Audit lines for a step whose transcript line hasn't been read yet wait here.
 MAX_WAITING_AUDIT = 10_000
 
 # One poll spends at most this long judging sessions, and leaves the rest for the next poll (round 2, M4). A poll
-# always judges at least one session, so every session is judged in the end, and a poll judges for at most the budget
-# plus one session at the line cap, about 0.2 second more.
+# always judges at least one session, so every session is judged in the end. The worst poll judges for the budget plus
+# one session at the cap, about 0.5 seconds measured. The disk read and hash count inside the budget.
 JUDGE_BUDGET_S = 0.25
 
 TOO_LONG_NOTE = "this session is too long for the viewer to judge. Run lab verify on it"
-RETIRED_NOTE = "the file was replaced or cut shorter and no longer holds this row"
+CHANGING_NOTE = "the file changed while it was read. Judging it again"
 REJUDGE_NOTE = "judging again under the changed key document"
 WITHHELD_NOTE = "the gateway withheld this answer and denied the step (decision_timeout)"
 CLAIM_NOTE = "the gateway says it withheld the answer above and denied the step (decision_timeout)"
@@ -155,6 +158,38 @@ class LogTail:
         self._partial = b""
         self._identity: tuple[int, int] | None = None
         self._dropping = False
+        # A hash of every byte read so far, so the bytes on disk can be checked against what was read (round 3, F1).
+        self._hash = hashlib.sha256()
+
+    def restart(self) -> None:
+        """Read the file again from its start, as for a replaced file."""
+        self.restarts += 1
+        self._offset, self._partial, self._dropping, self._hash = 0, b"", False, hashlib.sha256()
+
+    def disk_lines(self) -> list[bytes] | None:
+        """The complete lines read so far, as the file holds them now, or None when the file no longer holds the
+        bytes read so far: replaced, cut shorter, edited in place, or gone. Read from disk on every call, so a judge
+        sees only bytes that are on disk when it runs, whatever the file's inode, size or times say."""
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(self.path, flags)
+        except OSError:
+            return None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != self._identity:
+                return None
+            data = os.pread(fd, self._offset, 0) if self._offset else b""
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
+        if len(data) != self._offset or hashlib.sha256(data).digest() != self._hash.digest():
+            return None
+        complete = data[:self._offset - len(self._partial)]
+        # The same split read_new makes, so line numbers match the rows'. A line read_new cut short is longer here,
+        # and both fail it as one line that isn't JSON.
+        return [line for line in complete.split(b"\n") if line]
 
     def read_new(self) -> list[bytes]:
         data = self._read()
@@ -194,6 +229,7 @@ class LogTail:
                 if self._identity is not None:
                     self.restarts += 1
                 self._identity, self._offset, self._partial, self._dropping = identity, 0, b"", False
+                self._hash = hashlib.sha256()
             if info.st_size == self._offset:
                 return b""
             os.lseek(fd, self._offset, os.SEEK_SET)
@@ -203,6 +239,7 @@ class LogTail:
         finally:
             os.close(fd)
         self._offset += len(data)
+        self._hash.update(data)
         return data
 
 
@@ -242,6 +279,8 @@ class Row:
     gateway_note: str | None = None
     check_note: str | None = None
     unreadable_count: int = 0
+    # A row the file no longer holds. It goes to the page once more, as gone, and the page drops it.
+    gone: bool = False
     # An unreadable line's note is escaped from its bytes when read, so it is not escaped a second time.
     note_escaped: bool = False
 
@@ -267,6 +306,8 @@ class Row:
 
     def public(self) -> dict[str, Any]:
         """The served fields of a row escaped() returned. It escapes nothing itself, so nothing is escaped twice."""
+        if self.gone:
+            return {"id": self.id, "seq": self.seq, "gone": True}
         return {name: getattr(self, name) for name in self.PUBLIC}
 
 
@@ -298,7 +339,9 @@ class _Session:
     session_id: str
     tail: LogTail
     restarts: int = 0
-    lines: list[bytes] = dataclasses.field(default_factory=list)
+    # The file's (inode, size, mtime, ctime) at the last poll. Any change queues the session for judging, and the
+    # judge reads the file from disk. ctime changes on every write and no caller can set it.
+    stamp: tuple[int, ...] | None = None
     line_count: int = 0
     size: int = 0
     too_long: bool = False
@@ -320,7 +363,7 @@ class _Session:
 
     def reset(self) -> None:
         """The file was replaced or cut shorter, so the new content starts over. The caller retires the old rows."""
-        self.lines, self.line_count, self.size, self.too_long = [], 0, 0, False
+        self.line_count, self.size, self.too_long = 0, 0, False
         self.open_request, self.by_request, self.by_line, self.rows = None, {}, {}, []
         self.first_algorithm, self.last_unreadable, self.just_answered, self.named = None, None, None, None
         self.dirty = True
@@ -356,17 +399,24 @@ class Model:
     # Reading
 
     def refresh(self) -> None:
-        for path in self._transcript_files():
+        listed = self._transcript_files()
+        names = {path.stem for path in listed}
+        for session in [s for s in self._sessions.values() if s.session_id not in names]:
+            if not os.path.lexists(session.tail.path):
+                # The file left the directory, so its rows go from the table and from the beat history (F1).
+                self._forget(session)
+        for path in listed:
             session = self._sessions.get(path.stem)
             if session is None:
                 session = self._sessions[path.stem] = _Session(path.stem, LogTail(path))
-            raws = session.tail.read_new()
-            if session.tail.restarts != session.restarts:
-                session.restarts = session.tail.restarts
-                self._retire(session)
-                session.reset()
-            for raw in raws:
-                self._transcript_line(session, raw)
+            try:
+                info = os.stat(path, follow_symlinks=False)
+                stamp = (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            except OSError:
+                stamp = None
+            if stamp != session.stamp:
+                session.stamp, session.dirty = stamp, True
+            self._read_session(session)
         if self.audit_tail is not None:
             for raw in self.audit_tail.read_new():
                 self._audit_line(raw)
@@ -374,8 +424,8 @@ class Model:
         self._judge()
 
     def rows_after(self, seq: int) -> list[Row]:
-        """Every row new or changed after seq, oldest change first, escaped once."""
-        return [row.escaped() for row in self._changed_after(seq)]
+        """Every row still held that is new or changed after seq, oldest change first, escaped once."""
+        return [row.escaped() for row in self._changed_after(seq) if not row.gone]
 
     def page(self, seq: int) -> tuple[list[Row], int, bool]:
         """(rows, next, more): at most MAX_ROWS_PER_ANSWER rows changed after seq, escaped once, the seq to ask from
@@ -403,7 +453,7 @@ class Model:
     def no_record(self) -> bool:
         """True while no ACS row has come since the viewer started or since the last epoch bump. With ACS off the
         gateway writes no transcript, so the page shows "no ACS record", the module 1 and module 2 beat (A.12)."""
-        return not any(self._is_record(row) for row in self._rows.values())
+        return not any(self._is_record(row) for row in self._rows.values() if not row.gone)
 
     def _is_record(self, row: Row) -> bool:
         governed = (row.source == "transcript" and row.method != "unreadable") or row.method in ASK_EVENTS
@@ -415,6 +465,32 @@ class Model:
         # A time that can't be read counts as current, so a row is never hidden for its timestamp.
         return moment is None or moment > self._epoch_at
 
+    def _read_session(self, session: _Session) -> None:
+        raws = session.tail.read_new()
+        if session.tail.restarts != session.restarts:
+            # Replaced or cut shorter, the fast path. A same-size edit is caught when the session is judged.
+            session.restarts = session.tail.restarts
+            self._drop_session_rows(session)
+            session.reset()
+        for raw in raws:
+            self._transcript_line(session, raw)
+
+    def _drop_session_rows(self, session: _Session) -> None:
+        """Drop every row the session holds, from the table and the beat history. The file is read again from the
+        start, so each row it still holds comes back, judged from the bytes on disk."""
+        for row in session.rows:
+            if row.id in self._rows and not row.gone:
+                self._gone(row)
+        self._history.forget(session.session_id)
+
+    def _forget(self, session: _Session) -> None:
+        self._drop_session_rows(session)
+        del self._sessions[session.session_id]
+
+    def _gone(self, row: Row) -> None:
+        row.gone = True
+        self._touch(row)
+
     def _transcript_files(self) -> list[Path]:
         try:
             found = []
@@ -425,16 +501,6 @@ class Model:
             return []
         newest = sorted(found, reverse=True)[:MAX_SESSIONS]
         return [self.transcript_dir / name for _, name in sorted(newest, key=lambda item: item[1])]
-
-    def _retire(self, session: _Session) -> None:
-        """The file no longer holds these rows, so none keeps a mark judged from content it lost (round 2, M1). They
-        stay as history, out of the session, and are never judged again."""
-        for row in session.rows:
-            if row.id not in self._rows:
-                continue
-            mark = "not_checked" if row.answered or row.method == "unreadable" else "no_answer"
-            row.verify, row.check_note = mark, RETIRED_NOTE
-            self._touch(row)
 
     # Rows
 
@@ -463,7 +529,8 @@ class Model:
         self._seq += 1
         row.seq = self._seq
         self._rows.move_to_end(row.id)
-        row.beat = self._beats.classify(row, self._history)
+        if not row.gone:
+            row.beat = self._beats.classify(row, self._history)
 
     def _unreadable(self, raw: bytes, session: _Session | None, why: str | None = None,
                     number: int | None = None) -> None:
@@ -495,13 +562,9 @@ class Model:
         session.line_count += 1
         session.size += len(raw)
         session.dirty = True
-        if session.too_long:
-            return session.line_count
         if session.line_count > MAX_SESSION_LINES or session.size > MAX_SESSION_BYTES:
-            # Stop holding the session's lines. Its rows read not checked from here on.
-            session.too_long, session.lines = True, []
-        else:
-            session.lines.append(raw)
+            # Past the cap the session is no longer judged. Its rows read not checked from here on.
+            session.too_long = True
         return session.line_count
 
     def _transcript_line(self, session: _Session, raw: bytes) -> None:
@@ -533,7 +596,8 @@ class Model:
         cause = _text(record.get("cause"))
         response = envelope if isinstance(envelope, dict) and ("result" in envelope or "error" in envelope) else None
         row = self._step_row(session, request, (number, response), cause, record)
-        if response is not None:
+        # Only a signed answer to a step, with no cause, can be withheld, acs-verify's rule (round 3, N2).
+        if response is not None and row.signed and cause is None and row.method not in (HANDSHAKE_METHOD, PING_METHOD):
             session.just_answered = row
 
     def _step_row(self, session: _Session, request: tuple[int, dict[str, Any]],
@@ -625,16 +689,30 @@ class Model:
     def _judge_session(self, session: _Session, keys: Any | None) -> None:
         from verify import verify_session
 
-        session.rows = [row for row in session.rows if row.id in self._rows]
-        if session.too_long:
-            verdict = None
+        lines = session.tail.disk_lines()
+        if lines is None:
+            # The file no longer holds the bytes its rows came from. Drop them and read it again from the start, so
+            # every mark below comes from bytes on disk now (round 3, F1).
+            self._drop_session_rows(session)
+            session.tail.restart()
+            self._read_session(session)
+            lines = session.tail.disk_lines()
+        session.rows = [row for row in session.rows if row.id in self._rows and not row.gone]
+        name = self._name_problem(session)
+        if lines is None:
+            # Still changing under the reader. Nothing is judged, and the next poll tries again.
+            session.dirty = True
+            marks = {row.id: (self._unchecked(row), CHANGING_NOTE) for row in session.rows}
+        elif name is not None:
+            # A file holding another session's requests fails whatever the session's mode (round 3, N1).
+            marks = {row.id: self._mark(row, session, name) for row in session.rows}
+        elif session.too_long:
             marks = {row.id: ("not_checked" if row.answered else "no_answer", TOO_LONG_NOTE) for row in session.rows}
         elif keys is None or (session.first_algorithm not in (None, ML_DSA_65)):
             # No key document, or an HMAC session: nothing here can check it, so no row reads verified (I2).
-            verdict = None
             marks = {row.id: (self._unchecked(row), None) for row in session.rows}
         else:
-            verdict = self._name_problem(session) or verify_session(session.lines, keys)
+            verdict = verify_session(lines, keys)
             marks = {row.id: self._mark(row, session, verdict) for row in session.rows}
         for row in session.rows:
             mark, note = marks[row.id]
@@ -671,8 +749,10 @@ class Model:
         if not verdict.ok:
             failed = session.by_line.get(verdict.failure_line)
             if failed is row:
-                return "failed", _clip(f"acs-verify: {verdict.failure_code}: {verdict.failure_reason}")
-            stopped = f"the session failed acs-verify at line {verdict.failure_line} ({verdict.failure_code})"
+                # The file name check is the viewer's own. Every other code is acs-verify's.
+                source = "viewer" if verdict.failure_code == "session_file_mismatch" else "acs-verify"
+                return "failed", _clip(f"{source}: {verdict.failure_code}: {verdict.failure_reason}")
+            stopped = f"the session failed at line {verdict.failure_line} ({verdict.failure_code})"
             return ("no_answer" if not row.answered and row.method != "unreadable" else "not_checked"), stopped
         if row.method == "unreadable" or not row.answered:
             return self._unchecked(row), None

@@ -128,9 +128,11 @@ def test_new_session_file_is_picked_up(tmp_path):
 
 
 def test_discards_line_marks_the_answer_before_it(tmp_path):
+    # Only a signed step answer can be withheld (fix round 3, N2), so this one is signed.
+    from lab_lines import sign_hmac
     logs = LabLogs(tmp_path)
     req = tool_request("echo")
-    logs.pair(req, answer(req, "allow"))
+    logs.pair(req, sign_hmac(answer(req, "allow")))
     logs.resp(SESSION_A, None, cause="decision_timeout", discards=req["params"]["request_id"])
     row, claim = sorted(rows(Model(logs.transcript_dir, None, None)), key=lambda r: r.id)
     assert row.decision == "allow"

@@ -57,6 +57,12 @@ class BeatHistory:
     first_allow: dict[str, int] = dataclasses.field(default_factory=dict)
     denials: dict[str, set[str]] = dataclasses.field(default_factory=dict)
 
+    def forget(self, session_id: str) -> None:
+        """Drop what a session's rows put here, for a file deleted, replaced or edited (round 3, F1)."""
+        self.first_allow.pop(session_id, None)
+        for sessions in self.denials.values():
+            sessions.discard(session_id)
+
 
 def classify(row: Row, history: BeatHistory) -> str | None:
     """The beat this row paints, or None. Called again each time the row changes, so it must give the same answer

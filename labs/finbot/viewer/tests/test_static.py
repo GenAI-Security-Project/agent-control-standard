@@ -84,3 +84,9 @@ def test_the_page_always_shows_what_verified_covers():
     assert "deleted or reordered entry still reads verified" in text
     assert "lab verify" in text
     assert "position: sticky" in read("style.css").split("#legend")[1].split("}")[0]
+
+
+def test_the_page_removes_rows_the_server_says_are_gone():
+    # Round 3 F1: rows of a deleted, replaced or edited file come once more as gone, and the page drops them.
+    script = read("app.js")
+    assert "row.gone" in script and ".remove()" in script

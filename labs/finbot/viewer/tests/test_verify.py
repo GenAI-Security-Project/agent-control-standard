@@ -27,6 +27,7 @@ from lab_lines import (  # noqa: E402
     answer,
     decision_key,
     error_answer,
+    request,
     sign_hmac,
     tool_request,
 )
@@ -360,29 +361,141 @@ def test_entry_after_a_revocation_fails(tmp_path, key):
 # Fix round 2
 
 
-def test_rows_a_replaced_file_no_longer_holds_lose_their_mark(tmp_path, key, keys):
-    # M1: a file cut shorter or replaced starts over. Rows it no longer holds keep no mark from content it lost.
+def test_rows_a_replaced_file_no_longer_holds_are_dropped(tmp_path, key, keys):
+    # M1, round 3 F1: a file cut shorter or replaced is read again from the start. Rows it no longer holds are
+    # dropped, sent to the page once as gone, and never judged again.
     logs = LabLogs(tmp_path)
     a, b = tool_request("echo"), tool_request("wire_money")
     logs.pair(a, key.sign(answer(a, "allow"), a))
     logs.pair(b, key.sign(answer(b, "deny"), b))
     model = Model(logs.transcript_dir, None, keys)
     model.refresh()
+    old = [r.id for r in model.rows_after(0)]
     assert [r.verify for r in model.rows_after(0)] == ["verified", "verified"]
+    seq = model.last_seq
     kept = logs.transcript().read_bytes().splitlines(keepends=True)[:2]
     replacement = logs.transcript().with_suffix(".new")
     replacement.write_bytes(b"".join(kept))
     os.replace(replacement, logs.transcript())
     model.refresh()
-    got = sorted(model.rows_after(0), key=lambda r: r.id)
-    assert [(r.tool, r.verify) for r in got] == [("echo", "not_checked"), ("wire_money", "not_checked"),
-                                                 ("echo", "verified")]
-    assert "no longer holds" in got[0].note
-    # A later key document change judges the file's current rows only. The history rows stay not checked.
+    assert [(r.tool, r.verify) for r in model.rows_after(0)] == [("echo", "verified")]
+    page, _, _ = model.page(seq)
+    assert sorted(r.id for r in page if r.gone) == old
     other = decision_key(tmp_path / "other")
     keys._path = str(other.document_path)
     model.refresh()
-    assert {r.verify for r in model.rows_after(0) if r.id <= got[1].id} == {"not_checked"}
+    assert [r.id for r in model.rows_after(0) if r.id in old] == []
+
+
+# Fix round 3: a verified mark comes only from bytes on disk at judge time (F1, probes p7 and p8).
+
+
+def flip_deny(path) -> None:
+    """Probe p7 d: the signed deny becomes DENY in place, same size, same inode, with the old mtime put back."""
+    before = os.stat(path)
+    data = bytearray(path.read_bytes())
+    at = data.find(b'"deny"')
+    data[at + 1:at + 5] = b"DENY"
+    with path.open("r+b") as f:
+        f.write(bytes(data))
+    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert os.stat(path).st_size == before.st_size and os.stat(path).st_ino == before.st_ino
+
+
+def test_a_deleted_file_drops_its_rows(tmp_path, key, keys):
+    logs = LabLogs(tmp_path)
+    a, b = tool_request("echo"), tool_request("wire_money")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.pair(b, key.sign(answer(b, "deny"), b))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    seq = model.last_seq
+    os.unlink(logs.transcript())
+    model.refresh()
+    assert model.rows_after(0) == []
+    assert all(r.gone for r in model.page(seq)[0]) and len(model.page(seq)[0]) == 2
+
+
+def test_a_deleted_file_is_not_judged_again_after_a_key_change(tmp_path, key):
+    # Probe p8 b2: before round 3 a key change judged the deleted session again from lines held in memory.
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(key.document), encoding="utf-8")
+    os.chmod(live, 0o644)
+    logs = LabLogs(tmp_path)
+    a = tool_request("echo")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(live)}))
+    model.refresh()
+    os.unlink(logs.transcript())
+    model.refresh()
+    document = key.document
+    document["note"] = "rewritten"
+    live.write_text(json.dumps(document), encoding="utf-8")
+    os.utime(live, ns=(1, 1))
+    for _ in range(2):
+        model.refresh()
+    assert model.rows_after(0) == []
+
+
+def test_a_same_size_edit_in_place_is_read_again_from_disk(tmp_path, key, keys):
+    # Probe p7 d: no new inode, no new size, the old mtime. The bytes on disk no longer verify, so no row says so.
+    logs = LabLogs(tmp_path)
+    a, b, c = tool_request("echo"), tool_request("wire_money"), tool_request("read_balance")
+    for req, decision in ((a, "allow"), (b, "deny"), (c, "allow")):
+        logs.pair(req, key.sign(answer(req, decision), req))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    assert {r.verify for r in model.rows_after(0)} == {"verified"}
+    flip_deny(logs.transcript())
+    model.refresh()
+    got = [(r.tool, r.decision, r.verify) for r in sorted(model.rows_after(0), key=lambda r: r.id)]
+    assert got == [("echo", "allow", "not_checked"), ("wire_money", "DENY", "failed"),
+                   ("read_balance", "allow", "not_checked")]
+
+
+def test_an_edit_then_a_genuine_append_is_still_caught(tmp_path, key, keys):
+    # Probe p8 d2: the file grows after the edit, which before round 3 judged the stale lines held in memory.
+    logs = LabLogs(tmp_path)
+    a, b = tool_request("echo"), tool_request("wire_money")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.pair(b, key.sign(answer(b, "deny"), b))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    flip_deny(logs.transcript())
+    c = tool_request("read_balance")
+    logs.pair(c, key.sign(answer(c, "allow"), c))
+    model.refresh()
+    marks_now = {r.tool: r.verify for r in model.rows_after(0)}
+    assert marks_now == {"echo": "not_checked", "wire_money": "failed", "read_balance": "not_checked"}
+
+
+def test_a_copied_file_fails_without_a_key_document(tmp_path, key):
+    # Round 3 N1: the file name check runs whatever the session's mode.
+    logs = LabLogs(tmp_path)
+    a = tool_request("echo")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.transcript(SESSION_B).write_bytes(logs.transcript().read_bytes())
+    model = Model(logs.transcript_dir, None, None)
+    model.refresh()
+    copied = [r for r in model.rows_after(0) if r.session_id == SESSION_B]
+    assert [r.verify for r in copied] == ["failed"]
+    assert "session_file_mismatch" in copied[0].note
+
+
+def test_a_discards_line_after_a_ping_answer_marks_nothing_withheld(tmp_path, key, keys):
+    # Round 3 N2: only a signed step answer with no cause can be withheld, acs-verify's rule.
+    logs = LabLogs(tmp_path)
+    a = tool_request("echo")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    ping = request("system/ping", {})
+    logs.pair(ping, {"jsonrpc": "2.0", "id": ping["id"], "result": {"request_id": ping["params"]["request_id"]}})
+    logs.resp(SESSION_A, None, cause="decision_timeout", discards=ping["params"]["request_id"])
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    pinged = next(r for r in model.rows_after(0) if r.method == "system/ping")
+    claim = next(r for r in model.rows_after(0) if r.method == "withheld")
+    assert "withheld" not in (pinged.note or "")
+    assert claim.verify == "failed"
 
 
 def test_a_file_named_for_another_session_fails(tmp_path, key, keys):
