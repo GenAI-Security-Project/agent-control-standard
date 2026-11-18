@@ -198,7 +198,9 @@ class Finding:
     text: str
 
 
-SCANNED = frozenset({".md", ".txt", ".html", ".js", ".css", ".py", ".rego", ".yaml", ".yml", ".json", ".sh", ".ps1"})
+# The one allowlist of scanned file types: prose an attendee reads. Code comments and identifiers make no claim to
+# attendees, so code is never scanned, and neither are test directories (the ledger's exclusion list names them).
+SCANNED = frozenset({".md", ".html", ".txt"})
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
@@ -229,8 +231,8 @@ BLOCKS = frozenset(
     "tbody tfoot thead title tr ul".split())
 # Table cells and line breaks stay inside their unit but keep the words on each side apart.
 SPACERS = frozenset({"td", "th", "br"})
-# Script and style hold code, which is checked one line at a time like any other code file.
-LINEWISE = frozenset({"script", "style"})
+# Script and style in a page are code, which makes no claim to attendees, so their content is skipped.
+CODE_ELEMENTS = frozenset({"script", "style"})
 # Attributes a reader sees. Alt text stands in for an image where it sits. A title shows on hover, so it joins the
 # end of its unit rather than splitting the words around its element.
 INLINE_ATTRS = frozenset({"alt"})
@@ -306,9 +308,9 @@ def _key(phrase: str) -> str:
 
 
 def _normalize(text: str) -> str:
-    """The matching copy of a line in a file that is neither Markdown nor HTML, such as code or plain text.
+    """The matching copy of a line in a plain-text file.
 
-    Code has no renderer, so its tags, entities, links and emphasis marks are stripped from the line itself.
+    Plain text has no renderer, so its tags, entities, links and emphasis marks are stripped from the line itself.
     """
     text = text.replace("<!--", " ").replace("-->", " ")
     text = TAG.sub("", text)
@@ -358,7 +360,7 @@ class _Walker(HTMLParser):
         self._trailing: list[str] = []
         self._line = 0
         self._code = 0
-        self._linewise = False
+        self._in_code_element = False
 
     def _add(self, text: str) -> None:
         if not self._line and text.strip():
@@ -378,9 +380,9 @@ class _Walker(HTMLParser):
             self._code += tag == "pre"
         elif tag in SPACERS:
             self._add(" ")
-        if tag in LINEWISE:
+        if tag in CODE_ELEMENTS:
             self._flush()
-            self._linewise = True
+            self._in_code_element = True
         for name, value in attrs:
             if name in INLINE_ATTRS and value:
                 self._add(f" {value} ")
@@ -393,15 +395,12 @@ class _Walker(HTMLParser):
             self._code = max(0, self._code - (tag == "pre"))
         elif tag in SPACERS:
             self._add(" ")
-        if tag in LINEWISE:
-            self._linewise = False
+        if tag in CODE_ELEMENTS:
+            self._in_code_element = False
 
     def handle_data(self, data: str) -> None:
-        if self._linewise:
-            first = self.getpos()[0]
-            self.units += [Unit(first + i, ln, (), False) for i, ln in enumerate(data.split("\n")) if ln.strip()]
-            return
-        self._add(data)
+        if not self._in_code_element:
+            self._add(data)
 
     def handle_comment(self, data: str) -> None:
         # The comment's text is still matched, so a banned phrase can't hide in one.
@@ -458,7 +457,7 @@ def _source_lines(source: str, units: list[Unit]) -> None:
 
 
 def _units(text: str, suffix: str) -> list[Unit]:
-    """Markdown is rendered and HTML is parsed, so each block is a unit. Every other file is one unit per line."""
+    """Markdown is rendered and HTML is parsed, so each block is a unit. Plain text is one unit per line."""
     if suffix == ".md":
         units = _walk(_render(text))
         _source_lines(text, units)

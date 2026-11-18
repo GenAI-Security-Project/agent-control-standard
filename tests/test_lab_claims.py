@@ -192,7 +192,8 @@ def test_trigger_matches_word_start_only(tree):
 
 
 def test_non_markdown_is_checked_per_line(tree):
-    findings = _scan(tree, {"a.py": "# fine\n# ACS-Crypto here\n"})
+    # Round 4: code is no longer scanned, so the per-line path is plain text.
+    findings = _scan(tree, {"a.txt": "fine\nACS-Crypto here\n"})
     assert [(f.kind, f.line) for f in findings] == [("banned", 2)]
 
 
@@ -454,7 +455,7 @@ def test_ledger_truth_rows():
     assert "can pin" in rows["C-03"][1] and "unconfirmed" in rows["C-03"][2].lower()
     assert "_response_signing.py" in rows["C-02"][2]
     assert "digest" in _section("What the tests enforce and what only a reader catches")
-    assert "neither Markdown nor HTML" in _section("What the tests enforce and what only a reader catches")
+    assert "plain-text file" in _section("What the tests enforce and what only a reader catches")
 
 
 # ---------------------------------------------------------------- Fix round 3
@@ -548,7 +549,7 @@ CAUGHT = [
     ("trig_split.md", "Decisions are signed\nwith ML-DSA-65.\n"),
     ("unicode_hyphen.md", "The lab is ACS‑Core conformant.\n"),
     ("fullwidth.md", "The lab is ＡCS-Core conformant.\n"),
-    ("py_split.py", "x = 'ACS-Core '\\\n    'conformant'\n"),
+    ("py_split.txt", "x = 'ACS-Core '\\\n    'conformant'\n"),
     ("win1.md", "The lab is supported on Windows.\n"),
     ("win2.md", "Windows support: yes.\n"),
     ("win3.md", "It also runs fine on Windows 11.\n"),
@@ -669,9 +670,10 @@ def test_html_finding_points_at_its_source_line(tree):
     assert [(f.kind, f.line) for f in findings] == [("banned", 4)]
 
 
-def test_script_lines_are_checked_one_at_a_time(tree):
-    body = "<script>\nconst a = 'fine';\nconst b = 'ACS-Crypto';\n</script>\n"
-    assert [(f.kind, f.line) for f in _scan(tree, {"a.html": body})] == [("banned", 3)]
+def test_script_and_style_in_html_are_not_scanned(tree):
+    # Round 4 ruling: code makes no claim to attendees, and script or style in a page is code.
+    body = "<script>\nconst b = 'ACS-Crypto verified';\n</script>\n<style>/* ACS-Crypto */</style>\n<p>Fine.</p>\n"
+    assert _scan(tree, {"a.html": body}) == []
 
 
 def test_scan_refuses_without_the_renderer(tree, monkeypatch):
@@ -754,3 +756,32 @@ def test_recomputed_digest_is_named_as_reader_only():
 def test_c02_limits_say_when_answers_stay_on_hmac():
     limits = {r[0]: r for r in _rows(_section("Claims"))}["C-02"][3]
     assert " then " not in limits and "While signing is off" in limits
+
+
+# ---------------------------------------------------------------- Fix round 4: prose only
+
+CODE_FILES = ["a.py", "a.rego", "a.sh", "a.js", "a.css", "a.yaml", "a.yml", "a.json", "a.ps1", "a.toml"]
+
+
+@pytest.mark.parametrize("name", CODE_FILES)
+def test_code_file_is_not_scanned(tree, name):
+    assert _scan(tree, {name: "ACS-Crypto is verified.\n"}) == []
+
+
+@pytest.mark.parametrize("name", ["a.md", "a.html", "a.txt"])
+def test_prose_file_is_scanned(tree, name):
+    assert "banned" in _kinds(_scan(tree, {name: "The lab is ACS-Crypto ready.\n"}))
+
+
+def test_scanned_types_are_one_explicit_allowlist():
+    assert lab_claims.SCANNED == frozenset({".md", ".html", ".txt"})
+
+
+@pytest.mark.parametrize("name", ["tests/a.md", "viewer/tests/a.md", "cli/test/a.txt"])
+def test_test_directories_are_not_scanned(tree, name):
+    assert _scan(tree, {name: "The lab is ACS-Crypto ready.\n"}) == []
+
+
+def test_ledger_exclusions_name_test_directories(tree):
+    _, ledger = tree
+    assert {"**/tests/**", "**/test/**"} <= set(lab_claims.load_ledger(ledger).exclude)
