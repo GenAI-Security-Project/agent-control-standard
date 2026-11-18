@@ -160,6 +160,11 @@ class SigningUnavailable(RuntimeError):
     """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
 
 
+# The default for "the caller passed no request". None can't mean that, since a body of JSON null parses to None
+# and must get the unsigned -32600 like any other body that isn't an object (final review I1).
+NO_REQUEST: Any = object()
+
+
 class RefusalLatch:
     """Counts refusals and says whether this one starts an episode, so a dead key logs one line, not one per request.
 
@@ -188,7 +193,7 @@ class RefusalLatch:
 DEAD_KEY_REFUSALS = RefusalLatch()
 
 
-def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict:
+def _sign_response(envelope: dict, session_id: str, request: Any = NO_REQUEST) -> dict:
     """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
 
     One ML-DSA key signs every session and section 10 gives a response no session_id, so an answer that matched only
@@ -198,6 +203,19 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
     SigningUnavailable, so the floor answers instead of an answer without the hash (review CR4).
     """
     if RESPONSE_SIGNING_NAME == ML_DSA_65:
+        if request is NO_REQUEST:
+            raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")
+        try:
+            digest = request_sha256(request)
+        except (NoSignedInput, *CANONICALIZATION_ERRORS):
+            # The request has no signed input (a body or params that aren't an object, or nothing JCS can encode), so
+            # no client signed it and no hash can name it. An error to it goes unsigned, as the README lists for a
+            # request with no readable session, and as HMAC mode answers it (review CR3-1, final review I1). This runs
+            # before the key checks, so the answer never depends on the key's state. A decision never reaches here,
+            # since only a signed request gets one. Any other exception is a bug and propagates to the floor (CR4).
+            if "error" in envelope:
+                return envelope
+            raise SigningUnavailable("a decision for a request with no signed input") from None
         if DECISION_SIGNER is None:
             # Named at import but never loaded, as when a caller serves handle_request without main(). Falling back
             # to HMAC would hand clients a signature their key document can't verify, so the floor answers.
@@ -211,18 +229,6 @@ def _sign_response(envelope: dict, session_id: str, request: Any = None) -> dict
                                  "until the key is live again\n")
                 sys.stderr.flush()
             raise SigningUnavailable("the decision key is not live")
-        if not isinstance(request, dict):
-            raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")
-        try:
-            digest = request_sha256(request)
-        except (NoSignedInput, *CANONICALIZATION_ERRORS):
-            # The request has no signed input (params that aren't an object, or nothing JCS can encode), so no client
-            # signed it and no hash can name it. An error to it goes unsigned, as the README lists for a request
-            # with no readable session (review CR3-1). A decision never reaches here, since only a signed request
-            # gets one. Any other exception is a bug and propagates to the floor (review round 4 CR4).
-            if "error" in envelope:
-                return envelope
-            raise SigningUnavailable("a decision for a request with no signed input") from None
         if "result" in envelope:
             envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
         else:
@@ -780,7 +786,7 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
 
 
 def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True,
-                    data: dict | None = None, request: Any = None) -> dict:
+                    data: dict | None = None, request: Any = NO_REQUEST) -> dict:
     """A JSON-RPC error, signed whenever the session key is derivable, since Baseline integrity covers errors.
 
     The decision key needs no session, so with ML-DSA-65 on every error is signed except an unsigned one by name.
@@ -1001,7 +1007,7 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
 UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, so the step is denied."
 
 
-def _signed_step_response(request_id: Any, session_id: str, result: dict, request: Any = None) -> dict:
+def _signed_step_response(request_id: Any, session_id: str, result: dict, request: Any = NO_REQUEST) -> dict:
     """Sign a step's decision. One JCS can't canonicalize (a lone surrogate, an integer beyond 2^53, a non-finite
     float, or nesting past the recursion limit) is answered with a signed deny instead of a dropped connection,
     which a proceed posture would run."""

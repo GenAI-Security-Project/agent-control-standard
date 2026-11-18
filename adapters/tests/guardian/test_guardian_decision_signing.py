@@ -278,6 +278,22 @@ def test_a_request_that_cannot_be_hashed_gets_an_unsigned_answer(signer, params)
         request_sha256(request)
 
 
+@pytest.mark.parametrize("mode", ["ML-DSA-65", "HMAC"])
+@pytest.mark.parametrize("body", [[{"jsonrpc": "2.0", "id": "b", "method": "system/ping"}], "x", 7, None],
+                         ids=["batch", "string", "number", "null"])
+def test_a_body_that_is_not_an_object_gets_the_same_unsigned_answer_in_both_modes(signer, monkeypatch, capsys,
+                                                                                  mode, body):
+    # Final review I1: the README lists this answer as unsigned, so the mode must not turn it into the 500 floor.
+    if mode == "HMAC":
+        monkeypatch.setattr(example_guardian, "RESPONSE_SIGNING_NAME", "")
+        monkeypatch.setattr(example_guardian, "DECISION_SIGNER", None)
+    status, response = example_guardian._handle(body, example_guardian.read_request(body))
+    assert status == 200
+    assert response["error"]["code"] == -32600
+    assert "signature" not in response["error"]
+    assert "internal error" not in capsys.readouterr().err
+
+
 def test_any_other_hashing_error_reaches_the_floor(signer, monkeypatch, capsys):
     # Review round 4 CR4: only "no signed input" and canonicalization errors mean an unsigned error. Anything else is
     # a bug, so handle_request raises and do_POST answers the -32603 floor and logs the type.
