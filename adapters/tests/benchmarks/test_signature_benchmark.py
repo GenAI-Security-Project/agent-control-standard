@@ -51,10 +51,10 @@ class SignatureBenchmarkTest(unittest.TestCase):
         self.assertIn(data["environment"]["cryptography"], env)
 
     def test_ecdsa_envelope_helpers_round_trip_and_reject_tampering(self) -> None:
-        from acs.core._ecdsa import ecdsa_p256_generate, ecdsa_p256_public_bytes
+        from acs.core._ecdsa import ecdsa_p256_generate
         _, response = bench._workload()
         key = ecdsa_p256_generate()
-        public = ecdsa_p256_public_bytes(key)
+        public = key.public_key()
         signed = bench.sign_ecdsa_envelope(response, key, key_id="k")
         self.assertEqual(signed["result"]["signature"]["algorithm"], "ECDSA-P256")
         self.assertTrue(bench.verify_ecdsa_envelope(signed, public))
@@ -67,13 +67,28 @@ class SignatureBenchmarkTest(unittest.TestCase):
         self.assertEqual(digest, bench.core_source_sha256())
 
     def test_source_hash_covers_nested_python_files(self) -> None:
-        import acs.core
-        nested = Path(acs.core.__file__).resolve().parent / "_bench_probe" / "nested.py"
-        before = bench.core_source_sha256()
-        nested.parent.mkdir()
-        self.addCleanup(lambda: (nested.unlink(missing_ok=True), nested.parent.rmdir()))
-        nested.write_text("x = 1\n")
-        self.assertNotEqual(before, bench.core_source_sha256())
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "top.py").write_text("x = 1\n")
+            before = bench.core_source_sha256(root)
+            (root / "pkg").mkdir()
+            (root / "pkg" / "nested.py").write_text("y = 2\n")
+            self.assertNotEqual(before, bench.core_source_sha256(root))
+
+    def test_verify_takes_a_parsed_key_so_no_row_times_key_parsing(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from acs.core._ecdsa import ecdsa_p256_generate, ecdsa_p256_public_bytes
+        _, response = bench._workload()
+        key = ecdsa_p256_generate()
+        signed = bench.sign_ecdsa_envelope(response, key, key_id="k")
+        parsed = ec.EllipticCurvePublicKey.from_encoded_point(
+            ec.SECP256R1(), ecdsa_p256_public_bytes(key))
+        self.assertTrue(bench.verify_ecdsa_envelope(signed, parsed))
+
+    def test_correctness_guard_raises_instead_of_asserting(self) -> None:
+        with mock.patch.object(bench, "verify_with_key", return_value=False):
+            with self.assertRaises(RuntimeError):
+                list(bench._signatures(1, 0))
 
     def test_update_reference_and_out_dir_are_mutually_exclusive(self) -> None:
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:

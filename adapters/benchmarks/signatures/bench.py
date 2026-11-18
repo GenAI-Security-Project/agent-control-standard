@@ -39,6 +39,10 @@ import uuid
 from pathlib import Path
 
 import cryptography
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.hazmat.backends.openssl.backend import backend as _openssl_backend
 
 from acs.core import (
@@ -57,13 +61,14 @@ from acs.core._ecdsa import (
     ecdsa_p256_generate,
     ecdsa_p256_public_bytes,
     ecdsa_p256_sign,
-    ecdsa_p256_verify,
 )
 
 DEFAULT_ITERATIONS = 1000
 DEFAULT_WARMUP = 100
 NOT_MEASURED = {"hybrid": "acs.core has no hybrid signature yet (PR #564 would settle its form)"}
 _KEY_ID = "bench-key-1"
+# The order n of the P-256 group (SEC 2), for the low-s rule that ecdsa_p256_verify applies.
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 _HERE = Path(__file__).resolve().parent
 # The committed numbers the docs page quotes. Only --update-reference writes here.
 REFERENCE_DIR = _HERE / "results"
@@ -123,8 +128,12 @@ def sign_ecdsa_envelope(envelope: dict, key, *, key_id: str) -> dict:
     return envelope
 
 
-def verify_ecdsa_envelope(envelope: dict, public_key: bytes) -> bool:
-    """Verify the way verify_with_key does: read the signature object, decode it, check it."""
+def verify_ecdsa_envelope(envelope: dict, public_key: ec.EllipticCurvePublicKey) -> bool:
+    """Verify the way verify_with_key does: read the signature object, decode it, check it.
+
+    The key arrives already parsed, as a Keyring holds a parsed ML-DSA key, so no timed row
+    includes key loading. The low-s rule matches ecdsa_p256_verify.
+    """
     container = envelope.get(container_key(envelope))
     if not isinstance(container, dict):
         return False
@@ -134,7 +143,18 @@ def verify_ecdsa_envelope(envelope: dict, public_key: bytes) -> bool:
     signature = decode_signature_value(sig.get("value"))
     if signature is None:
         return False
-    return ecdsa_p256_verify(public_key, signing_input(envelope), signature)
+    if len(signature) != 64:
+        return False
+    r = int.from_bytes(signature[:32], "big")
+    s = int.from_bytes(signature[32:], "big")
+    if s > _P256_ORDER // 2:
+        return False
+    try:
+        public_key.verify(encode_dss_signature(r, s), signing_input(envelope),
+                          ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature:
+        return False
+    return True
 
 
 def _signature_bytes(envelope: dict) -> int:
@@ -151,16 +171,21 @@ def _signatures(iterations: int, warmup: int):
     mldsa_key = MLDSA65SigningKey.generate(_KEY_ID)
     keyring = Keyring([mldsa_key.verification_key()])
     ec_key = ecdsa_p256_generate()
-    ec_public = ecdsa_p256_public_bytes(ec_key)
+    ec_public_bytes = ecdsa_p256_public_bytes(ec_key)
+    ec_public = ec_key.public_key()
 
     signed_hmac = sign_with_key(copy.deepcopy(response), hmac_key, key_id=_KEY_ID)
     signed_mldsa = sign_with_signing_key(copy.deepcopy(response), mldsa_key)
     signed_ec = sign_ecdsa_envelope(copy.deepcopy(response), ec_key, key_id=_KEY_ID)
 
     # A benchmark of a broken verify would still print numbers, so check each path first.
-    assert verify_with_key(signed_hmac, hmac_key)
-    assert verify_with_keyring(signed_mldsa, keyring, expected_key_id=_KEY_ID, request=request)
-    assert verify_ecdsa_envelope(signed_ec, ec_public)
+    # Explicit raises, not assert, so python -O cannot strip the guard.
+    if not verify_with_key(signed_hmac, hmac_key):
+        raise RuntimeError("HMAC verify failed before timing")
+    if not verify_with_keyring(signed_mldsa, keyring, expected_key_id=_KEY_ID, request=request):
+        raise RuntimeError("ML-DSA verify failed before timing")
+    if not verify_ecdsa_envelope(signed_ec, ec_public):
+        raise RuntimeError("ECDSA verify failed before timing")
 
     # Each sign call gets a fresh copy made outside the timed region, since signing mutates it.
     def sign_timed(sign):
@@ -178,7 +203,7 @@ def _signatures(iterations: int, warmup: int):
         ("ML-DSA-65", signed_mldsa, len(mldsa_key.verification_key().public_key),
          lambda e: sign_with_signing_key(e, mldsa_key),
          lambda: verify_with_keyring(signed_mldsa, keyring, expected_key_id=_KEY_ID, request=request)),
-        ("ECDSA-P256", signed_ec, len(ec_public),
+        ("ECDSA-P256", signed_ec, len(ec_public_bytes),
          lambda e: sign_ecdsa_envelope(e, ec_key, key_id=_KEY_ID),
          lambda: verify_ecdsa_envelope(signed_ec, ec_public)),
     ]
@@ -204,10 +229,14 @@ def _cpu_model() -> str:
     return platform.processor() or "unknown"
 
 
-def core_source_sha256() -> str:
-    """SHA-256 over the acs.core source files, by relative path and bytes, in sorted order."""
-    import acs.core
-    root = Path(acs.core.__file__).resolve().parent
+def core_source_sha256(root: Path | None = None) -> str:
+    """SHA-256 over the acs.core source files, by relative path and bytes, in sorted order.
+
+    root exists so a test can hash a temporary tree instead of writing into the package.
+    """
+    if root is None:
+        import acs.core
+        root = Path(acs.core.__file__).resolve().parent
     digest = hashlib.sha256()
     for path in sorted(root.rglob("*.py")):
         digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes() + b"\0")
