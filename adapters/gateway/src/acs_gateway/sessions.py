@@ -150,9 +150,12 @@ class Session:
     active: int = 0
     # time.monotonic() when opening last failed, so a retry waits out the backoff.
     open_failed_at: float | None = None
-    # Why the session left the map and takes no more steps, or None while it is live. A cause, not a flag, because
-    # discard_unwritten also forbids the sessionEnd tail, and a sessionEnd scheduled earlier re-checks it.
+    # Why the session left the map and takes no more steps, or None while it is live. Only the event loop writes it.
     retire_cause: str | None = None
+    # An answer line reached the transcript and its discards line did not. A worker thread sets it without reading
+    # anything first, and nothing ever clears it, so no write on the loop can lose it. Whether a sessionEnd may follow
+    # is decided on this flag, never on retire_cause alone (see ends_unmarked).
+    unmarked_answer: bool = False
     # Requests counted as they pass the input phase, and the latest count at each request position, so a reply to an
     # attempt the client has already retried never places its calls in the branch (issue #579, final review I-1).
     arrivals: int = 0
@@ -168,12 +171,17 @@ class Session:
 
     @property
     def retired(self) -> bool:
-        return self.retire_cause is not None
+        return self.retire_cause is not None or self.unmarked_answer
 
     def record_unmarked_answer(self) -> None:
-        """An answer line reached the transcript and its discards line did not. Safe from any thread, and final: no
-        later retirement replaces it, so no sessionEnd ever follows that answer."""
-        self.retire_cause = DISCARD_UNWRITTEN
+        """An answer line reached the transcript and its discards line did not. Safe from any thread, and final: a
+        single store of True, so a retirement the loop writes at the same moment can't undo it."""
+        self.unmarked_answer = True
+
+    @property
+    def ends_unmarked(self) -> bool:
+        """Whether the transcript holds an answer no discards line marks, so no sessionEnd may follow it."""
+        return self.unmarked_answer or self.retire_cause == DISCARD_UNWRITTEN
 
     @property
     def busy(self) -> bool:
@@ -217,7 +225,9 @@ class SessionMap:
         return self._sessions.get(key)
 
     def retire(self, session: Session, cause: str) -> None:
-        """Take a session out of the map, so the next request for its conversation opens a fresh one."""
+        """Take a session out of the map, so the next request for its conversation opens a fresh one. The first
+        discard_unwritten stays the cause. That read and write are safe because only the loop writes retire_cause, and
+        a worker's record goes to unmarked_answer instead."""
         if session.retire_cause != DISCARD_UNWRITTEN:
             session.retire_cause = cause
         for key in [k for k, s in self._sessions.items() if s is session]:

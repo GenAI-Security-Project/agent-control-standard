@@ -309,6 +309,99 @@ def test_a_cancelled_step_whose_allow_lands_sends_no_session_end(gateway, guardi
     assert len(events(audit, "session_ended")) == 1
 
 
+class HeldAnswerLine:
+    """Holds the next answer line that carries no cause until release is set, so it lands exactly when a test says."""
+
+    def __init__(self, inner, release):
+        self.inner, self.release, self.armed = inner, release, True
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if direction == "resp" and envelope is not None and kwargs.get("cause") is None and self.armed:
+            self.armed = False
+            assert self.release.wait(10.0), "the answer line was never released"
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def race_at_retire(session):
+    """Give one live session a retire cause that runs a hook right after it is read, as a thread switch would, and
+    a record_unmarked_answer that says when it has run. The hook is armed per call through session.__dict__."""
+    from acs_gateway.sessions import Session
+
+    class RaceAtRetire(Session):
+        @property
+        def retire_cause(self):
+            cause = self.__dict__["_cause"]
+            hook = self.__dict__.get("_on_read")
+            if hook is not None:
+                self.__dict__["_on_read"] = None
+                hook()
+            return cause
+
+        @retire_cause.setter
+        def retire_cause(self, value):
+            self.__dict__["_cause"] = value
+
+        def record_unmarked_answer(self):
+            super().record_unmarked_answer()
+            self.__dict__["_recorded"].set()
+
+    session.__dict__["_cause"] = session.__dict__.pop("retire_cause")
+    session.__class__ = RaceAtRetire
+
+
+def test_an_unmarked_answer_recorded_inside_retire_still_sends_no_session_end(gateway, guardian, upstream, audit,
+                                                                              tmp_path):
+    """The worker records its unmarked allow after SessionMap.retire reads the cause and before it writes step_hung.
+    That record must survive, so no sessionEnd follows the allow."""
+    import threading
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="300")
+    opened(client, upstream)
+    gw = client.app.state.gateway
+    session = next(iter(gw.sessions._sessions.values()))
+    release, recorded, fired = threading.Event(), threading.Event(), []
+    race_at_retire(session)
+    session.__dict__["_recorded"] = recorded
+    gw.guardian.transcript = HeldAnswerLine(gw.guardian.transcript, release)
+
+    def let_the_worker_record():
+        # The loop is between the read and the write. The held allow lands, the retired token refuses its discards
+        # line, and the worker records the unmarked answer before the loop goes on.
+        release.set()
+        fired.append(recorded.wait(10.0))
+
+    real_retire = gw.sessions.retire
+
+    def retire(target, cause):
+        if target is session:
+            target.__dict__["_on_read"] = let_the_worker_record
+        try:
+            real_retire(target, cause)
+        finally:
+            target.__dict__["_on_read"] = None
+
+    gw.sessions.retire = retire
+    payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+
+    async def run():
+        return await gw._step(session, "steps/toolCallRequest", payload)
+
+    assert client.portal.call(run).cause == "decision_timeout"
+    assert fired == [True]
+    (retired,) = events(audit, "session_retired")
+    assert (retired["cause"], retired["in_flight"]) == ("step_hung", True)
+    ended = wait_for_end(audit, session.session_id)
+    assert (ended["reason"], ended["cause"], ended["request_id"]) == ("error", "discard_unwritten", None)
+    time.sleep(1.0)
+    gw.guardian.transcript = gw.guardian.transcript.inner
+    lines = lines_of(tmp_path, session.session_id)
+    assert lines[-2]["envelope"]["method"] == "steps/toolCallRequest", lines[-2:]
+    assert lines[-1]["dir"] == "resp" and lines[-1]["envelope"]["result"]["decision"] == "allow", lines[-2:]
+    assert "cause" not in lines[-1] or lines[-1]["cause"] is None
+    assert "steps/sessionEnd" not in [line["envelope"]["method"] for line in lines if line["dir"] == "req"]
+    assert len(events(audit, "session_ended")) == 1
+
+
 def received(path):
     return path.read_text().split() if path.exists() else []
 

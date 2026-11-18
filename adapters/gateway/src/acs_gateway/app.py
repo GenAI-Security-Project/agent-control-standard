@@ -239,8 +239,9 @@ class Gateway:
             _, pending = await asyncio.wait({session.stray}, timeout=bound)
             if pending:
                 cause = "in_flight"
-        if cause is None and session.retire_cause == DISCARD_UNWRITTEN:
-            # Every writer of the session is done, so this is the last check before the write.
+        if cause is None and session.ends_unmarked:
+            # Every writer of the session is done, so this is the last check before the write. It reads the one-way
+            # flag, which a worker's record can't lose to a retirement written at the same moment.
             cause = DISCARD_UNWRITTEN
         if cause is not None:
             session.lock.release()
@@ -1226,7 +1227,9 @@ class Gateway:
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
         reason = "cancelled" if cause == "request_cancelled" else "error"
-        if session.retire_cause == DISCARD_UNWRITTEN:
+        # Read after sessions.retire wrote the cause, so a worker that recorded an unmarked answer during that write
+        # is seen here. One that records later is seen by the end, which waits for it under the lock.
+        if session.ends_unmarked:
             self._withhold_end(session, reason)
             return
         self._schedule_end(session, reason)
