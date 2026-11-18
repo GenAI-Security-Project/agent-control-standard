@@ -1,0 +1,104 @@
+/* The decision viewer, laid out for a 1152 by 1080 window at 1x (BUILD_PLAN A.12). No motion of any kind, so a
+   recorded frame never catches a beat half drawn. Each mark carries its word, so color is never the only signal. */
+
+html {
+  font-size: 22px;
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: #111111;
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.3;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0f1b2d;
+  color: #ffffff;
+  padding: 0.6rem 1rem 0.5rem;
+  min-height: 4.2rem;
+}
+
+.beat {
+  margin: 0;
+  font-size: 1.9rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  margin: 0.2rem 0 0;
+  font-size: 1rem;
+  color: #d8e1ee;
+  overflow-wrap: anywhere;
+}
+
+main {
+  padding: 0 1rem 1rem;
+}
+
+.empty {
+  margin: 1.5rem 0;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #5b6472;
+}
+
+.status {
+  margin: 0.4rem 0;
+  font-size: 0.8rem;
+  color: #5b6472;
+  min-height: 1rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.85rem;
+}
+
+.c-time { width: 12%; }
+.c-method { width: 16%; }
+.c-tool { width: 20%; }
+.c-decision { width: 10%; }
+.c-reason { width: 18%; }
+.c-alg { width: 11%; }
+.c-verify { width: 13%; }
+
+th {
+  text-align: left;
+  font-weight: 700;
+  border-bottom: 3px solid #0f1b2d;
+  padding: 0.3rem 0.35rem;
+}
+
+td {
+  padding: 0.3rem 0.35rem;
+  border-bottom: 1px solid #d5d9e0;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+tr.painted td {
+  background: #fff5cc;
+}
+
+td.note {
+  padding-top: 0;
+  color: #3d4654;
+  font-size: 0.8rem;
+}
+
+.d-allow { color: #11632b; font-weight: 700; }
+.d-deny { color: #a3141b; font-weight: 700; }
+.d-modify, .d-ask { color: #7a4b00; font-weight: 700; }
+
+.v-verified { color: #11632b; font-weight: 700; }
+.v-failed { color: #ffffff; background: #a3141b; font-weight: 700; }
+.v-not_checked, .v-unsigned, .v-no_answer { color: #5b6472; }

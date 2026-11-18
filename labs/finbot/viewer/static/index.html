@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACS lab decision viewer</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <p id="beat" class="beat">Waiting for the first decision</p>
+  <p id="detail" class="detail"></p>
+</header>
+<main>
+  <p id="empty" class="empty" hidden></p>
+  <p id="status" class="status" role="status"></p>
+  <table id="log">
+    <colgroup>
+      <col class="c-time"><col class="c-method"><col class="c-tool"><col class="c-decision">
+      <col class="c-reason"><col class="c-alg"><col class="c-verify">
+    </colgroup>
+    <thead>
+      <tr><th>Time (UTC)</th><th>Method</th><th>Tool</th><th>Decision</th><th>Reason</th><th>Signature</th><th>Verify</th></tr>
+    </thead>
+  </table>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
