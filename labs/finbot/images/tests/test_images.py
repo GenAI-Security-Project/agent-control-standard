@@ -10,6 +10,7 @@ from __future__ import annotations
 import fnmatch
 import io
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -152,4 +153,33 @@ def test_gateway_and_lab_tools_present(image):
     # acs-gateway takes no flags and would start serving, so only its presence is checked.
     result = _run(image, "sh", "-c", "test -x /opt/acs/gateway/.venv/bin/acs-gateway "
                   "&& test -f /opt/lab/docs/signature-benchmark.md && command -v setpriv")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_init_runs_the_real_key_generator(image, tmp_path):
+    # Interface pin on LAB-03: the CLI parses fingerprint=sha256:<hex> from acs.guardian.decision_keys, and the files
+    # it moves into place are the ones the Guardian loads. Runs as a non-root uid, as compose runs the CLI.
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    bundle.chmod(0o777)
+    result = subprocess.run(["docker", "run", "--rm", "--user", f"{os.getuid() or 4321}:{os.getgid() or 4321}",
+                             "-e", "LAB_BUNDLE=/lab", "-v", f"{bundle}:/lab", "--entrypoint", "python", image,
+                             "/opt/lab/cli/lab.py", "init"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r"fingerprint sha256:[0-9a-f]{64}", result.stdout), result.stdout
+    # The loader insists the seed file is its own uid's, so it runs as the uid that wrote it.
+    check = subprocess.run(["docker", "run", "--rm", "--user", f"{os.getuid() or 4321}:{os.getgid() or 4321}",
+                            "-v", f"{bundle / 'state'}:/k:ro", "--entrypoint", ADAPTERS_PY, image, "-c",
+                            "from acs.guardian.decision_keys import load_decision_signer; "
+                            "print(load_decision_signer({'ACS_GUARDIAN_SIGNING_KEY_FILE': '/k/secrets/guardian.key', "
+                            "'ACS_GUARDIAN_KEY_ID': 'lab-guardian-1', "
+                            "'ACS_GUARDIAN_KEYS': '/k/keys/guardian-keys.json'}).fingerprint)"],
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert check.stdout.strip() in result.stdout
+
+
+def test_cli_present(image):
+    result = _run(image, "sh", "-c", "test -f /opt/lab/cli/lab.py && test -f /opt/lab/cli/commands.py "
+                  "&& test ! -e /opt/lab/cli/tests")
     assert result.returncode == 0, result.stdout + result.stderr
