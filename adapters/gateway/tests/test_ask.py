@@ -83,6 +83,26 @@ def test_an_approved_ask_delivers_the_call_once_the_guardian_allows_the_resend(g
         ("allow", "allow", resent["request_id"])]
 
 
+ASK_TOOL = {"type": "function", "name": "ask_tool", "description": "Needs a person", "parameters": {"type": "object"}}
+ASK_TOOL_DIGEST = "sha256:902535d19cc042d42d9f0a62d2841d0ead67408d1e23e58b3803ba1cb7f325c1"
+
+
+def test_an_approved_resend_of_a_declared_tool_carries_its_declaration_digest(gateway, harness_guardian, upstream,
+                                                                               tmp_path):
+    """The test above declares no ask_tool, so its payloads match with no tool.version in either. A declared tool's
+    resend carries the same digest as its first ask, or a pin policy denies every approved call (rehearsal R6)."""
+    body = finbot_request()
+    body["tools"].append(ASK_TOOL)
+    upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
+    client = enforce(gateway, harness_guardian, tmp_path)
+    thread = approver(client, "approve")
+    client.post("/v1/responses", json=body)
+    thread.join()
+    first, resent = tool_requests(tmp_path)
+    assert first["payload"]["tool"] == {"name": "ask_tool", "version": ASK_TOOL_DIGEST}
+    assert {k: v for k, v in resent["payload"].items() if k != ANSWER_FIELD} == first["payload"]
+
+
 def test_a_rejected_ask_blocks_the_call(gateway, harness_guardian, upstream, audit, tmp_path):
     upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
     client = enforce(gateway, harness_guardian, tmp_path)

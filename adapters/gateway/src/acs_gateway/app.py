@@ -879,10 +879,12 @@ class Gateway:
             # Arguments that aren't one unambiguous JSON object leave the Guardian nothing it could judge safely.
             cause = "duplicate_json_key" if repeated is not None else "arguments_not_an_object"
             result = StepResult(TOOL_CALL_REQUEST, None, cause=cause, failure_class="observed_agent_error")
+            payload = None
         else:
-            result = await self._step(session, TOOL_CALL_REQUEST, call_payload(name, arguments, digest))
-        if self._held(result):
-            result = await self._resolve_ask(session, item, name, arguments, result, asks)
+            payload = call_payload(name, arguments, digest)
+            result = await self._step(session, TOOL_CALL_REQUEST, payload)
+        if payload is not None and self._held(result):
+            result = await self._resolve_ask(session, item, name, arguments, payload, result, asks)
         applied = apply_call(item, arguments or {}, result)
         self._record(session, result, applied, name, item.get("call_id"))
         # The one parse above gives the canonical form of an object. Arguments that parse to anything else still
@@ -906,7 +908,7 @@ class Gateway:
                 and result.decision is not None and result.decision.disposition == "ask")
 
     async def _resolve_ask(self, session: Session, item: dict[str, Any], name: str, arguments: dict[str, Any],
-                           asked: StepResult, hold: AskHold) -> StepResult:
+                           payload: dict[str, Any], asked: StepResult, hold: AskHold) -> StepResult:
         """Hold the call for the approver, then resend the step carrying an approval (LAB-08, issue #581, D-043).
 
         The Guardian's decision on the resend is what the gateway applies after an approval, so the gateway never
@@ -964,8 +966,9 @@ class Gateway:
                       # No approver signature exists yet, so the answer is the gateway's word for it (issue #175).
                       "assurance": "declared"}
             outcome, resent = "abandoned", True
-            result = await self._step(session, TOOL_CALL_REQUEST, {**call_payload(name, arguments),
-                                                                   ASK_ANSWER_FIELD: answer})
+            # The resend is the asked payload plus the answer, never a rebuilt one, so it keeps tool.version and the
+            # Guardian judges the same pinned call it asked about (A.10, rehearsal R6).
+            result = await self._step(session, TOOL_CALL_REQUEST, {**payload, ASK_ANSWER_FIELD: answer})
             outcome = "approved"
             return result
         except Exception:
