@@ -231,7 +231,7 @@ export function assemblePreToolCallSnapshot(
 
   // A tool whose declared policy-target argument is not among its arguments is
   // a registration fault, not a policy decision. Throwing names the tool and
-  // the argument; leaving the leaf undefined would reach AGT as
+  // the argument. Without this guard the undefined leaf would reach AGT as
   // runtime_error:path_missing, which reads like a policy decision and says
   // nothing about which declaration is wrong.
   if (!Object.hasOwn(args, policyTargetArgument)) {

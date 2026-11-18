@@ -16,7 +16,7 @@ bun run inspector
 Envelope Inspector — tailing .acs/envelopes.jsonl, .acs/audit.jsonl, and .acs/session-context.jsonl
 Ctrl-C to stop.
 
-last_observed_posture=(none observed)  fail-open proceeds=0
+last_observed_posture=(none observed)  fail-open proceeds=0  unenforced=0
 ```
 
 To replay a session that is already recorded:
@@ -43,7 +43,7 @@ An envelope prints as a header line and the envelope body. The header carries th
 
 A session chain entry prints as one line: the step number within the session, the tool, the chain hash and the session id. A step whose hash does not continue the previous one is flagged as a broken chain. An evicted session that comes back reads as one.
 
-An audit entry prints with its outcome and the failure that caused it. The banner is reprinted whenever an audit entry changes it. It shows the last posture an audit entry carried, which is the observed posture and not the negotiated one, and the running count of fail-open proceeds.
+An audit entry prints with its outcome and the failure that caused it. The banner is reprinted whenever an audit entry changes it. It shows the last posture an audit entry carried, which is the observed posture and not the negotiated one, the running count of fail-open proceeds, and the count of denies the host could not carry out (`unenforced`, #568), kept apart because none of them is a fail-open.
 
 The three logs are tailed independently. The audit log's raw session id is never matched against the envelope log's derived one; the [host adapter README](../host-adapter/README.md#the-audit-log) says why they differ.
 

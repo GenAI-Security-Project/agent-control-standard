@@ -284,15 +284,15 @@ describe("renderEnvelopeLogEntry", () => {
 
 describe("renderPostureBadge", () => {
   it("shows the last observed posture and a zero count before anything fails", () => {
-    expect(renderPostureBadge({ posture: "proceed", proceeds: 0 }, { color: false }))
-      .toBe("last_observed_posture=proceed  fail-open proceeds=0");
+    expect(renderPostureBadge({ posture: "proceed", proceeds: 0, unenforced: 0 }, { color: false }))
+      .toBe("last_observed_posture=proceed  fail-open proceeds=0  unenforced=0");
   });
 
   // The number that matters. A fail-open bypass is invisible unless something
   // counts it, and §6.4 exists because it must not be invisible.
   it("counts audited fail-open proceeds", () => {
-    expect(renderPostureBadge({ posture: "proceed", proceeds: 3 }, { color: false }))
-      .toBe("last_observed_posture=proceed  fail-open proceeds=3");
+    expect(renderPostureBadge({ posture: "proceed", proceeds: 3, unenforced: 0 }, { color: false }))
+      .toBe("last_observed_posture=proceed  fail-open proceeds=3  unenforced=0");
   });
 
   // A label of "posture=(not negotiated)" would be false in the healthiest
@@ -302,26 +302,36 @@ describe("renderPostureBadge", () => {
   // store. The badge reports what it can actually see: the last posture
   // observed in the audit log, and its absence.
   it("says nothing has been observed yet, rather than claiming nothing was negotiated", () => {
-    const badge = renderPostureBadge({ posture: null, proceeds: 0 }, { color: false });
-    expect(badge).toBe("last_observed_posture=(none observed)  fail-open proceeds=0");
+    const badge = renderPostureBadge({ posture: null, proceeds: 0, unenforced: 0 }, { color: false });
+    expect(badge).toBe("last_observed_posture=(none observed)  fail-open proceeds=0  unenforced=0");
     expect(badge).not.toContain("negotiated");
   });
 
   it("paints a non-zero proceed count as a warning and zero as clean", () => {
-    expect(renderPostureBadge({ posture: "proceed", proceeds: 1 }, { color: true })).toContain(String.fromCharCode(27) + "[33m");
-    expect(renderPostureBadge({ posture: "proceed", proceeds: 0 }, { color: true })).not.toContain(String.fromCharCode(27) + "[33m");
+    expect(renderPostureBadge({ posture: "proceed", proceeds: 1, unenforced: 0 }, { color: true })).toContain(String.fromCharCode(27) + "[33m");
+    expect(renderPostureBadge({ posture: "proceed", proceeds: 0, unenforced: 0 }, { color: true })).not.toContain(String.fromCharCode(27) + "[33m");
+  });
+
+  // Under `deny` a deny the host could not carry out (#568) leaves the proceed
+  // count at zero, so a badge without this number would read clean while the
+  // agent received the output. Counted apart, because it is not a fail-open.
+  it("counts unenforced denies apart from proceeds, and paints a non-zero count as a warning", () => {
+    expect(renderPostureBadge({ posture: "deny", proceeds: 0, unenforced: 2 }, { color: false }))
+      .toBe("last_observed_posture=deny  fail-open proceeds=0  unenforced=2");
+    expect(renderPostureBadge({ posture: "deny", proceeds: 0, unenforced: 1 }, { color: true })).toContain(String.fromCharCode(27) + "[33m");
+    expect(renderPostureBadge({ posture: "deny", proceeds: 0, unenforced: 0 }, { color: true })).not.toContain(String.fromCharCode(27) + "[33m");
   });
 
   it("paints the deny posture distinctly from proceed", () => {
-    const deny = renderPostureBadge({ posture: "deny", proceeds: 0 }, { color: true });
-    const proceed = renderPostureBadge({ posture: "proceed", proceeds: 0 }, { color: true });
+    const deny = renderPostureBadge({ posture: "deny", proceeds: 0, unenforced: 0 }, { color: true });
+    const proceed = renderPostureBadge({ posture: "proceed", proceeds: 0, unenforced: 0 }, { color: true });
     expect(deny).not.toBe(proceed);
   });
 
   it("is byte-identical with color off, whatever the state", () => {
     for (const posture of ["proceed", "deny", null] as const) {
       for (const proceeds of [0, 1, 42]) {
-        const out = renderPostureBadge({ posture, proceeds }, { color: false });
+        const out = renderPostureBadge({ posture, proceeds, unenforced: 0 }, { color: false });
         expect(out).not.toContain(String.fromCharCode(27));
       }
     }
@@ -357,6 +367,22 @@ describe("renderAuditEntry", () => {
       { color: false },
     );
     expect(line).toContain("BLOCKED");
+  });
+
+  // The deny was not carried out and the agent received the output (#568), so
+  // the line must not read as a block.
+  it("renders an unenforced entry under its own label, never as blocked", () => {
+    const line = renderAuditEntry(
+      { seq: 3, recorded_at: "2026-08-10T12:00:02.000Z", session_id: "s", method: null, rpc_id: null,
+        posture: "deny", posture_source: "negotiated", outcome: "unenforced",
+        failure: { kind: "host_configuration", message: "no value at the output leaf" }, tool: "Read" },
+      { color: false },
+    );
+    expect(line).toContain("UNENFORCED");
+    expect(line).toContain("unenforced=Read");
+    expect(line).not.toContain("BLOCKED");
+    expect(line).toContain("posture=deny/negotiated");
+    expect(line).toContain("failure=host_configuration");
   });
 
   // Rendering `method` verbatim from the entry would print a host's event

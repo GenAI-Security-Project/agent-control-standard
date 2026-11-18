@@ -39,7 +39,7 @@ A hook may carry a `tools` list. A tool outside that list is not governed, and `
 
 ## The audit log
 
-The shim tells `createAuditSink` where to write. Both shims default to `.acs/audit.jsonl` and read `ACS_AUDIT_LOG` to override it. One line is written per fail-open proceed, per posture-driven block, and per ungoverned skip. The entry keeps the host's raw session id. The envelope carries a UUID derived from it by `toSessionUuid`, because the ACS schema requires a UUID, so the two logs cannot be joined on that field.
+The shim tells `createAuditSink` where to write. Both shims default to `.acs/audit.jsonl` and read `ACS_AUDIT_LOG` to override it. One line is written per fail-open proceed, per posture-driven block, per posture-driven deny the host could not carry out (`unenforced`: the Claude Code shim's exit 2 at `PostToolUse` still delivers the output, #568), and per ungoverned skip. The entry keeps the host's raw session id. The envelope carries a UUID derived from it by `toSessionUuid`, because the ACS schema requires a UUID, so the two logs cannot be joined on that field.
 
 ## Files
 

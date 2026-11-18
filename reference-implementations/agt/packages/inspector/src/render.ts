@@ -266,8 +266,12 @@ export function renderEnvelopeLogEntry(entry: EnvelopeLogEntry, options: RenderO
  * and reading a host-side store would cross the boundary that keeps this
  * package an observer of the wire, not a participant in the host's own
  * state.
+ *
+ * `unenforced` counts the denies the host could not carry out (#568). Kept
+ * apart from `proceeds` because none of them is a fail-open: under `deny`
+ * the proceed count stays at zero while the agent receives the output.
  */
-export type PostureBadgeState = { posture: "proceed" | "deny" | null; proceeds: number };
+export type PostureBadgeState = { posture: "proceed" | "deny" | null; proceeds: number; unenforced: number };
 
 /**
  * The count is the point (see this module's own header and §6.4): a
@@ -289,21 +293,24 @@ export function renderPostureBadge(state: PostureBadgeState, options: RenderOpti
   const postureLabel = state.posture === null ? "(none observed)" : state.posture;
   const postureColor = state.posture === "deny" ? RED : state.posture === "proceed" ? GREEN : DIM;
   const proceedsColor = state.proceeds > 0 ? YELLOW : GREEN;
+  const unenforcedColor = state.unenforced > 0 ? YELLOW : GREEN;
 
   return [
     paint(`last_observed_posture=${postureLabel}`, postureColor, color),
     paint(`fail-open proceeds=${state.proceeds}`, proceedsColor, color),
+    paint(`unenforced=${state.unenforced}`, unenforcedColor, color),
   ].join("  ");
 }
 
 /**
  * One audit-log line as a header plus the reason it was written. Every
- * AuditEntry carries an `outcome`, and the three are rendered distinctly
+ * AuditEntry carries an `outcome`, and the four are rendered distinctly
  * (`PROCEEDED` in the same warning colour as the posture badge's non-zero
- * count, `BLOCKED` in the deny colour, `UNGOVERNED` in the warning colour
- * too) for the same reason renderDecisionBadge refuses to render a fired
- * policy identically to a clean allow: the outcome that bypassed a decision
- * is the one line here that must not read like an ordinary one.
+ * count, `BLOCKED` in the deny colour, `UNENFORCED` and `UNGOVERNED` in the
+ * warning colour too) for the same reason renderDecisionBadge refuses to
+ * render a fired policy identically to a clean allow: the outcome that
+ * bypassed a decision is the one line here that must not read like an
+ * ordinary one.
  *
  * `UNGOVERNED` shares `PROCEEDED`'s colour rather than getting a fourth,
  * and that is the honest pairing: both are steps that ran with no decision.
@@ -311,7 +318,10 @@ export function renderPostureBadge(state: PostureBadgeState, options: RenderOpti
  * one bypassed a decision the deployment wanted made, the other was never
  * asked for because the deployment's own hookmap scoped the tool out -- and
  * an incident review acts on that difference. It is not `BLOCKED`'s colour
- * because nothing was blocked.
+ * because nothing was blocked. `UNENFORCED` (#568) shares the colour for a
+ * different reason: the posture did deny the step, but the host could not
+ * carry the deny out, so the agent received the output, as it does after a
+ * proceed. Not `BLOCKED`'s colour, because nothing was blocked there either.
  *
  * The audit log records the host's own raw session identifier, not the
  * UUID derived from it that the envelope log's envelopes carry (see
@@ -322,7 +332,7 @@ export function renderPostureBadge(state: PostureBadgeState, options: RenderOpti
  */
 export function renderAuditEntry(entry: AuditEntry, options: RenderOptions = {}): string {
   const color = options.color ?? false;
-  const outcomeLabel = entry.outcome === "blocked" ? "BLOCKED" : entry.outcome === "proceeded" ? "PROCEEDED" : "UNGOVERNED";
+  const outcomeLabel = entry.outcome.toUpperCase();
   const outcomeColor = entry.outcome === "blocked" ? RED : YELLOW;
   const id = entry.rpc_id === null ? "(unpaired)" : `id=${entry.rpc_id}`;
   // Same fallback renderEnvelopeLogEntry uses for a log line with no method,
@@ -364,7 +374,20 @@ export function renderAuditEntry(entry: AuditEntry, options: RenderOptions = {})
       ? []
       : [paint(`session_failure=${entry.session_failure.kind}: ${entry.session_failure.message}`, DIM, color)];
 
-  return [header, failureLine, ...sessionLine].join("\n");
+  // The tool on a line of its own: no request was built, so the header reads
+  // `(no method)`, and nothing else on the entry names what the agent got.
+  const unenforcedLine =
+    entry.outcome === "unenforced"
+      ? [
+          paint(
+            `unenforced=${entry.tool ?? "(unknown tool)"}: the deny could not be carried out, and the agent received the output`,
+            DIM,
+            color,
+          ),
+        ]
+      : [];
+
+  return [header, ...unenforcedLine, failureLine, ...sessionLine].join("\n");
 }
 
 /** How many leading characters of a `SessionContextLogEntry` hash

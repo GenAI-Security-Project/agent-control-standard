@@ -134,7 +134,7 @@ bun run inspector
 Envelope Inspector — tailing .acs/envelopes.jsonl, .acs/audit.jsonl, and .acs/session-context.jsonl
 Ctrl-C to stop.
 
-last_observed_posture=(none observed)  fail-open proceeds=0
+last_observed_posture=(none observed)  fail-open proceeds=0  unenforced=0
 ```
 
 The Inspector prints each envelope as it crosses the wire. See [View the events](#view-the-events) and the [Inspector README](packages/inspector/README.md).
@@ -148,7 +148,7 @@ mkdir -p .claude
 cp hosts/claude-code/settings.json .claude/settings.json
 ```
 
-This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
+This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash`, `WebFetch` and `Read` tools, before the tool runs. `PostToolUse` fires for the `Bash` and `Read` tools, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
 
 2. Start Claude Code.
 
@@ -422,10 +422,10 @@ The `.acs/` directory holds four kinds of local file. None is ever committed.
 |---|---|---|
 | `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation, plus a `finding` line for a fact the spec requires the Guardian to record, such as a `request_id_ref` it cannot resolve |
 | `session-context.jsonl` | Guardian | One hash-chain entry per governed step |
-| `audit.jsonl` | Host shim | Every fail-open proceed and every posture-driven block |
+| `audit.jsonl` | Host shim | Every fail-open proceed, every posture-driven block, and every posture-driven deny the host could not carry out (`unenforced`) |
 | `sessions/<session_id>.json` | Host shim, Claude Code only | The negotiated ServerHello, so the next hook subprocess finds it |
 
-The Inspector reads the first three. Its banner shows the last posture an audit entry carried and a count of fail-open proceeds. This is an audit entry, written when the Guardian was not reachable under the default posture:
+The Inspector reads the first three. Its banner shows the last posture an audit entry carried, a count of fail-open proceeds, and a count of denies the host could not carry out (`unenforced`). This is an audit entry, written when the Guardian was not reachable under the default posture:
 
 ```json
 {"seq":1,"recorded_at":"2026-09-07T16:00:57.216Z","session_id":"demo","method":"steps/toolCallRequest","rpc_id":"dd3a9076-eb7c-45c5-bee8-24bbc33aaa72","posture":"proceed","posture_source":"default","outcome":"proceeded","failure":{"kind":"transport","message":"Unable to connect. Is the computer able to access the url?"},"session_failure":{"kind":"handshake_failed","message":"Unable to connect. Is the computer able to access the url?"}}
@@ -502,7 +502,8 @@ These are known limits of the tree as it stands. None is fixed.
 - **The egress gate has three measured soft spots.** A shell command whose destination the extractor cannot parse falls through to `allow`, not `deny`. With the shipped allowlist, any command whose text contains an off-list URL is denied, whether or not it reaches that URL. A `WebFetch` URL reaches AGT's gate with no parsing, so four userinfo-style URL shapes pass on the fetch route and fail on the shell route. Closing the last one means editing a `.rego` file, which this project does not do.
 - **An `ask` never carries `ask_details`.** The Guardian's decision type has no such field. Every `ask` fails the response schema. A `defer` would fail the same way if any AGT verdict mapped to it.
 - **The handshake is not negotiated.** The Guardian returns constants and never reads the ClientHello. Neither side declares ACS profiles.
-- **The result gate assumes one output shape per hook.** A `WebFetch` result has no `stdout`, so the result gate is not widened to it. Under the default posture, widening it would proceed on every fetch result with an audit entry. This is recorded and unassigned.
+- **The result gate reads only the output shapes the hookmap names.** `outputs.by_tool` gives `Read` its own path, `file.content`. A `WebFetch` result has neither `stdout` nor an entry there, so the result gate is not widened to it. Under the default posture, widening it would proceed on every fetch result with an audit entry. This is recorded and unassigned.
+- **`Read` is governed on text only.** An image or a PDF comes back as `file.base64` and a notebook as `file.cells`, with no `file.content`, so the result gate cannot build a request and the posture decides. Measured on Claude Code 2.1.325: under `proceed` the output reaches the model with a `host_configuration` audit entry. Under `deny` the hook exits 2, Claude Code still delivers the output, and the audit entry says it was blocked (#375). #568, the follow-up to #330, covers these types.
 - **`modified_content` has no builder.** The Guardian never emits it and both hosts refuse it.
 - **The audit sequence number can collide.** Two Claude Code hooks that run at the same time read the same log length and write the same `seq`.
 - **Session state is measured in pieces.** No single test drives a real Guardian over two steps against the real bundle and asserts the labels, because AGT propagates the labels it is given and originates none.
@@ -560,7 +561,7 @@ Everything above runs with no configuration. These are the variables each proces
 |---|---|---|
 | `ACS_GUARDIAN_URL` | `http://localhost:8787/acs` | Where the shim sends envelopes |
 | `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
-| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
+| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds, posture-driven blocks, and posture-driven denies the host could not carry out (`unenforced`) are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 
 **The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG` and `ACS_HOOKMAP_PATH` with the same meanings. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.

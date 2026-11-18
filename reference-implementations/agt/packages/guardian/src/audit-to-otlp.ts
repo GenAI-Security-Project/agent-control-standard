@@ -152,6 +152,8 @@ export type ConversionSummary = {
   skippedReplay: number;
   /** Steps no gate asked about. */
   skippedUngoverned: number;
+  /** Denies the host could not carry out (#568): the agent received the output. */
+  skippedUnenforced: number;
   /** Lines that were not JSON, not an audit entry, or had no posture. */
   skippedUnreadable: number;
 };
@@ -235,6 +237,7 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     skippedNoMethod: {},
     skippedReplay: 0,
     skippedUngoverned: 0,
+    skippedUnenforced: 0,
     skippedUnreadable: 0,
   };
 
@@ -253,6 +256,10 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
     const outcome = readString(entry.outcome);
     if (outcome === "ungoverned") {
       summary.skippedUngoverned += 1;
+      continue;
+    }
+    if (outcome === "unenforced") {
+      summary.skippedUnenforced += 1;
       continue;
     }
     // acs.failure.posture is the deployment's posture (#228), which the host
@@ -344,7 +351,8 @@ if (import.meta.main) {
   console.log(
     `wrote ${summary.written} of ${summary.converted} span(s) to ${otelPath}; skipped ${summary.skippedUnmapped} with no mapping entry, ` +
       `${noMethod === "" ? 0 : noMethod} with no method, ${summary.skippedReplay} replay, ` +
-      `${summary.skippedUngoverned} ungoverned, ${summary.skippedUnreadable} unreadable`,
+      `${summary.skippedUngoverned} ungoverned, ${summary.skippedUnenforced} unenforced, ` +
+      `${summary.skippedUnreadable} unreadable`,
   );
   if (summary.written !== summary.converted) {
     console.error(`only ${summary.written} of ${summary.converted} span(s) reached ${otelPath}`);

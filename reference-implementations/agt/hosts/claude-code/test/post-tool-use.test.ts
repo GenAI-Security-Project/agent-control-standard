@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,11 +116,13 @@ function postToolUsePayload(stdout: string): Record<string, unknown> {
 }
 
 /** Spawns the real shim as a subprocess -- exactly how Claude Code invokes it
- * -- feeds it `payload` on stdin, and returns what it wrote. */
+ * -- feeds it `payload` on stdin, and returns what it wrote, with the scratch
+ * directory it ran in so a test can check what the run left there. */
 async function runHook(
   payload: Record<string, unknown>,
   guardianUrl: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  env: Record<string, string> = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number; dir: string }> {
   const dir = scratch();
   const proc = Bun.spawn({
     cmd: ["bun", "run", SHIM_PATH],
@@ -132,6 +134,7 @@ async function runHook(
       ACS_GUARDIAN_URL: guardianUrl,
       ACS_SESSION_DIR: join(dir, "sessions"),
       ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
+      ...env,
     },
   });
   proc.stdin.write(JSON.stringify(payload));
@@ -141,7 +144,7 @@ async function runHook(
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  return { stdout, stderr, exitCode };
+  return { stdout, stderr, exitCode, dir };
 }
 
 /**
@@ -620,5 +623,187 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     // No `reasoning` on this decision, so no `additionalContext` field --
     // same shape the first test's own note explains.
     expect(JSON.parse(out.stdout)).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse" } });
+  });
+});
+
+/**
+ * The real `tool_response` Claude Code delivers for `Read` on a text file:
+ * `{type, file: {filePath, content, numLines, startLine, totalLines}}`.
+ * Captured with a PostToolUse probe hook on 2.1.316 and again on 2.1.325,
+ * same shape on both. The secret lives at `file.content`, one level deeper
+ * than Bash's `stdout`, and Claude Code drops a replacement that is not in
+ * this shape and delivers the original (measured live, #330): so every
+ * assertion below is the whole object, for the same reason the Bash ones are.
+ */
+function readResponse(content: string): Record<string, unknown> {
+  return {
+    type: "text",
+    file: { filePath: "/current/dir/.env", content, numLines: 1, startLine: 1, totalLines: 1 },
+  };
+}
+
+/** The same `PostToolUse` payload, for `Read`, the tool #330 is about. */
+function readPayload(content: string): Record<string, unknown> {
+  return {
+    ...postToolUsePayload(""),
+    tool_name: "Read",
+    tool_input: { file_path: "/current/dir/.env" },
+    tool_response: readResponse(content),
+  };
+}
+
+describe("the result gate governs Read, end to end through the real shim and a real Guardian", () => {
+  it("redacts a secret out of a file Read returns, preserving every sibling field", async () => {
+    const out = await runHook(readPayload("TOKEN=ghp_ABCDEF123456"), guardian.url);
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "Secrets in this output were replaced before the model saw them. " +
+          "Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+        updatedToolOutput: {
+          type: "text",
+          file: {
+            filePath: "/current/dir/.env",
+            content: "TOKEN=[REDACTED]",
+            numLines: 1,
+            startLine: 1,
+            totalLines: 1,
+          },
+        },
+      },
+    });
+    expect(out.stdout).not.toContain("ghp_ABCDEF123456");
+  });
+
+  it("withholds a file Read returns on a deny, with every sibling field still in place", async () => {
+    const out = await answering({ decision: "deny", reasoning: "secret in output" }, (url) =>
+      runHook(readPayload("TOKEN=ghp_ABCDEF123456"), url),
+    );
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({
+      decision: "block",
+      reason: "secret in output",
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedToolOutput: {
+          type: "text",
+          file: {
+            filePath: "/current/dir/.env",
+            content: "[OUTPUT WITHHELD BY POLICY]",
+            numLines: 1,
+            startLine: 1,
+            totalLines: 1,
+          },
+        },
+      },
+    });
+    expect(out.stdout).not.toContain("ghp_ABCDEF123456");
+  });
+
+  it("leaves a clean file Read returns alone, decided by the Guardian rather than by the posture", async () => {
+    const out = await runHook(readPayload("line one\nline two\n"), guardian.url);
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse" } });
+    // The empty wrapper alone does not tell a decision from a fail-open: the
+    // shipped `proceed` posture delivers the output too. What tells them apart
+    // is the audit entry a fail-open writes, so none may exist.
+    expect(existsSync(join(out.dir, "audit.jsonl"))).toBe(false);
+  });
+});
+
+/**
+ * The real `PostToolUse` payload Claude Code 2.1.325 delivers for `Read` on a
+ * PNG, captured with a probe hook. It has no `file.content`, so the hookmap's
+ * Read leaf resolves to nothing, and so do JPEG, GIF, WebP, PDF and notebook
+ * results (#568).
+ */
+function imageReadPayload(): Record<string, unknown> {
+  return {
+    ...postToolUsePayload(""),
+    tool_name: "Read",
+    tool_input: { file_path: "/current/dir/img.png" },
+    tool_response: {
+      type: "image",
+      file: {
+        base64: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mP4z8CAFTEMLQkAKP8/wc53yE8AAAAASUVORK5CYII=",
+        type: "image/png",
+        originalSize: 74,
+        dimensions: { originalWidth: 8, originalHeight: 8, displayWidth: 8, displayHeight: 8 },
+      },
+    },
+  };
+}
+
+describe("the result gate, when a deny cannot withhold the output", () => {
+  // No step request is ever sent (there is no output leaf to send), so the
+  // real Guardian declaring `deny` is all these tests need from one.
+  let denying: StartedGuardian;
+  beforeAll(async () => {
+    denying = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", onDecisionFailure: "deny" });
+  });
+  afterAll(async () => {
+    await denying.close();
+  });
+
+  // Exit 2 at PostToolUse shows stderr to Claude and the tool has already
+  // run, so the image reaches the model. Measured live on 2.1.325 (#568).
+  it("audits a Read of an image under deny as unenforced, not blocked", async () => {
+    const out = await runHook(imageReadPayload(), denying.url);
+
+    expect(out.exitCode).toBe(2);
+    const audit = readFileSync(join(out.dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit.map((entry) => entry.outcome)).toEqual(["unenforced"]);
+    // The tool is named on the line itself: no request was built, so `method`
+    // is null, and the failure message names a hookmap path, not the tool.
+    expect(audit[0]).toMatchObject({
+      posture: "deny",
+      posture_source: "negotiated",
+      failure: { kind: "host_configuration" },
+      tool: "Read",
+    });
+  });
+
+  it("says the agent got the output and no audit entry was written, when the log cannot be written", async () => {
+    // A regular file where the log's directory should be: mkdir and append
+    // both fail, as in posture.test.ts.
+    const blocker = join(scratch(), "blocker");
+    writeFileSync(blocker, "x");
+    try {
+      const out = await runHook(imageReadPayload(), denying.url, { ACS_AUDIT_LOG: join(blocker, "audit.jsonl") });
+
+      expect(out.exitCode).toBe(2);
+      expect(out.stderr).toContain("the agent receives it anyway");
+      expect(out.stderr).toContain("no audit entry was written");
+    } finally {
+      unlinkSync(blocker);
+    }
+  });
+
+  // The case measured live on 2.1.325 (#568): the shipped `proceed` posture,
+  // an audit log that cannot be written, so the shim falls back to deny, and a
+  // deny it cannot carry out either. The stop must not also claim a block.
+  it("does not claim a block when an unrecordable proceed falls back to a deny it cannot carry out", async () => {
+    const blocker = join(scratch(), "blocker");
+    writeFileSync(blocker, "x");
+    try {
+      // Nothing listens on port 1, so no posture is negotiated and the ACS
+      // default, `proceed`, applies.
+      const out = await runHook(imageReadPayload(), "http://127.0.0.1:1/acs", {
+        ACS_AUDIT_LOG: join(blocker, "audit.jsonl"),
+      });
+
+      expect(out.exitCode).toBe(2);
+      expect(out.stderr).toContain("on_decision_failure=proceed");
+      expect(out.stderr).toContain("the agent receives it anyway");
+      expect(out.stderr).toContain("no audit entry was written");
+      expect(out.stderr).not.toContain("blocked instead:");
+    } finally {
+      unlinkSync(blocker);
+    }
   });
 });

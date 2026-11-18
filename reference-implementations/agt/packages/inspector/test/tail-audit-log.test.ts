@@ -426,6 +426,38 @@ describe("tailAuditLog", () => {
     });
   });
 
+  // A deny the host could not carry out (#568). Routed to onMalformedLine it
+  // would vanish from the one view that should show it.
+  it("delivers an unenforced line", async () => {
+    await withTempDir(async (_dir, path) => {
+      const entry: AuditEntry = {
+        seq: 1,
+        recorded_at: "2026-08-10T12:00:00.000Z",
+        session_id: "sess-1",
+        method: null,
+        rpc_id: null,
+        posture: "deny",
+        posture_source: "negotiated",
+        outcome: "unenforced",
+        failure: { kind: "host_configuration", message: "no value at the output leaf" },
+        tool: "Read",
+      };
+      writeFileSync(path, `${JSON.stringify(entry)}\n`);
+      const controller = new AbortController();
+      const malformed: string[] = [];
+      const tail = tailAuditLog({
+        path,
+        fromStart: true,
+        pollMs: POLL_MS,
+        signal: controller.signal,
+        onMalformedLine: (line) => malformed.push(line),
+      });
+
+      expect(await collect(tail, 1, controller)).toEqual([entry]);
+      expect(malformed).toEqual([]);
+    });
+  });
+
   // The `ungoverned` arm, which the shape guard reaches by branching on
   // `outcome` rather than by making every posture field optional. Both
   // directions matter: the arm has to be admitted (a guard that still

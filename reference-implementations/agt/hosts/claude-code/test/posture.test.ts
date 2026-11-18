@@ -277,7 +277,9 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     expect(out.stderr).toContain("$.tool_response");
     const audit = readFileSync(join(dir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ posture: "deny", outcome: "blocked" });
+    // Not `blocked`: exit 2 at PostToolUse does not withhold, so the output
+    // reached the model (#568).
+    expect(audit[0]).toMatchObject({ posture: "deny", outcome: "unenforced" });
   });
   it("honours a deny that arrives alongside an error, rather than answering with the posture", async () => {
     const dir = scratch();

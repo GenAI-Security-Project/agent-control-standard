@@ -276,6 +276,13 @@ export type ApplyFailurePostureInput = {
    * to "delivery", which is every ordinary call site and §6.4's own case.
    */
   stage?: FailureStage;
+  /**
+   * Present when this host cannot carry out a `deny` for this step: it cannot
+   * replace the output, and its stop delivers it anyway. A `blocked` outcome
+   * is then recorded as `unenforced`, naming `tool`, and the reasoning says
+   * the agent received the output. See GovernStepInput.resultGateStopWithholds.
+   */
+  unenforceable?: { tool: string | null };
 };
 
 /**
@@ -310,6 +317,7 @@ export function applyFailurePosture({
   requestId = null,
   audit,
   stage = "delivery",
+  unenforceable,
 }: ApplyFailurePostureInput): FailureResolvedAcsDecision {
   const { config: sessionConfig, failure: sessionFailure } = session;
   const posture = sessionConfig?.on_decision_failure ?? DEFAULT_POSTURE;
@@ -321,7 +329,9 @@ export function applyFailurePosture({
   const refused = classified.kind === "refused";
   // One resolution, read once, in the three vocabularies it is expressed in --
   // see RESOLUTION_BY_POSTURE.
-  const { decision, outcome } = refused ? REFUSAL_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
+  const resolution = refused ? REFUSAL_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
+  const { decision } = resolution;
+  const outcome = unenforceable !== undefined && resolution.outcome === "blocked" ? "unenforced" : resolution.outcome;
 
   // Computed before the audit write, and written into it: "the guardian was
   // down for this whole session" (default) and "this deployment chose to
@@ -336,18 +346,22 @@ export function applyFailurePosture({
   // not lose the posture.
   let audited = false;
   try {
+    const entry = {
+      session_id: sessionId,
+      method,
+      rpc_id: rpcId,
+      request_id: requestId,
+      posture,
+      posture_source: postureSource,
+      failure: classified,
+      ...(sessionFailure === undefined ? {} : { session_failure: classifySessionFailure(sessionFailure) }),
+    };
     audited =
-      audit.write({
-        session_id: sessionId,
-        method,
-        rpc_id: rpcId,
-        request_id: requestId,
-        posture,
-        posture_source: postureSource,
-        outcome,
-        failure: classified,
-        ...(sessionFailure === undefined ? {} : { session_failure: classifySessionFailure(sessionFailure) }),
-      }) === true;
+      audit.write(
+        outcome === "unenforced"
+          ? { ...entry, outcome, tool: unenforceable?.tool ?? null }
+          : { ...entry, outcome },
+      ) === true;
   } catch {
     // The sink is documented total; if it throws anyway, there is nowhere
     // left to report it that would not have the same problem. It counts as
@@ -418,22 +432,35 @@ export function applyFailurePosture({
   // unauditable bypass is exactly the silent bypass this project exists to
   // make impossible. The sink stays total (it never threw and never will);
   // what changes is what the caller does with a failed write. A `deny`
-  // needs no such downgrade -- the step is blocked either way, and the
-  // failed write is already reported by the sink's own error path.
+  // needs no such downgrade: the step is blocked either way, and the failed
+  // write is already reported by the sink's own error path. The exception is
+  // a step this host cannot block (`unenforceable`), where no downgrade
+  // changes what the agent receives, so the reasoning says it.
+  const deliveredNote =
+    unenforceable !== undefined
+      ? " This host cannot withhold this step's output, so the agent receives it anyway, and " +
+        (audited ? "the audit entry records it as unenforced." : "no audit entry was written.")
+      : "";
   if (posture === "proceed" && !audited) {
     return {
       decision: "deny",
       reasoning:
         `${cause};${sessionNote} ${postureOrigin} -- on_decision_failure=proceed, but the audit entry §6.4 ` +
-        "requires for a step that proceeds without a decision could not be recorded, so this step was blocked " +
-        "instead: a bypass that cannot be recorded is not one this deployment can take.",
+        "requires for a step that proceeds without a decision could not be recorded, " +
+        (unenforceable !== undefined
+          ? `and this step could not be blocked instead.${deliveredNote}`
+          : "so this step was blocked instead: a bypass that cannot be recorded is not one this deployment can take."),
       reason_codes: ["decision_failure", "audit_unavailable"],
     };
   }
 
   return {
     decision,
-    reasoning: `${cause};${sessionNote} ${postureOrigin} -- on_decision_failure=${posture}, so this step was ${outcome}.`,
+    reasoning:
+      `${cause};${sessionNote} ${postureOrigin} -- on_decision_failure=${posture}, ` +
+      (outcome === "unenforced"
+        ? `so the posture denied this step, but this host could not block it.${deliveredNote}`
+        : `so this step was ${outcome}.`),
     reason_codes: [REASON_CODE_BY_STAGE[stage]],
   };
 }
