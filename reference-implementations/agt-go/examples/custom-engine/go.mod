@@ -4,12 +4,12 @@ go 1.27.4
 
 require (
 	github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go v0.0.0
-	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
+	github.com/go-json-experiment/json v1.27.2
 )
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
 
 replace github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go => ../..
