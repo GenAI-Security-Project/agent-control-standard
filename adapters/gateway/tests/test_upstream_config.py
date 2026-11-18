@@ -118,3 +118,20 @@ def test_capture_off_contradicting_capture_mode_is_refused(tmp_path):
     with pytest.raises(ValueError, match="ACS_CAPTURE=0"):
         config(tmp_path, ACS_UPSTREAM="capture", ACS_CAPTURE="0", ACS_RECORDINGS_DIR=str(tmp_path / "rec"))
     assert config(tmp_path, ACS_UPSTREAM="live", ACS_CAPTURE="0").upstream_mode == "live"
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "gateway.lab"])
+def test_a_key_file_refuses_a_model_port_off_loopback(tmp_path, host):
+    """Security scan F1 and F2: the model port takes no client credential, so with a key file anyone who reaches it
+    spends the operator's key. The key file is allowed only on a loopback listener."""
+    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST"):
+        config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host)
+
+
+@pytest.mark.parametrize("host", ["", "127.0.0.1", "127.0.0.2", "::1", "localhost"])
+def test_a_key_file_is_accepted_on_a_loopback_model_port(tmp_path, host):
+    assert config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host).upstream_key_file
+
+
+def test_a_model_port_off_loopback_without_a_key_file_is_unchanged(tmp_path):
+    assert config(tmp_path, ACS_GATEWAY_HOST="0.0.0.0").listen_host == "0.0.0.0"

@@ -1,6 +1,7 @@
 """The gateway's configuration, read once from the environment at startup."""
 from __future__ import annotations
 
+import ipaddress
 import math
 import os
 import re
@@ -137,6 +138,11 @@ class GatewayConfig:
             raise ValueError(f"ACS_GATEWAY_ASK_MAX_S must be more than the decision timeout plus "
                              f"{STEP_GRACE_S:g} s ({decision_timeout_s + STEP_GRACE_S:g}), got {ask_max_s:g}")
         upstream_mode, key_file, recordings, scenario = _upstream_settings(env)
+        listen_host = env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1"
+        if key_file is not None and not _loopback(listen_host):
+            # The model port takes no client credential, so with a key file anyone who reaches it spends the
+            # operator's key. Loopback keeps that to this host (security scan F1 and F2).
+            raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got {listen_host!r}")
         model = env.get("ACS_UPSTREAM_MODEL", "").strip()
         replay_scenario = env.get("ACS_REPLAY_SCENARIO", "").strip() if upstream_mode == "replay" else ""
         if replay_scenario and not _SCENARIO.fullmatch(replay_scenario):
@@ -155,7 +161,7 @@ class GatewayConfig:
             admin_host=env.get("ACS_GATEWAY_ADMIN_HOST", "").strip() or "127.0.0.1",
             admin_port=int(admin_port) if admin_port else None,
             admin_token_file=Path(token_file) if token_file else None,
-            listen_host=env.get("ACS_GATEWAY_HOST", "").strip() or "127.0.0.1",
+            listen_host=listen_host,
             listen_port=listen_port,
             max_sessions=_positive_int(env, "ACS_GATEWAY_MAX_SESSIONS", DEFAULT_MAX_SESSIONS),
             max_body_bytes=_positive_int(env, "ACS_GATEWAY_MAX_BODY_BYTES", DEFAULT_MAX_BODY_BYTES),
@@ -174,6 +180,17 @@ class GatewayConfig:
             upstream_model=model or None,
             replay_scenario=replay_scenario or None,
         )
+
+
+def _loopback(host: str) -> bool:
+    """Whether a listen host binds only loopback. localhost counts, and any other name doesn't, since it could
+    resolve anywhere."""
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path | None, str]:
