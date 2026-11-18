@@ -82,7 +82,7 @@ A run of unreadable lines is one row with a count.
 
 The logs hold text an attacker can shape through the model or the Guardian, so every string the viewer serves escapes control characters, bidi overrides and other invisible characters, exactly once (issue #468). The page writes text with `textContent` and text nodes only, maps each decision through a fixed set before it names a style, and loads nothing from another origin.
 
-A localhost bind doesn't stop a page on another site from reaching the viewer through DNS rebinding. Every request must name `127.0.0.1`, `localhost` or `[::1]` in its Host header, and a paint must come from the page's own origin. The viewer never writes, renames, truncates or locks a log. Its one write is the paint log, and only when `ACS_VIEWER_PAINT_LOG` is set.
+A localhost bind doesn't stop a page on another site from reaching the viewer through DNS rebinding. Every request must name `127.0.0.1`, `localhost` or `[::1]` in its Host header, and a paint must come from the page's own origin. The viewer never writes, renames, truncates or locks a log. Its one write is the paint log, and only when `ACS_VIEWER_PAINT_LOG` is set. It opens that file once at start, creating it with mode 0600, never through a symlink and never waiting on a FIFO. It refuses to start when the path is anything but a regular file, and it writes each paint outside the lock its polls use.
 
 ## Lab conventions
 

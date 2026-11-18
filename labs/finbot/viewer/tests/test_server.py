@@ -32,6 +32,10 @@ def logs(tmp_path):
     return LabLogs(tmp_path / "state")
 
 
+# Each server the start fixture runs, by port, for a test that needs the server object itself.
+RUNNING: dict[int, viewer_server.ViewerServer] = {}
+
+
 @pytest.fixture
 def start(static_dir, logs):
     servers = []
@@ -41,6 +45,7 @@ def start(static_dir, logs):
         httpd = viewer_server.make_server("127.0.0.1", 0, model, static_dir, paint_log)
         threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         servers.append(httpd)
+        RUNNING[httpd.server_address[1]] = httpd
         return httpd.server_address[1]
 
     yield run
@@ -156,7 +161,7 @@ def test_cross_origin_paint_refused(start, tmp_path):
     assert paint(port, {"step": 0, "text": "x"}, origin="http://evil.example")[0] == 403
     assert paint(port, {"step": 0, "text": "x"}, origin=None)[0] == 403
     assert paint(port, {"step": 0, "text": "x"}, origin="null")[0] == 403
-    assert not log.exists()
+    assert log.read_bytes() == b""  # created empty at start (fix round 4, R12), and nothing written
 
 
 def test_paint_off_by_default(start, tmp_path):
@@ -186,7 +191,7 @@ def test_bad_paint_is_refused(start, tmp_path, body):
     log = tmp_path / "paint.jsonl"
     port = start(paint_log=log)
     assert paint(port, body)[0] == 400
-    assert not log.exists()
+    assert log.read_bytes() == b""  # created empty at start (fix round 4, R12), and nothing written
 
 
 def test_static_path_traversal_refused(start):
@@ -327,3 +332,47 @@ def test_every_answer_names_the_server_instance(static_dir, logs):
         assert first == second and len(first) >= 16
         ids.append(first)
     assert ids[0] != ids[1]
+
+
+# Final-review fix round 4, R12: the paint log is opened once at start and written outside the model lock.
+
+
+def test_a_fifo_at_the_paint_log_stops_the_server_at_start(tmp_path, static_dir, logs):
+    # Probe p17: a paint opened a FIFO inside the server lock and blocked every later poll with the marks up.
+    fifo = tmp_path / "paint.fifo"
+    os.mkfifo(fifo)
+    model = Model(logs.transcript_dir, None, None)
+    with pytest.raises(viewer_server.PaintLogRefused):
+        viewer_server.make_server("127.0.0.1", 0, model, static_dir, fifo)
+
+
+def test_a_symlink_at_the_paint_log_stops_the_server_and_leaves_its_target(tmp_path, static_dir, logs):
+    target = tmp_path / "audit.log"
+    target.write_text("ACS_AUDIT {}\n", encoding="utf-8")
+    link = tmp_path / "paint.jsonl"
+    link.symlink_to(target)
+    model = Model(logs.transcript_dir, None, None)
+    with pytest.raises(viewer_server.PaintLogRefused):
+        viewer_server.make_server("127.0.0.1", 0, model, static_dir, link)
+    assert target.read_text(encoding="utf-8") == "ACS_AUDIT {}\n"
+
+
+def test_main_refuses_to_start_with_a_bad_paint_log(tmp_path, monkeypatch, capsys, logs, static_dir):
+    fifo = tmp_path / "paint.fifo"
+    os.mkfifo(fifo)
+    monkeypatch.setenv("ACS_TRANSCRIPT_DIR", str(logs.transcript_dir))
+    monkeypatch.setenv("ACS_VIEWER_PAINT_LOG", str(fifo))
+    monkeypatch.setattr(viewer_server, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(viewer_server, "serve", lambda httpd: httpd.server_close())
+    assert viewer_server.main(["--port", "0"]) == 2
+    assert "ACS_VIEWER_PAINT_LOG" in capsys.readouterr().err
+
+
+def test_a_paint_never_takes_the_model_lock(start, tmp_path):
+    # Hold the lock every poll needs. A paint still lands at once, since it writes under a lock of its own.
+    log = tmp_path / "paint.jsonl"
+    port = start(paint_log=log)
+    httpd = RUNNING[port]
+    with httpd.lock:
+        assert paint(port, {"step": 0, "text": "x"})[0] == 204
+    assert json.loads(log.read_text(encoding="utf-8").splitlines()[0])["step"] == 0

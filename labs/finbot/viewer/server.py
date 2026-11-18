@@ -24,6 +24,7 @@ import os
 import re
 import secrets
 import socket
+import stat
 import sys
 import threading
 from http import HTTPStatus
@@ -60,19 +61,52 @@ SECURITY_HEADERS = {
 }
 
 
+class PaintLogRefused(Exception):
+    """ACS_VIEWER_PAINT_LOG names something other than a regular file the viewer can append to. The setting is
+    opt-in, for the video shoot, so the viewer refuses to start rather than run without it (final review R12)."""
+
+
+def open_paint_log(path: Path) -> int:
+    """The paint log, opened once for appending: created 0600, never through a symlink, never waiting on a FIFO, and
+    only a regular file. A FIFO with no reader fails at once with ENXIO, and one with a reader fails the type check."""
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as e:
+        raise PaintLogRefused(f"ACS_VIEWER_PAINT_LOG {escape_text(str(path))!r} can't be opened for appending: "
+                              f"{escape_text(e.strerror or type(e).__name__)}") from e
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise PaintLogRefused(f"ACS_VIEWER_PAINT_LOG {escape_text(str(path))!r} is not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 class ViewerServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], model: Model, static_dir: Path, paint_log: Path | None) -> None:
+        # Opened before the socket binds, so a refusal leaves nothing listening. Every paint writes through this one
+        # descriptor, so no request opens a path (R12).
+        self.paint_fd = open_paint_log(paint_log) if paint_log is not None else None
         if ":" in address[0]:
             self.address_family = socket.AF_INET6
-        super().__init__(address, ViewerHandler)
+        try:
+            super().__init__(address, ViewerHandler)
+        except BaseException:
+            if self.paint_fd is not None:
+                os.close(self.paint_fd)
+            raise
         self.model = model
         self.paint_log = paint_log
+        # Paints write under a lock of their own, so a paint never holds the lock every poll needs.
+        self.paint_lock = threading.Lock()
         # Chosen at start and sent on every answer, so a page open across a restart knows to drop what it holds and
         # read again from the start (fix round 2, R5).
         self.instance = secrets.token_hex(16)
-        # One lock around every read of the logs and every paint, since the model is not thread safe.
+        # One lock around every read of the logs, since the model is not thread safe.
         self.lock = threading.Lock()
         # The files served are the ones there at start, looked up by exact name, so no request path reaches the disk.
         self.static_files = {path.name: path for path in Path(static_dir).iterdir()
@@ -80,6 +114,12 @@ class ViewerServer(ThreadingHTTPServer):
         host = address[0]
         bracketed = f"[{host}]" if ":" in host else host
         self.allowed_names = LOOPBACK_NAMES | ({bracketed.lower()} if host not in WILDCARD_HOSTS else set())
+
+    def server_close(self) -> None:
+        super().server_close()
+        if self.paint_fd is not None:
+            os.close(self.paint_fd)
+            self.paint_fd = None
 
 
 def _host_name(header: str | None) -> str | None:
@@ -198,16 +238,16 @@ class ViewerHandler(BaseHTTPRequestHandler):
         if line is None:
             self._reply(HTTPStatus.BAD_REQUEST, b"bad paint")
             return
-        assert self.server.paint_log is not None
+        assert self.server.paint_fd is not None
         data = (json.dumps(line, ensure_ascii=True) + "\n").encode("ascii")
-        with self.server.lock:
+        with self.server.paint_lock:
             try:
-                fd = os.open(self.server.paint_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                with os.fdopen(fd, "ab") as f:
-                    f.write(data)
+                written = os.write(self.server.paint_fd, data)
             except OSError:
-                self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, b"paint log not writable")
-                return
+                written = -1
+        if written != len(data):
+            self._reply(HTTPStatus.INTERNAL_SERVER_ERROR, b"paint log not writable")
+            return
         self._reply(HTTPStatus.NO_CONTENT)
 
 
@@ -226,6 +266,7 @@ def _paint_line(paint: Any) -> dict[str, Any] | None:
 
 
 def make_server(host: str, port: int, model: Model, static_dir: Path, paint_log: Path | None) -> ViewerServer:
+    """The viewer's server. Raises PaintLogRefused when the paint log isn't a regular file it can append to."""
     return ViewerServer((host, port), model, static_dir, paint_log)
 
 
@@ -260,7 +301,11 @@ def main(argv: list[str] | None = None) -> int:
                          "can be used\n")
     model = Model(transcript_dir, Path(audit) if audit else None, keys,
                   verify_dir=Path(verify_dir) if verify_dir else transcript_dir.parent / "verify")
-    httpd = make_server(args.host, args.port, model, STATIC_DIR, Path(paint) if paint else None)
+    try:
+        httpd = make_server(args.host, args.port, model, STATIC_DIR, Path(paint) if paint else None)
+    except PaintLogRefused as e:
+        sys.stderr.write(f"acs-viewer: {e}. Unset it, or name a regular file the viewer can append to\n")
+        return 2
     sys.stdout.write(f"ACS_VIEWER_LISTENING port={httpd.server_address[1]}\n")
     sys.stdout.flush()
     serve(httpd)
