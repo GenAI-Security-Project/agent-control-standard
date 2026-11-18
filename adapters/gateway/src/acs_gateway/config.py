@@ -197,6 +197,9 @@ def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path |
             raise ValueError("ACS_UPSTREAM_KEY_FILE can't be set with ACS_UPSTREAM=replay, which uses no credentials")
     elif capture_flag == "1":
         mode = "capture"
+    elif capture_flag == "0" and mode == "capture":
+        # An operator who sets 0 to stop capture must not find recordings written anyway (final review M-1).
+        raise ValueError("ACS_CAPTURE=0 can't be combined with ACS_UPSTREAM=capture")
     recordings = env.get("ACS_RECORDINGS_DIR", "").strip()
     if mode != "live" and not recordings:
         raise ValueError(f"ACS_RECORDINGS_DIR is required with ACS_UPSTREAM={mode}")

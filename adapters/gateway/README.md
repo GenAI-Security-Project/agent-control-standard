@@ -251,7 +251,7 @@ Each request line is written before the request is sent, so the file holds the c
 | `ACS_LAB_MODE` | `off` | `off`, `shadow` or `enforce` |
 | `ACS_UPSTREAM_URL` | `https://api.openai.com/v1` | Model base URL. The gateway posts to `<base>/responses` |
 | `ACS_UPSTREAM` | `live` | `live` (or `openai`), `capture` or `replay` |
-| `ACS_CAPTURE` | `0` | `1` turns live into capture. Refused with replay |
+| `ACS_CAPTURE` | `0` | `1` turns live into capture. Refused with replay. `0` is refused with `ACS_UPSTREAM=capture` |
 | `ACS_UPSTREAM_KEY_FILE` | None | The model key, replacing the client's `Authorization` upstream. Live and capture only |
 | `ACS_RECORDINGS_DIR` | None | Where capture writes and replay reads recordings. Required by both |
 | `ACS_CAPTURE_SCENARIO` | `capture` | The scenario name and recording file name. Letters, digits, `_` and `-`, up to 64. Empty means the default, and only capture checks it |

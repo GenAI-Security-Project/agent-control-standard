@@ -111,3 +111,10 @@ def test_replay_scenario_is_read_and_checked_only_in_replay(tmp_path):
     with pytest.raises(ValueError, match="ACS_REPLAY_SCENARIO"):
         config(tmp_path, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=rec, ACS_REPLAY_SCENARIO="../s2")
     assert config(tmp_path, ACS_REPLAY_SCENARIO="../s2").upstream_mode == "live"
+
+
+def test_capture_off_contradicting_capture_mode_is_refused(tmp_path):
+    """Final review M-1: ACS_CAPTURE=0 says do not capture, so ACS_UPSTREAM=capture with it is a contradiction."""
+    with pytest.raises(ValueError, match="ACS_CAPTURE=0"):
+        config(tmp_path, ACS_UPSTREAM="capture", ACS_CAPTURE="0", ACS_RECORDINGS_DIR=str(tmp_path / "rec"))
+    assert config(tmp_path, ACS_UPSTREAM="live", ACS_CAPTURE="0").upstream_mode == "live"
