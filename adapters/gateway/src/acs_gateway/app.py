@@ -65,6 +65,7 @@ from acs_gateway.stream import GovernedStream, StreamEditor
 from acs_gateway.strict import loads_recording, repeated_key
 from acs_gateway.transcript import ModelInputLog, Transcript
 from acs_gateway.upstream import (
+    ARRIVAL_EXTENSION,
     BRANCH_HEADER,
     Arrival,
     UpstreamSource,
@@ -141,6 +142,8 @@ class Gateway:
         self.approvals = Approvals() if self.enforce and config.approver_port is not None else None
         # Live, capture or replay (issue #579). A bad key file or recording stops startup here.
         self.upstream_source = UpstreamSource(config)
+        # Off mode has no sessions, so its arrivals for capture are counted here, as each request is relayed.
+        self._ungoverned_arrivals = 0
 
     @contextlib.asynccontextmanager
     async def lifespan(self, app: Starlette) -> AsyncIterator[None]:
@@ -208,7 +211,9 @@ class Gateway:
                           or self.upstream_source.records_branch)
             body = _parse(raw) if needs_body else None
             raw = self._to_upstream(raw, body, headers)
-            return await self._relay_verbatim(raw, headers, logged=body, parsed=needs_body)
+            self._ungoverned_arrivals += 1
+            return await self._relay_verbatim(raw, headers, logged=body, parsed=needs_body,
+                                              arrival=Arrival(None, self._ungoverned_arrivals))
         raw = await self._read_body(request)
         if raw is None:
             _audit("upstream_error", cause="request_too_large", max_body_bytes=self.config.max_body_bytes)
@@ -354,7 +359,7 @@ class Gateway:
         raw = self._to_upstream(raw, body, headers, branch)
         if is_stream(body):
             self.model_inputs.append(body)
-            sent = await self._send(raw, headers)
+            sent = await self._send(raw, headers, arrival)
             if isinstance(sent, Response):
                 return sent
             media = sent.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -363,7 +368,7 @@ class Gateway:
             # An error status, or an upstream that answered a stream request whole, takes the whole-answer path.
             upstream = await self._read_answer(sent)
         else:
-            upstream = await self._upstream(raw, body, headers)
+            upstream = await self._upstream(raw, body, headers, arrival)
         if isinstance(upstream, Response):
             return upstream
         if not 200 <= upstream.status_code < 300:
@@ -547,22 +552,24 @@ class Gateway:
             return None
         return openai_error(500, "The request could not be completed.", "server_error", "internal_error")
 
-    async def _send(self, raw: bytes, headers: dict[str, str]) -> httpx.Response | Response:
+    async def _send(self, raw: bytes, headers: dict[str, str], arrival: Arrival | None = None) -> httpx.Response | Response:
         """POST upstream and return the response unread, or the 502 an unreachable upstream gets. The one place every
-        path sends from."""
+        path sends from. Capture and replay get the request's arrival as an extension, never a header (round 2, R5)."""
         assert self.http is not None
+        extensions = {ARRIVAL_EXTENSION: arrival} if arrival is not None and self.upstream_source.records_branch else None
         try:
             return await self.http.send(
                 self.http.build_request("POST", f"{self.config.upstream_url}/responses", content=raw,
-                                        headers=headers), stream=True)
+                                        headers=headers, extensions=extensions), stream=True)
         except httpx.HTTPError as e:
             _audit("upstream_error", cause="upstream_unreachable", error=type(e).__name__)
             return openai_error(502, "The model service is unavailable.", "server_error", "upstream_unavailable")
 
-    async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str]) -> UpstreamAnswer | Response:
+    async def _upstream(self, raw: bytes, body: Any, headers: dict[str, str],
+                        arrival: Arrival | None = None) -> UpstreamAnswer | Response:
         """POST upstream and read the whole answer, up to the size limit, so the gateway can gate it."""
         self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        upstream = await self._send(raw, headers)
+        upstream = await self._send(raw, headers, arrival)
         if isinstance(upstream, Response):
             return upstream
         return await self._read_answer(upstream)
@@ -618,14 +625,14 @@ class Gateway:
         return raw
 
     async def _relay_verbatim(self, raw: bytes, headers: dict[str, str], logged: Any = None,
-                              parsed: bool = False) -> Response:
+                              parsed: bool = False, arrival: Arrival | None = None) -> Response:
         """Relay the answer, streamed or not, as it arrives, encoding and headers included. logged replaces the body
         in the model input log, for a body that can't be read as text. parsed says logged is already the parse of
         raw, None included, so the body isn't parsed again."""
         if self.model_inputs.enabled:
             body = logged if logged is not None or parsed else _parse(raw)
             self.model_inputs.append(body if body is not None else raw.decode("utf-8", "replace"))
-        upstream = await self._send(raw, headers)
+        upstream = await self._send(raw, headers, arrival)
         if isinstance(upstream, Response):
             return upstream
         if not 200 <= upstream.status_code < 300:

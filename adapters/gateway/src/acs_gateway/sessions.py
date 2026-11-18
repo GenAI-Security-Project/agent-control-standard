@@ -150,6 +150,9 @@ class Session:
     # attempt the client has already retried never places its calls in the branch (issue #579, final review I-1).
     arrivals: int = 0
     latest_arrival: dict[int, int] = field(default_factory=dict)
+    # Order of creation across epochs, so an arrival on a newer session for the same conversation counts as later
+    # (round 2, R5 and R6).
+    ordinal: int = 0
 
     @property
     def busy(self) -> bool:
@@ -168,6 +171,7 @@ class SessionMap:
         self._max = max_sessions
         self._on_evict = on_evict
         self._sessions: OrderedDict[str, Session] = OrderedDict()
+        self._created = 0
 
     def get(self, key: str) -> Session:
         session = self._sessions.get(key)
@@ -182,7 +186,8 @@ class SessionMap:
             evicted = self._sessions.pop(idle)
             if self._on_evict is not None:
                 self._on_evict(evicted)
-        session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch)
+        self._created += 1
+        session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch, ordinal=self._created)
         self._sessions[key] = session
         return session
 

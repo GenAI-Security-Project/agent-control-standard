@@ -232,12 +232,14 @@ def test_capture_never_writes_a_line_the_loader_rejects(gateway, upstream, tmp_p
 
 class _SlowFirstUpstream:
     """A live transport whose first attempt answers after its retry, as when a client times out on a slow model and
-    retries while the first attempt is still running upstream."""
+    retries while the first attempt is still running upstream. It answers as a stream when the request asks for one.
+    It also keeps the extensions each request reached it with."""
 
     def __init__(self, delays, status=200):
         self.delays = list(delays)
         self.status = status
         self.n = 0
+        self.extensions = []
 
     async def handle_async_request(self, request):
         import asyncio
@@ -246,9 +248,13 @@ class _SlowFirstUpstream:
 
         self.n += 1
         attempt = self.n
+        self.extensions.append(dict(request.extensions))
         await asyncio.sleep(self.delays[attempt - 1])
-        body = response_body(message_item(f"REPLY-{attempt}"), response_id=f"resp_{attempt}")
         status = self.status if attempt > 1 else 200
+        if json.loads(request.content).get("stream"):
+            return httpx.Response(status, headers={"content-type": "text/event-stream"},
+                                  stream=httpx.ByteStream(b"".join(sse_events(f"REPLY-{attempt}"))))
+        body = response_body(message_item(f"REPLY-{attempt}"), response_id=f"resp_{attempt}")
         return httpx.Response(status, headers={"content-type": "application/json"},
                               stream=httpx.ByteStream(json.dumps(body).encode()))
 
@@ -256,36 +262,47 @@ class _SlowFirstUpstream:
         pass
 
 
-def _overlapping_retry(tmp_path, live):
-    """Two byte-identical requests through CaptureTransport, the retry sent while the first is in flight. Returns the
-    lines written and what replay serves for the request."""
+def _text(response, stream):
+    if stream:
+        return "".join(e["data"]["delta"] for e in response if isinstance(e["data"].get("delta"), str))
+    return response["output"][0]["content"][0]["text"]
+
+
+def _overlapping_retry(tmp_path, live, stream=False, numbers=(1, 2)):
+    """Two byte-identical requests through CaptureTransport, the second sent while the first is in flight, each
+    carrying the arrival the gateway took for it under the session lock. numbers are those arrivals, in the order
+    the requests reach the transport. Returns the lines written and what replay serves for the request."""
     import asyncio
 
     import httpx
 
     from acs_gateway import upstream as up
+    from acs_gateway.sessions import Session
 
     path = tmp_path / "s.jsonl"
     transport = up.CaptureTransport(live, path, "s", 1 << 20)
-    request = finbot_request()
+    request = {**finbot_request(), "stream": True} if stream else finbot_request()
     raw = json.dumps(request).encode()
+    session = Session(session_id="s", epoch=0)
+    arrivals = {n: up.note_arrival(session, request) for n in sorted(numbers)}
 
-    async def send(delay):
+    async def send(delay, number):
         await asyncio.sleep(delay)
-        sent = httpx.Request("POST", "http://x/v1/responses", content=raw, headers={up.BRANCH_HEADER: ""})
+        sent = httpx.Request("POST", "http://x/v1/responses", content=raw, headers={up.BRANCH_HEADER: ""},
+                             extensions={up.ARRIVAL_EXTENSION: arrivals[number]})
         await (await transport.handle_async_request(sent)).aread()
 
     async def both():
-        await asyncio.gather(send(0), send(0.1))
+        await asyncio.gather(send(0, numbers[0]), send(0.1, numbers[1]))
 
     asyncio.run(both())
-    texts = [json.loads(line)["response"]["output"][0]["content"][0]["text"]
-             for line in path.read_text().splitlines()] if path.exists() else []
+    texts = [_text(json.loads(line)["response"], stream) for line in path.read_text().splitlines()] \
+        if path.exists() else []
     store = up.RecordingStore.load(tmp_path)
     mapping = up.placeholder_map(request)
     first, turn, step = up.replay_key(request, mapping)
-    found, _ = store.find(first, turn, step, "", False, up.id_skeleton(request, mapping))
-    return texts, found.response["output"][0]["content"][0]["text"] if found else None
+    found, _ = store.find(first, turn, step, "", stream, up.id_skeleton(request, mapping))
+    return texts, _text(found.response, stream) if found else None
 
 
 def test_a_retry_that_overtakes_its_first_attempt_is_the_line_replay_serves(tmp_path, audit):
@@ -297,8 +314,74 @@ def test_a_retry_that_overtakes_its_first_attempt_is_the_line_replay_serves(tmp_
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["superseded_attempt"]
 
 
+def test_a_streamed_retry_that_overtakes_its_first_attempt_is_the_line_replay_serves(tmp_path, audit):
+    """Round 2: the same for a stream, which capture buffers whole before the line is written."""
+    texts, served = _overlapping_retry(tmp_path, _SlowFirstUpstream([0.3, 0.05]), stream=True)
+    assert texts == ["REPLY-2"]
+    assert served == "REPLY-2"
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["superseded_attempt"]
+
+
 def test_a_failed_retry_still_drops_the_attempt_it_replaced(tmp_path):
     """The client kept the retry's error, not the first attempt's reply, so neither is a line."""
     texts, served = _overlapping_retry(tmp_path, _SlowFirstUpstream([0.3, 0.05], status=503))
     assert texts == []
     assert served is None
+
+
+def test_capture_follows_the_gateway_arrival_not_the_order_requests_reach_it(tmp_path):
+    """Round 2, R5: the arrival number the gateway took under the session lock decides, so a later arrival that
+    reaches the transport first is still the attempt the client kept. The transport keeps no order of its own."""
+    texts, served = _overlapping_retry(tmp_path, _SlowFirstUpstream([0.3, 0.05]), numbers=(2, 1))
+    assert texts == ["REPLY-1"]
+    assert served == "REPLY-1"
+
+
+def test_the_arrival_never_reaches_the_live_upstream():
+    import asyncio
+
+    import httpx
+
+    from acs_gateway import upstream as up
+    from acs_gateway.sessions import Session
+
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.extensions))
+        return httpx.Response(200, json=response_body(message_item("ok")))
+
+    async def run():
+        live = up.LiveTransport(None)
+        await live._client.aclose()
+        live._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        arrival = up.note_arrival(Session(session_id="s", epoch=0), finbot_request())
+        request = httpx.Request("POST", "http://x/v1/responses", content=b"{}",
+                                extensions={up.ARRIVAL_EXTENSION: arrival})
+        await (await live.handle_async_request(request)).aread()
+        await live.aclose()
+
+    asyncio.run(run())
+    assert seen and up.ARRIVAL_EXTENSION not in seen[0]
+
+
+def test_off_mode_capture_keeps_the_overtaking_retrys_line(gateway, upstream, tmp_path):
+    """Round 2, R5: off mode has no sessions, so the gateway counts its arrivals as it relays them and capture still
+    keeps the line of the attempt the client kept."""
+    import threading
+    import time
+
+    client = capture(gateway, tmp_path)
+    upstream.reply(response_body(message_item("abandoned")), delay=1.0)
+    upstream.reply(response_body(message_item("kept")))
+
+    def send(delay):
+        time.sleep(delay)
+        client.post("/v1/responses", json=finbot_request())
+
+    threads = [threading.Thread(target=send, args=(d,)) for d in (0, 0.3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert [line["response"]["output"][0]["content"][0]["text"] for line in recorded(tmp_path)] == ["kept"]

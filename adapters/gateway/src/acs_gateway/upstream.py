@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 # The gateway's branch tokens travel to capture and replay on this header, set after every client x-acs-* header is
 # stripped and removed again before a request leaves for a real upstream (A.8).
 BRANCH_HEADER = "x-acs-lab-branch"
+# The gateway's arrival for a request travels to capture as an httpx request extension, which no header carries and
+# LiveTransport drops before the request leaves (round 2, R5).
+ARRIVAL_EXTENSION = "acs_lab_arrival"
 
 # FinBot's per-visitor values at 1450fc4, which differ in every fresh FinBot and so can't be replayed verbatim
 # (PREMORTEM P2): the namespace ns_<user id> (session.py:233-240, routing.py:23), the user id user_<token_urlsafe(12)>,
@@ -247,9 +250,15 @@ def _position(body: Any) -> int:
 
 @dataclass(frozen=True)
 class Arrival:
-    """Where a request stood when it passed the input phase: its session and its arrival number there."""
-    session: Session
+    """Where a request stood when it passed the input phase: its session and its arrival number there. Off mode has
+    no sessions, so its arrivals carry None and the gateway's own count of ungoverned requests (round 2, R5)."""
+    session: Session | None
     number: int
+
+    @property
+    def order(self) -> tuple[int, int]:
+        """Later attempts compare greater: a newer session's arrival, or a later one on the same session."""
+        return (self.session.ordinal if self.session is not None else 0, self.number)
 
 
 def note_arrival(session: Session, body: Any) -> Arrival:
@@ -547,6 +556,7 @@ class LiveTransport(httpx.AsyncBaseTransport):
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         for name in [n for n in request.headers if n.lower().startswith("x-acs-")]:
             del request.headers[name]
+        request.extensions.pop(ARRIVAL_EXTENSION, None)
         if self._key is not None:
             request.headers["authorization"] = f"Bearer {self._key}"
         return await self._client.send(request, stream=True)
@@ -627,8 +637,11 @@ class CaptureTransport(httpx.AsyncBaseTransport):
 
     A line belongs to the attempt the client kept, which is the last to arrive with the same key, never the last to
     finish (final review I-1). A client retries because it gave up on an attempt that is still running upstream, so
-    that attempt can finish after its retry. Each request takes an arrival number as it enters, and an exchange whose
-    key a later arrival has taken writes nothing, whenever it finishes and whatever the later one returns.
+    that attempt can finish after its retry. The gateway takes each request's arrival once, under the session lock,
+    and hands it over as the ARRIVAL_EXTENSION request extension. The transport keeps no count of its own, so the
+    order it judges by is the order gating saw (round 2, R5). An exchange whose key a later arrival has taken writes
+    nothing, whenever it finishes and whatever the later one returns. A request with no arrival, after a fault before
+    the input phase finished, is written as it finishes and supersedes nothing.
     """
 
     def __init__(self, live: LiveTransport, path: Path, scenario: str, max_bytes: int) -> None:
@@ -637,22 +650,24 @@ class CaptureTransport(httpx.AsyncBaseTransport):
         self._scenario = scenario
         self._max_bytes = max_bytes
         self._lock = threading.Lock()
-        self._arrivals = 0
-        # Line key to the arrival number of its latest attempt, for attempts still in flight. Every exchange runs on
-        # the gateway's one event loop and none awaits between reading and writing this, so it needs no lock.
-        self._latest: dict[tuple[Any, ...], int] = {}
+        # Line key to the order of its latest arrival, for attempts still in flight. Every exchange runs on the
+        # gateway's one event loop and none awaits between reading and writing this, so it needs no lock.
+        self._latest: dict[tuple[Any, ...], tuple[int, int]] = {}
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         raw_request = await request.aread()
         body, key = self._line_key(raw_request, request.headers.get(BRANCH_HEADER))
-        self._arrivals += 1
-        arrival = self._arrivals
-        if key is not None:
-            self._latest[key] = arrival
+        carried = request.extensions.get(ARRIVAL_EXTENSION)
+        arrival = carried.order if isinstance(carried, Arrival) else None
+        if key is not None and arrival is not None:
+            latest = self._latest.get(key)
+            # A later arrival can reach the transport first, so only a greater order replaces the one held.
+            if latest is None or arrival > latest:
+                self._latest[key] = arrival
         try:
             return await self._exchange(request, body, key, arrival)
         finally:
-            if key is not None and self._latest.get(key) == arrival:
+            if key is not None and arrival is not None and self._latest.get(key) == arrival:
                 # Only in-flight keys stay, so the map never outgrows the requests running at once.
                 del self._latest[key]
 
@@ -671,7 +686,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
                       tuple(id_skeleton(body, mapping)))
 
     async def _exchange(self, request: httpx.Request, body: dict[str, Any] | None, key: tuple[Any, ...] | None,
-                        arrival: int) -> httpx.Response:
+                        arrival: tuple[int, int] | None) -> httpx.Response:
         upstream = await self._live.handle_async_request(request)
         # Capture holds the whole answer to write its line, so the gateway's body limit bounds it in every mode, off
         # included (fix round 2, CR3), on the raw bytes and on the decoded bytes as they stream (fix round 3, CR3-4).
@@ -707,7 +722,7 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             await upstream.aclose()
         raw = b"".join(chunks)
         if 200 <= upstream.status_code < 300:
-            if key is not None and self._latest.get(key) != arrival:
+            if key is not None and arrival is not None and self._latest.get(key) != arrival:
                 _audit("capture_skipped", cause="superseded_attempt", scenario=self._scenario)
             else:
                 self._record(body, key, b"".join(decoded) if decoded is not None else None)
