@@ -75,7 +75,7 @@ test_deny_beats_ask_beats_modify if {
 	asked.decision == "ask"
 	asked.ask_details.approver == {"type": "human", "id": "lab-approver"}
 	asked.ask_details.timeout_seconds == 240
-	not asked.ask_details.timeout_disposition
+	not "timeout_disposition" in object.keys(asked.ask_details)
 	modified := finbot.verdict with input as inp with data.finbot_lab.tools as tools
 		with finbot.deny_codes as set()
 		with finbot.ask_requests as set()
