@@ -50,7 +50,9 @@ repository's `triage` role and write access to the
 [project board](https://github.com/orgs/GenAI-Security-Project/projects/9), and lists them
 under Triage volunteers below.
 
-An issue counts as delivered when the change that closed it is on `main`. A close with no
+An issue counts as delivered when the commit that closed it is on `main`, which happens at a
+full promotion. A single pull request promotion publishes the content sooner and does not
+count, because it copies files rather than commits. A close with no
 pull request or commit behind it counts as delivered only when a project lead made it.
 Anyone else's such close waits for a project lead to confirm it.
 
@@ -62,8 +64,10 @@ is how a taxonomy stops getting used in month two.
 the mandatory floor decision, the adapters, the installable Guardian, and the
 interoperability benchmark. It does not mean important.
 
-Issues get triaged as they come in. A project lead opens and merges the promotion from
-`integration` to `main`.
+Issues get triaged as they come in. A project lead opens each promotion from `integration`
+to `main`, full or for a single pull request, and it merges with a merge commit. Whoever
+pushed a promotion's branch last cannot approve it, so a different code owner of the
+changed paths does.
 
 The pinned "Roadmap health" issue, rewritten nightly by the roadmap sweep, lists what
 needs attention.

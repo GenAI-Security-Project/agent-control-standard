@@ -59,7 +59,7 @@ quarter is not a finding without value.
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
 A pull request that changes behavior, alters normative text, or adds code references an
-accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
+accepted issue. An editorial correction does not: a typo, a grammar
 fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
 issue.
 
@@ -137,22 +137,39 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 6. **Open a pull request against `integration`**
 7. **Address review feedback** to land your change
 
-A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
-targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
-`nav` and outside the declared prefixes fails the guards, which the deploy runs before it builds.
+A new page needs a titled `nav` entry in `mkdocs.yml`. A page outside `nav` and outside
+the declared prefixes fails the guards, which the deploy runs before it builds.
 
-`integration` is the default branch, so a pull request opened from the GitHub interface
-already targets it. `main` publishes the site and all 44 schema `$id` URIs on merge, so
-it takes only two kinds of change: a promotion from `integration`, and an editorial
-change to a path on the allowlist below. A guard enforces this and will tell you to
-retarget if you get it wrong.
+Every pull request targets `integration`, documentation included. `integration` is the
+default branch, so a pull request opened from the GitHub interface already targets it.
+`main` publishes the site and all 44 schema `$id` URIs on merge, so it takes promotions
+only, and a guard rejects anything else:
 
-Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.md`,
-`README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
-`SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
-`integration`, including `docs/spec/`, `docs/concepts/`, `docs/identity/`, `mkdocs.yml`,
-`overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
-page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
+- A full promotion merges all of `integration` into `main`. A project lead opens it with
+  the command the roadmap health issue prints, from their own machine, because the
+  organization does not let a workflow open a pull request. The guard passes
+  it only when `main` would equal `integration` afterwards. If it conflicts, or the guard
+  says `main` differs, the lead runs `uv run python tools/promote_pr.py --full` instead. That
+  builds `promote/full-<sha>`, which is `integration` with `main` merged in so that
+  `integration` wins every difference.
+- A single pull request promotion publishes one merged pull request before the next full
+  promotion. A project lead runs `uv run python tools/promote_pr.py <number>`, which cuts
+  `promote/pr-<number>` from `main`, copies the `integration` version of every file that
+  pull request changed, and opens a pull request into `main`. The guard passes it only
+  when every path it changes matches `integration` exactly, so `main` never holds anything
+  `integration` lacks. When a later pull request edited the same file, its change
+  publishes too, and the promotion's description names it. Release files
+  (`version.txt`, `pyproject.toml`, `uv.lock`) and `.gitattributes`, `.gitmodules`, and
+  `.lfsconfig` publish only through a full promotion. The roadmap counts the promoted
+  work's issues as delivered at the next full promotion.
+
+Every promotion merges with a merge commit. Whoever pushed its branch last cannot approve
+it, so a different code owner of the changed paths does. The guard re-runs on its own when
+`main` or `integration` moves. If its last run predates the latest change to either one,
+re-run it before you merge, or close and reopen the pull request when GitHub no longer
+offers a re-run. To take something off the site,
+revert it on `integration` and promote the revert the same way. A full promotion also
+restores anything a single promotion published that `integration` has since reverted.
 
 For changes to the spec itself (`acs_schema.json`, hooks, events), open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
@@ -199,8 +216,7 @@ git push --force-with-lease
 ```
 
 The rebase adds the line to each commit and moves your branch onto the latest
-`integration`. Merge commits on your branch go away, and that is fine. If your pull
-request targets `main`, use `upstream/main` instead. If Git says your branch has no
+`integration`. Merge commits on your branch go away, and that is fine. If Git says your branch has no
 upstream branch, run `git push --force-with-lease origin HEAD`.
 
 A rebase may stop on a conflict, which means you and the project changed the same lines.

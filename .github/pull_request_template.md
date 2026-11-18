@@ -19,10 +19,8 @@
 
 ## Base branch
 
-- [ ] `integration`, because this touches the specification, schemas, a reference
-      implementation, an adapter, tests, or CI
-- [ ] `main`, because every changed path is on the documentation lane allowlist in
-      CONTRIBUTING.md
+- [ ] `integration`. Every pull request targets `integration`, documentation included.
+      Only a promotion targets `main` (see CONTRIBUTING.md)
 
 ## Type of change
 

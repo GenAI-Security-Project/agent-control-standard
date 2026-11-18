@@ -1,186 +1,201 @@
-"""Keep specification and code changes off the publishing branch.
+"""Let only promotions reach the publishing branch.
 
-`main` publishes the site and all 44 schema $id URIs on every merge. A change to
-normative content lands on `integration` first, so those URIs move only on a deliberate
-promotion. GitHub rulesets cannot express "the paths in the diff decide the base
-branch", so this does. A page added under docs/ also needs `integration`, because its
-`nav` entry lives in mkdocs.yml, which is outside the lane.
+`main` publishes the site and all 44 schema $id URIs on every merge. Every change lands on
+`integration` first and reaches `main` only as a promotion, so `main` never holds content
+`integration` lacks. The guard checks the result of the merge, not the branch's own
+history, because that result is what publishes:
 
-The allowlist is positive. Anything it does not name requires `integration`, which makes
-a directory nobody anticipated a failure rather than a silent pass.
+- A full promotion, from `integration` or from a `promote/full-*` branch that
+  tools/promote_pr.py builds when the plain merge would conflict. After the merge,
+  `main`'s whole tree must equal `integration`'s. That also catches a change reverted on
+  `integration` after it reached `main` some other way, because the merge would keep it.
+- A single pull request promotion, from a `promote/*` branch. Every path the merge
+  changes must equal `integration`, and release files are refused, because a release goes
+  through a full promotion.
+
+A release is a pull request into `integration` that bumps the version, then a full
+promotion, so no `release/*` branch targets `main`.
+
+Every other pull request into `main` fails, forks included. The documentation lane that
+once let editorial pull requests target `main` was removed on 2026-11-01: every change
+merged that way left `integration` behind, and the workflow meant to sync it back cannot
+open a pull request under the organization's Actions policy.
+
+The workflow runs this from `main`'s own checkout under pull_request_target and treats
+the pull request's head as data, so a pull request cannot change the check that judges
+it. Nothing here executes code from the pull request.
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 PUBLISHING_BRANCH = "main"
 
-# Directory prefixes that may target the publishing branch. The trailing slash is load
-# bearing: without it, a prefix test reads docs/specimen.md as a match for docs/spec.
-DOCS_LANE_DIRECTORIES = (
-    "docs/topics/",
-    "design/",
-)
+FULL_HEADS = frozenset({"integration"})
+FULL_PREFIX = "promote/full-"
+SINGLE_PREFIX = "promote/"
 
-# Exact files that may target the publishing branch.
-#
-# mkdocs.yml, overrides/, landing/, docs/stylesheets/, and docs/assets/ are deliberately
-# absent even though a reader would call all five documentation. CODEOWNERS treats them
-# as privilege-escalation surfaces and says why: mkdocs.yml accepts a hooks: key that
-# executes Python inside the build job, overrides holds templates the build renders into
-# every page, and a stylesheet or asset reaches a third party through url(), @font-face,
-# or @import with no script at all. A lane that deploys on merge is the wrong lane for
-# any of them.
-DOCS_LANE_FILES = frozenset({
-    "docs/README.md",
-    "README.md",
-    "CONTRIBUTORS.md",
-    "CODE_OF_CONDUCT.md",
-    "CONTRIBUTING.md",
-    "GOVERNANCE.md",
-    "SECURITY.md",
-    "STYLE.md",
-    "LICENSING.md",
-    "NOTICE",
-})
+# A release bumps these together, and tag-release.yml tags main when version.txt changes.
+# Promoting them alone would tag a main that lacks the release's other work.
+RELEASE_FILES = frozenset({"version.txt", "pyproject.toml", "uv.lock"})
 
-# Branches a promotion pull request comes from. These carry specification paths by
-# definition.
-PROMOTION_HEADS = frozenset({"integration"})
-PROMOTION_HEAD_PREFIXES = ("release/",)
+GitRunner = Callable[[list[str]], tuple[int, bytes]]
 
 
-def in_docs_lane(path: str) -> bool:
-    """True when a path may target the publishing branch directly."""
-    if path in DOCS_LANE_FILES:
-        return True
-    return path.startswith(DOCS_LANE_DIRECTORIES)
+def git_runner(args: list[str]) -> tuple[int, bytes]:
+    """Run git with replace refs ignored, and return its exit status and raw stdout.
+
+    GIT_NO_REPLACE_OBJECTS stops a refs/replace object from changing what a commit
+    appears to contain while it is being compared.
+    """
+    env = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
+    completed = subprocess.run(["git", *args], capture_output=True, check=False, env=env)
+    return completed.returncode, completed.stdout
 
 
-def is_promotion(head_ref: str, head_repo: str, base_repo: str) -> bool:
-    """True when this is a promotion from a branch inside this repository.
+def promotion_kind(head_ref: str, head_repo: str, base_repo: str) -> str | None:
+    """Return "full", "single", or None when the head is not a promotion.
 
-    The repository test is not optional and runs first. A pull request's head ref is a
-    branch name the contributor chose, and a fork may name a branch anything, so
-    exempting on the ref alone would let somebody fork, create a branch called
-    `integration`, and walk a specification change onto the publishing branch.
+    The repository test runs first and is not optional. A head ref is a branch name the
+    contributor chose, and a fork may name a branch anything.
     """
     if head_repo != base_repo:
-        return False
-    return head_ref in PROMOTION_HEADS or head_ref.startswith(PROMOTION_HEAD_PREFIXES)
+        return None
+    if head_ref in FULL_HEADS or head_ref.startswith(FULL_PREFIX):
+        return "full"
+    if head_ref.startswith(SINGLE_PREFIX):
+        return "single"
+    return None
 
 
-def paths_requiring_integration(paths: Iterable[str]) -> list[str]:
-    """Return every changed path that may not target the publishing branch."""
-    return sorted({path for path in paths if not in_docs_lane(path)})
+def _nul_paths(out: bytes) -> list[str]:
+    return [p.decode("utf-8", "surrogateescape") for p in out.split(b"\0") if p]
 
 
-# A path added under this prefix is a new page. The deploy runs the test suite before it
-# builds, and a page with no `nav` entry fails it, so a new page merged straight to the
-# publishing branch stops every deploy until a `mkdocs.yml` change arrives by promotion.
-NEW_PAGE_PREFIX = "docs/"
-
-# Statuses from `git diff --name-status` that put a path into the tree. A rename or copy
-# carries a similarity score after its letter, as in R100. The workflow passes
-# --no-renames, so a rename reaches this script as a delete plus an add and the old
-# path stays visible to the path rule. R and C stay here so a listing produced without
-# that flag still counts the new path as an addition.
-ADDING_STATUSES = ("A", "R", "C")
+@dataclass(frozen=True)
+class Verdict:
+    conflicted: bool
+    differing: list[str]
+    release_files: list[str]
 
 
-def added_pages_requiring_integration(added: Iterable[str]) -> list[str]:
-    """Return every added path under docs/, which needs a `nav` entry from `integration`."""
-    return sorted({path for path in added if path.startswith(NEW_PAGE_PREFIX)})
+def check(kind: str, main: str, head: str, integration: str, run: GitRunner) -> Verdict:
+    """Merge `head` into `main` in memory and compare the result with `integration`.
 
-
-def parse_name_status(lines: Iterable[str]) -> tuple[list[str], list[str]]:
-    """Split `git diff --name-status` output into changed paths and added paths.
-
-    Each line is a status, a tab, and a path. A rename or copy names the old path and
-    then the new one, and only the new path is a change here, the same path
-    `--name-only` reports. A line with no tab is a bare path from an older listing and
-    counts as changed, not added.
+    Paths come from git with -z, never from a quoted listing, so a file name with a
+    non-ASCII character, a tab, or a quote is compared like any other.
     """
-    changed: list[str] = []
-    added: list[str] = []
-    for line in lines:
-        line = line.rstrip("\r\n")
-        if not line.strip():
-            continue
-        if "\t" not in line:
-            changed.append(line.strip())
-            continue
-        fields = line.split("\t")
-        status, path = fields[0].strip(), fields[-1]
-        changed.append(path)
-        if status.startswith(ADDING_STATUSES):
-            added.append(path)
-    return changed, added
+    code, out = run(["merge-tree", "--write-tree", main, head])
+    if code not in (0, 1):
+        raise RuntimeError("git merge-tree failed")
+    if code == 1:
+        return Verdict(True, [], [])
+    merged = out.split(b"\n", 1)[0].decode("ascii").strip()
+
+    code, out = run(["diff", "-z", "--name-only", "--no-renames", merged, integration])
+    if code != 0:
+        raise RuntimeError("git diff against integration failed")
+    against_integration = set(_nul_paths(out))
+    if kind == "full":
+        return Verdict(False, sorted(against_integration), [])
+
+    code, out = run(["diff", "-z", "--name-only", "--no-renames", main, merged])
+    if code != 0:
+        raise RuntimeError("git diff against main failed")
+    changed = set(_nul_paths(out))
+    return Verdict(False, sorted(changed & against_integration), sorted(changed & RELEASE_FILES))
+
+
+RETARGET = (
+    f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on merge, so every "
+    "change lands on `integration` first and reaches it only as a promotion. Retarget this "
+    "pull request at `integration`. To publish one merged pull request before the next full "
+    "promotion, a project lead runs `uv run python tools/promote_pr.py <number>`. "
+    "See CONTRIBUTING.md."
+)
+
+
+def listing(paths: list[str]) -> str:
+    return "\n".join(f"  {path!r}" if not path.isprintable() else f"  {path}" for path in paths)
 
 
 def decide(
-    paths: Iterable[str],
     base_ref: str,
     head_ref: str,
     head_repo: str,
     base_repo: str,
-    added: Iterable[str] = (),
+    verdict: Callable[[str], Verdict] | None,
 ) -> tuple[int, str]:
     """Return an exit status and the message to print.
 
-    `added` names the paths the pull request adds. It defaults to empty so a caller that
-    knows only the changed paths gets the path rule alone.
+    `verdict` takes the promotion kind and returns the result of `check`. A promotion
+    with no way to check its content fails rather than passing unchecked.
     """
     if base_ref != PUBLISHING_BRANCH:
         return 0, f"Base branch is {base_ref!r}, not {PUBLISHING_BRANCH!r}. Nothing to check."
-    if is_promotion(head_ref, head_repo, base_repo):
-        return 0, f"Promotion from {head_ref!r}. Specification paths are expected here."
-    offenders = paths_requiring_integration(paths)
-    new_pages = [path for path in added_pages_requiring_integration(added)
-                 if path not in offenders]
-    if not offenders and not new_pages:
-        return 0, "Every changed path is in the documentation lane."
-    parts = []
-    if offenders:
-        listing = "\n".join(f"  {path}" for path in offenders)
-        parts.append(
-            f"These paths may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
-            f"request at `integration`:\n{listing}\n\n"
-            f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on "
-            "merge, so specification and code changes land on `integration` and "
-            "publish on a promotion."
+    kind = promotion_kind(head_ref, head_repo, base_repo)
+    if kind is None:
+        return 1, f"Only promotions may target `{PUBLISHING_BRANCH}`. {RETARGET}"
+    if verdict is None:
+        return 1, "This promotion could not be checked against `integration`, so it does not pass."
+    result = verdict(kind)
+    if result.conflicted:
+        return 1, (
+            f"This promotion conflicts with `{PUBLISHING_BRANCH}`. A project lead runs "
+            "`uv run python tools/promote_pr.py --full`, which builds a promotion whose tree "
+            "is exactly `integration`'s. See CONTRIBUTING.md."
         )
-    if new_pages:
-        listing = "\n".join(f"  {path}" for path in new_pages)
-        parts.append(
-            f"These new pages may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
-            f"request at `integration`:\n{listing}\n\n"
-            "A new page needs a titled `nav` entry in `mkdocs.yml`, and `mkdocs.yml` "
-            "reaches the publishing branch only through `integration`. The deploy runs "
-            "the guards before it builds, so a page without its `nav` entry stops every "
-            f"deploy of `{PUBLISHING_BRANCH}`."
+    if result.release_files:
+        return 1, (
+            "A single pull request promotion may not change release files, because a release "
+            f"goes through a full promotion:\n{listing(result.release_files)}"
         )
-    return 1, "\n\n".join(parts) + " See CONTRIBUTING.md."
+    if result.differing:
+        if kind == "full":
+            return 1, (
+                f"After this merge `{PUBLISHING_BRANCH}` would still differ from "
+                f"`integration` at:\n{listing(result.differing)}\n\n"
+                "Either `integration` moved after this branch was built, or "
+                f"`{PUBLISHING_BRANCH}` holds content `integration` has since changed or "
+                "reverted. A project lead runs `uv run python tools/promote_pr.py --full`, "
+                "which builds a fresh branch that makes `integration` win."
+            )
+        return 1, (
+            "A single pull request promotion may carry only content `integration` already "
+            f"holds. These paths would differ from `integration`:\n{listing(result.differing)}\n\n"
+            "Rebuild the branch with tools/promote_pr.py, or land the change on `integration` first."
+        )
+    if kind == "full":
+        return 0, f"Promotion from {head_ref!r}. After the merge, `{PUBLISHING_BRANCH}` equals `integration`."
+    return 0, f"Promotion from {head_ref!r}. Every path it changes matches `integration`."
 
 
 def main(argv: list[str]) -> int:
-    """Read the changed paths from a file and the refs from the environment."""
-    if len(argv) != 2:
-        print("usage: base_branch_guard.py <git-diff-name-status-listing>", file=sys.stderr)
+    """Read the refs from the environment and judge the pull request."""
+    if len(argv) != 1:
+        print("usage: base_branch_guard.py  (reads BASE_REF, HEAD_REF, HEAD_REPO, BASE_REPO, "
+              "MAIN_REF, HEAD_SHA, INTEGRATION_REF)", file=sys.stderr)
         return 2
-    with open(argv[1], encoding="utf-8") as handle:
-        paths, added = parse_name_status(handle)
-    status, message = decide(
-        paths,
-        os.environ.get("BASE_REF", ""),
-        os.environ.get("HEAD_REF", ""),
-        os.environ.get("HEAD_REPO", ""),
-        os.environ.get("BASE_REPO", ""),
-        added,
-    )
+    env = os.environ
+    head_sha = env.get("HEAD_SHA", "")
+    main_ref = env.get("MAIN_REF", "origin/main")
+    integration = env.get("INTEGRATION_REF", "origin/integration")
+
+    def verdict(kind: str) -> Verdict:
+        if not head_sha:
+            raise RuntimeError("HEAD_SHA is not set")
+        return check(kind, main_ref, head_sha, integration, git_runner)
+
+    try:
+        status, message = decide(env.get("BASE_REF", ""), env.get("HEAD_REF", ""),
+                                 env.get("HEAD_REPO", ""), env.get("BASE_REPO", ""), verdict)
+    except (RuntimeError, ValueError) as error:
+        status, message = 1, f"The content check could not run ({error}), so this does not pass."
     print(message, file=sys.stderr if status else sys.stdout)
     return status
 
