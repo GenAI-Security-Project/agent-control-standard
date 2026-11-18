@@ -243,3 +243,12 @@ def test_bad_setting_value_never_reaches_compose_up(bundle):
     result, lines = run(bundle, "mode")
     assert result.returncode == 2
     assert compose_calls(lines) == []
+
+
+def test_up_rebuilds_local_images(bundle):
+    (bundle / "state" / "image-source").write_text("built\n", encoding="utf-8")
+    result, lines = run(bundle, "up")
+    assert result.returncode == 0, result.stderr
+    assert compose_calls(lines) == ["compose -f compose.yaml --profile cli build",
+                                    "compose -f compose.yaml up -d --wait"]
+    assert all("LAB_RUNTIME_IMAGE=acs-lab-runtime:local" in line for line in lines)

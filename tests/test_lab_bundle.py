@@ -482,3 +482,9 @@ def test_smoke_job_runs_the_bundle_with_no_model_key():
     assert "OPENAI" not in text.upper().replace("COMPOSE.OPENAI", "")
     teardown = [s for s in _steps(job) if "./lab.sh down" in s.get("run", "")]
     assert teardown and teardown[0].get("if") == "always()"
+
+
+def test_every_long_running_acs_service_has_a_healthcheck():
+    # `up --wait` passes a service with no healthcheck while it restarts in a loop.
+    for name in ("finbot", "redis", "acs-gateway", "acs-guardian", "acs-viewer"):
+        assert "healthcheck" in _services()[name], name

@@ -83,16 +83,22 @@ for service_file in "acs-guardian /run/acs/guardian.key" "acs-guardian /run/acs/
         fail "$1 $2 is '$got', expected '600 $uid'"
     fi
 done
-for service in acs-guardian acs-gateway; do
-    got=$(in_service "$service" id -u 2>/dev/null || true)
-    [ "$got" = "$uid" ] && pass "$service runs as uid $uid" || fail "$service runs as uid '$got'"
+# The service itself is PID 1 after the entrypoint's exec. A shell from `exec` would start as root, so it reads
+# PID 1's real and effective uid instead of its own.
+for service in acs-guardian acs-gateway acs-viewer; do
+    got=$(in_service "$service" sh -c "sed -n 's/^Uid:[[:space:]]*\([0-9]*\)[[:space:]]*\([0-9]*\).*/\1 \2/p' /proc/1/status" \
+          2>/dev/null || true)
+    [ "$got" = "$uid $uid" ] && pass "$service runs as uid $uid" || fail "$service runs as uid '$got'"
 done
-for service in acs-gateway acs-viewer; do
-    listing=$(in_service "$service" ls -A /lab/state/secrets 2>&1 || true)
+for service in acs-gateway acs-guardian acs-viewer; do
+    # Listed as root, so an empty answer means the tmpfs hides the files, not that permissions do.
+    listing=$(docker compose -f compose.yaml exec -T -u 0 "$service" ls -A /lab/state/secrets 2>&1 || true)
     [ -z "$listing" ] && pass "$service can't see state/secrets" || fail "$service sees state/secrets: $listing"
 done
 
-before=$(wc -l < state/model-inputs.jsonl 2>/dev/null || echo 0)
+count_lines() { if [ -f "$1" ]; then wc -l < "$1"; else echo 0; fi; }
+before=$(count_lines state/model-inputs.jsonl)
+transcripts_before=$(ls state/transcripts 2>/dev/null | wc -l)
 reply=$(in_service finbot python -c '
 import json, os, urllib.request
 base = os.environ["OPENAI_BASE_URL"].rstrip("/")
@@ -108,12 +114,33 @@ if [ -n "$reply" ] && printf '%s' "$reply" | grep -qv Traceback; then
 else
     fail "the model call through FinBot's base URL failed: $reply"
 fi
-after=$(wc -l < state/model-inputs.jsonl 2>/dev/null || echo 0)
+after=$(count_lines state/model-inputs.jsonl)
 [ "$after" -gt "$before" ] && pass "the model input log recorded the call" || fail "the model input log didn't grow"
 if grep -q '"acs_audit_event": *"replay_miss"' state/audit.log 2>/dev/null; then
     pass "the audit log marks the unrecorded call as a replay miss"
 else
     fail "no replay_miss line in state/audit.log"
+fi
+
+# The session the call opened left a transcript, and acs-verify (LAB-11) checks its ML-DSA-65 decisions with the key
+# document alone plus the HMAC secret for the requests. Interface pin on acs-verify's first output line.
+newest=$(ls -t state/transcripts 2>/dev/null | head -n 1)
+if [ "$(ls state/transcripts 2>/dev/null | wc -l)" -gt "$transcripts_before" ] && [ -n "$newest" ]; then
+    pass "the call left a transcript, $newest"
+    if [ "$(cat state/image-source 2>/dev/null)" = built ]; then
+        export LAB_RUNTIME_IMAGE=acs-lab-runtime:local LAB_FINBOT_IMAGE=acs-lab-finbot:local
+    fi
+    [ "$(id -u)" -eq 0 ] || export LAB_UID="$(id -u)" LAB_GID="$(id -g)"
+    verified=$(docker compose -f compose.yaml run --rm -T --entrypoint python lab -m acs.testing.verify \
+               "/lab/state/transcripts/$newest" --keys /lab/state/keys/guardian-keys.json \
+               --hmac-secret /lab/state/secrets/hmac.key 2>/dev/null || true)
+    if printf '%s\n' "$verified" | grep -q '^acs-verify: PASS' && printf '%s' "$verified" | grep -q 'ML-DSA-65'; then
+        pass "acs-verify passes the transcript's ML-DSA-65 decisions"
+    else
+        fail "acs-verify didn't pass the transcript: $verified"
+    fi
+else
+    fail "the call left no new transcript"
 fi
 
 if curl -fsS "http://127.0.0.1:${finbot_port:-8000}/healthz" >/dev/null 2>&1; then

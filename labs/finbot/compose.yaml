@@ -252,6 +252,13 @@ services:
       - "127.0.0.1:${LAB_PORT_VIEWER:-8095}:8095"
     networks:
       - ui-net
+    healthcheck:
+      # Without it, `up --wait` passes while a viewer that can't start restarts in a loop.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8095/api/rows?after=0', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped

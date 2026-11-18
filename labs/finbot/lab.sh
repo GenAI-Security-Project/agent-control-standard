@@ -170,7 +170,7 @@ doctor() {
                [ "$status" -ne 0 ] || status=1 ;;
         esac
     done
-    for image in $(compose --profile traces --profile cli config --images 2>/dev/null); do
+    for image in $(compose --profile traces --profile cli config --images 2>/dev/null | sort -u); do
         if docker image inspect "$image" >/dev/null 2>&1; then
             say "DONE: image $image is here"
         elif docker manifest inspect "$image" >/dev/null 2>&1; then
@@ -228,7 +228,12 @@ case $verb in
             say "NOT YET: run ./lab.sh init first. It creates the lab's secrets and keys."
             exit 1
         fi
-        ensure_images
+        if [ -f state/image-source ] && [ "$(cat state/image-source)" = built ]; then
+            # A local build goes stale when the bundle changes, so up rebuilds it. The layer cache keeps it quick.
+            compose --profile cli build
+        else
+            ensure_images
+        fi
         compose up -d --wait ;;
     down)
         compose --profile traces --profile cli down ;;
