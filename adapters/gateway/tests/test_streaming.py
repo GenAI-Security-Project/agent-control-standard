@@ -92,8 +92,9 @@ def test_shadow_streams_unchanged_and_records(gateway, guardian, upstream, audit
     assert received == b"".join(raw)
     recorded = events(audit, "shadow_decision")
     assert [(e["tool"], e["decision"], e["guardian_decision"]) for e in recorded] == [("bash", "deny", "deny")]
+    # The transcript starts with the ClientHello, which acs.client's on_wire hook writes (issue #577).
     assert [line["envelope"].get("method") for line in transcript_lines(tmp_path) if line["dir"] == "req"] == [
-        "steps/sessionStart", "steps/toolCallRequest"]
+        "handshake/hello", "steps/sessionStart", "steps/toolCallRequest"]
 
 
 def test_nothing_acs_reaches_the_streaming_client(gateway, guardian, upstream):
