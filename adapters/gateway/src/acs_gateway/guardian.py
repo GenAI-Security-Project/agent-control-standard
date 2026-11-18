@@ -50,6 +50,8 @@ class StepResult:
     failure_class: str | None = None
     # The Guardian's ask_details when it answered ask, as sent, for the approver page (LAB-08).
     ask_details: dict[str, Any] | None = None
+    # Set when the session must take no further line, with the cause session_retired is audited with.
+    retire: str | None = None
     # True once the request went to the Guardian. request_id can be set without a send: an envelope that couldn't be
     # signed, or a step cancelled after its id was minted. A step span claims acs.request_id only when sent (LAB-09).
     sent: bool = False
@@ -179,6 +181,10 @@ def write_line(token: StepToken | None, write: Callable[[], None]) -> bool:
     finally:
         token.end_write()
     return True
+
+
+class _DiscardUnwritten(Exception):
+    """The discards line for a withheld late answer could not be written, so its allow stands unmarked."""
 
 
 class _StepRetired(Exception):
@@ -340,7 +346,13 @@ class GuardianClient:
             if remaining <= 0:
                 return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
             posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
-        outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        try:
+            outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        except _DiscardUnwritten as e:
+            audit_event("gateway_step_error", session_id=session.session_id, method=method, phase="discard_late",
+                        request_id=e.args[0], error=str(e.__cause__))
+            return StepResult(method, e.args[0], cause="decision_timeout", failure_class="timeout",
+                              retire="discard_unwritten")
         # The token saw whether the send started. Without one (sessionStart inside the handshake), only an envelope
         # the gateway couldn't sign stays unsent.
         if token is not None:
@@ -408,7 +420,10 @@ class GuardianClient:
         if late:
             if wire.answer_written and wire.answer_cause is None:
                 # On time when it arrived, late once its line landed: withheld, and the transcript says so.
-                self.discard_late(session_id, request_id, token)
+                try:
+                    self.discard_late(session_id, request_id, token)
+                except Exception as e:  # noqa: BLE001
+                    raise _DiscardUnwritten(request_id) from e
             return None, request_id
         return outcome, request_id
 

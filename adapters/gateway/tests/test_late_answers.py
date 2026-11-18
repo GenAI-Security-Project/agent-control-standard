@@ -106,3 +106,56 @@ def test_an_answer_inside_the_deadline_leaves_no_discards_line(gateway, guardian
     upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
     assert client.post("/v1/responses", json=finbot_request()).json()["output"][0]["call_id"] == "call_1"
     assert not [line for line in transcript_lines(tmp_path) if "discards" in line]
+
+
+class UnmarkableLine(SlowLine):
+    """Stalls the answer line past the deadline, then fails the line that would mark it discarded."""
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if kwargs.get("discards"):
+            raise OSError("disk full")
+        super().append(session_id, direction, envelope, **kwargs)
+
+
+def assert_retired_without_a_mark(client, upstream, audit, tmp_path):
+    lines = transcript_lines(tmp_path)
+    assert not [line for line in lines if "discards" in line]
+    applied = events(audit, "decision_applied")[0]
+    assert applied["cause"] == "decision_timeout"
+    retired = events(audit, "session_retired")
+    assert [(e["cause"], e["request_id"]) for e in retired] == [("discard_unwritten", applied["request_id"])]
+    # The session that holds the unmarked allow takes no further line, and the next request opens a fresh one.
+    upstream.reply(response_body(message_item("again")))
+    client.post("/v1/responses", json=finbot_request())
+    assert len(events(audit, "session_opened")) == 2
+
+
+def test_a_discards_line_the_worker_cannot_write_retires_the_session(gateway, guardian, upstream, audit, tmp_path):
+    client = started(gateway, guardian, upstream, "enforce", "300")
+    gw = client.app.state.gateway
+    gw.guardian.transcript = UnmarkableLine(gw.guardian.transcript, 0.5, "resp")
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    output = client.post("/v1/responses", json=finbot_request()).json()["output"]
+    assert output[0]["type"] == "message"
+    gw.guardian.transcript = gw.guardian.transcript.inner
+    assert_retired_without_a_mark(client, upstream, audit, tmp_path)
+
+
+def test_a_discards_line_the_loop_cannot_write_retires_the_session(gateway, guardian, upstream, audit, tmp_path):
+    client = started(gateway, guardian, upstream, "enforce", "300")
+    gw = client.app.state.gateway
+    inner = gw.guardian.transcript
+    gw.guardian.transcript = UnmarkableLine(inner, 0, "none")
+    real_step = gw.guardian.step
+
+    def step(session, method, payload, token=None):
+        result = real_step(session, method, payload, token)
+        time.sleep(max(0.0, token.deadline - time.monotonic()) + 0.05)
+        return result
+
+    gw.guardian.step = step
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    gw.guardian.step = real_step
+    gw.guardian.transcript = inner
+    assert_retired_without_a_mark(client, upstream, audit, tmp_path)

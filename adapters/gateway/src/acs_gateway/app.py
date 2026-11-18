@@ -1055,6 +1055,10 @@ class Gateway:
             # The request itself was cancelled (a client disconnect, a shutdown). The step must not outlive it.
             await self._settle_abandoned(session, method, token, future, timeout)
             raise
+        if result.retire is not None:
+            # The transcript holds an allow the step withheld and couldn't mark, so the session takes no more lines.
+            self._retire(session, method, token, result.retire)
+            return result
         if result.cause is None and time.monotonic() >= token.deadline:
             # The worker settled in time and the loop resumed after the deadline. The answer is withheld like any
             # late one, and the transcript says so after the line that holds it (issue #577).
@@ -1076,9 +1080,11 @@ class Gateway:
         except asyncio.TimeoutError:
             self._retire(session, method, token, "step_hung")
         except Exception as e:  # noqa: BLE001
-            # The step already denies. A mark that can't be written is the gateway's own fault, so it is audited.
+            # The step already denies, but the transcript now ends on an allow nothing marks. The session takes no
+            # more lines, so a verifier never reads a later decision past it.
             _audit("gateway_step_error", phase="discard_late", session_id=session.session_id, method=method,
                    request_id=request_id, error=str(e))
+            self._retire(session, method, token, "discard_unwritten")
 
     async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,
                                 timeout: float) -> None:
