@@ -466,7 +466,7 @@ def test_compose_job_checks_every_combination():
 def test_cli_viewer_and_images_jobs_run_their_suites():
     jobs = _workflow(LABS_WORKFLOW)["jobs"]
     assert "python -m pytest labs/finbot/cli/tests -v" in _runs(jobs["cli"])
-    assert ("uv run --project adapters --locked --extra pqc python -m pytest labs/finbot/viewer/tests -v"
+    assert ("uv run --project adapters --locked --extra pqc --group test python -m pytest labs/finbot/viewer/tests -v"
             in _runs(jobs["viewer"]))
     images = jobs["images"]
     assert "python -m pytest labs/finbot/images/tests -v" in _runs(images)
