@@ -1,6 +1,6 @@
 # FinBot Lab Decision Viewer
 
-The decision viewer shows every step the lab gateway governs as it happens, one row per step, with the Guardian's signed decision and whether acs-verify accepts it. <!-- claim:C-04 --> It is read only. Issue #586 tracks it, and BUILD_PLAN Appendix A.12 names what it must paint.
+The decision viewer shows every step the lab gateway governs as it happens, one row per step, with the Guardian's signed decision and whether its signature checks. <!-- claim:C-04 --> It is read only. Issue #586 tracks it, and BUILD_PLAN Appendix A.12 names what it must paint.
 
 ## What it shows
 
@@ -20,14 +20,18 @@ The mark is a word, so its meaning never rests on color:
 
 | Mark | Means |
 |---|---|
-| verified | acs-verify, run over the whole session file with the key document, accepted the session, and this answer carries an ML-DSA-65 signature it checked <!-- claim:C-04 --> |
+| verified | acs-verify checked this answer's ML-DSA-65 signature under the key document, its binding to its request, and the key's validity at the request's time, and found no fault in the lines read so far. It doesn't show the transcript is complete: a deleted or reordered entry still reads verified here, and lab verify checks the whole transcript <!-- claim:C-04 --> <!-- claim:N-04 --> |
 | key warning | As verified, but acs-verify warned, such as for a key the key document now revokes. The note gives the warning <!-- claim:C-04 --> |
-| failed | acs-verify failed the session at this row. The note gives its code <!-- claim:C-04 --> |
-| not checked | Nothing here could check this row: no key document, an HMAC session, a session too long for the viewer, or a session that failed at another row |
+| failed | acs-verify found a fault at this row, or the file holds requests for another session. The note gives the code <!-- claim:C-04 --> |
+| not checked | Nothing here could check this row: no key document, an HMAC session, a session too long for the viewer, a session that failed at another row, a row waiting to be judged again under a changed key document, or a row the file no longer holds |
 | unsigned | The answer carries no signature, in a session that passed, or in one nothing here could check |
 | no answer | No usable answer came back, and the note says why |
 
-acs-verify (`acs.testing.verify`) runs over every line the viewer has read from a session file each time the file grows, so its own rules judge every row: the signature under the key its key_id names, the request binding and hash, the key's validity at the request's own time, a request_id seen twice, a request from another session, a cause on a signed answer, and a discards line away from its answer. <!-- claim:C-04 --> It runs keys only, and lab verify checks the audit chain over the finished transcript. When the key document changes on disk, the viewer reads it again and judges every session again.
+acs-verify (`acs.testing.verify`) runs over the lines the viewer has read from a session file each time the file grows, so its own rules judge each row: the signature under the key its key_id names, the request binding and hash, the key's validity at the request's own time, a request_id seen twice, a request from another session, a cause on a signed answer, and a discards line away from its answer. <!-- claim:C-04 --> It runs keys only and skips the audit chain, so a deleted or reordered entry still reads verified here. lab verify checks the chain over the finished transcript. <!-- claim:N-04 -->
+
+The viewer adds two rules of its own. A file whose requests name a session other than the file's name fails at its first request, since lines copied from another session each pass on their own. A file replaced or cut shorter starts over, and the rows it no longer holds read not checked, kept as history. When the key document changes on disk, every mark judged under the old one reads not checked until its session is judged again. <!-- claim:C-04 -->
+
+A discards line, the gateway's word that it withheld the answer before it, is a row of its own that reads unsigned, since no signature covers it. It marks the answer just before it withheld. A discards line anywhere else fails at its own row and marks no answer.
 
 A session is judged only when its first signed answer names ML-DSA-65. The viewer holds no HMAC secret, and anyone holding that secret can write an HMAC answer, the agent side included (specification section 8.6), so an HMAC session reads not checked and never verified. In a session judged under ML-DSA-65, an HMAC or unsigned answer fails. <!-- claim:C-04 -->
 
@@ -65,7 +69,8 @@ Every store is bounded, so a junk or endless log costs bounded memory and bounde
 | Rows in one answer to the page | 500. The page asks again at once while more wait |
 | Rows on the page | 1000. The oldest go first |
 | Session files followed | 200, the most recently changed |
-| Lines judged per session | 4000 lines or 32 MiB. Past it the session's rows read not checked, and the note names the lab command that checks the whole file |
+| Lines judged per session | 2000 lines or 32 MiB. Past it the session's rows read not checked, and the note names the lab command that checks the whole file |
+| Judging per poll | 0.25 seconds across sessions, the longest-waiting first. The rest wait for the next poll. A poll always judges at least one session, so the worst poll judges for the budget plus one session at the line cap, about 0.45 seconds |
 | Audit lines waiting for their step | 10000 |
 | A silent connection | dropped after 10 seconds |
 

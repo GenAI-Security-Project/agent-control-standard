@@ -106,7 +106,8 @@ function draw(row) {
   cell(tr, shortTime(row.t));
   cell(tr, shortMethod(row.method));
   breakableCell(tr, row.tool);
-  const decisionCell = cell(tr, row.decision, DECISION_CLASSES[row.decision] || "d-other");
+  const decisionClass = Object.hasOwn(DECISION_CLASSES, row.decision) ? DECISION_CLASSES[row.decision] : "d-other";
+  const decisionCell = cell(tr, row.decision, decisionClass);
   if (row.applied && row.applied !== row.decision) {
     // The signed decision stays in the cell. What the gateway says it did goes under it, and a disagreement the
     // audit log can't explain is flagged.
@@ -117,7 +118,7 @@ function draw(row) {
   }
   breakableCell(tr, row.reason_codes.join(", "));
   cell(tr, row.algorithm);
-  const verify = row.verify in VERIFY_WORDS ? row.verify : "not_checked";
+  const verify = Object.hasOwn(VERIFY_WORDS, row.verify) ? row.verify : "not_checked";
   cell(tr, VERIFY_WORDS[verify], "v-" + verify);
   const rows = [tr];
   if (row.note) {
@@ -133,7 +134,7 @@ function draw(row) {
 function summary(row) {
   const applied = row.applied && row.applied !== row.decision ? "gateway " + row.applied : "";
   const parts = [shortMethod(row.method), row.tool, row.decision, applied, row.reason_codes.join(", "),
-    row.algorithm, VERIFY_WORDS[row.verify]];
+    row.algorithm, Object.hasOwn(VERIFY_WORDS, row.verify) ? VERIFY_WORDS[row.verify] : ""];
   if (row.note) parts.push(row.note);
   return parts.filter((p) => p).join(" | ");
 }
@@ -147,8 +148,8 @@ function postPaint(body) {
 }
 
 function paint(row) {
+  if (!Object.hasOwn(BEAT_LABELS, row.beat)) return;
   const label = BEAT_LABELS[row.beat];
-  if (!label) return;
   beatEl.textContent = label;
   detailEl.textContent = summary(row);
   lastPainted = groups.get(row.id) || null;

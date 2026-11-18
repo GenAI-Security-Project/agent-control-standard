@@ -71,6 +71,16 @@ table {
 .c-alg { width: 11%; }
 .c-verify { width: 13%; }
 
+#legend {
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 0.35rem 1rem;
+  background: #0f1b2d;
+  color: #ffffff;
+  font-size: 0.8rem;
+}
+
 th {
   text-align: left;
   font-weight: 700;
