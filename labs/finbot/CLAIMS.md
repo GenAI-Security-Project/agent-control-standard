@@ -71,6 +71,7 @@ invisible to the agent
 attributable
 revocation is solved
 proves the record is complete
+prove the record is complete
 prevents downgrade
 stops attacks
 blocks every

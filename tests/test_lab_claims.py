@@ -245,3 +245,12 @@ def test_main_exit_codes(tree, tmp_path):
     assert lab_claims.main([str(root), "--ledger", str(bad)]) == 2
     (root / "a.md").write_text("ACS-Core conformant\n", encoding="utf-8")
     assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 1
+
+
+# ---------------------------------------------------------------- Task 3: the lab directory in CI
+
+
+def test_lab_text_holds_to_the_ledger(capsys):
+    code = lab_claims.main([str(LABS_FINBOT), "--ledger", str(LEDGER)])
+    out = capsys.readouterr().out
+    assert code == 0, out
