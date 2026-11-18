@@ -195,3 +195,31 @@ def test_a_key_in_a_directory_others_can_write_is_refused(files):
             load_signing_key(str(key_path), KEY_ID)
     finally:
         os.chmod(key_path.parent, 0o700)
+
+
+def test_write_key_files_creates_a_missing_directory_owner_only(tmp_path):
+    # Rehearsal R10: a first run names a directory that doesn't exist yet. It must not come out 0755.
+    directory = tmp_path / "nested" / "keys"
+    key_path, doc_path = write_key_files(directory, key_id=KEY_ID, guardian_id="lab-guardian")
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert key_path.parent == doc_path.parent == directory
+
+
+def test_write_key_files_leaves_an_existing_directory_alone(tmp_path):
+    directory = tmp_path / "keys"
+    directory.mkdir(mode=0o755)
+    os.chmod(directory, 0o755)
+    write_key_files(directory, key_id=KEY_ID, guardian_id="lab-guardian")
+    assert stat.S_IMODE(directory.stat().st_mode) == 0o755
+
+
+def test_a_world_writable_existing_directory_is_still_refused_at_load(tmp_path):
+    directory = tmp_path / "keys"
+    directory.mkdir()
+    key_path, _ = write_key_files(directory, key_id=KEY_ID, guardian_id="lab-guardian")
+    os.chmod(directory, 0o777)
+    try:
+        with pytest.raises(DecisionKeyError, match="world-writable"):
+            load_signing_key(str(key_path), KEY_ID)
+    finally:
+        os.chmod(directory, 0o700)

@@ -6,7 +6,8 @@ lowercase hex characters and a newline, mode 0600, and is mounted only into the 
 
     python -m acs.guardian.decision_keys --out-dir DIR --key-id ID --guardian-id GID [--days N]
 
-writes DIR/guardian.key and DIR/guardian-keys.json and prints the fingerprint an operator compares out of band.
+writes DIR/guardian.key and DIR/guardian-keys.json (creating DIR as 0700 if missing) and prints the fingerprint an
+operator compares out of band, then the three settings to export: the key file, the key id, and the key document.
 It never overwrites either file. This module needs the pqc extra, and the example Guardian imports it only when
 ACS_RESPONSE_SIGNING=ML-DSA-65.
 """
@@ -79,6 +80,8 @@ def write_key_files(directory: Path, *, key_id: str, guardian_id: str, now: date
                     days: int = DEFAULT_VALIDITY_DAYS) -> tuple[Path, Path]:
     """Generate a key and write its seed (0600) and its key document (0644). Raises FileExistsError for either.
 
+    A missing directory is created with mode 0700.
+
     Every argument is checked before anything is written, so a bad one leaves no file behind (review CR7).
     """
     if not isinstance(guardian_id, str) or not guardian_id.strip():
@@ -93,6 +96,12 @@ def write_key_files(directory: Path, *, key_id: str, guardian_id: str, now: date
     signing_key = MLDSA65SigningKey.generate(key_id)
     document = key_document(signing_key, guardian_id=guardian_id, not_before=start,
                             not_after=start + datetime.timedelta(days=days))
+    if not directory.exists():
+        # A directory this run creates holds a private key, so it is owner-only whatever the umask says. Missing
+        # parents keep the default mode. An existing directory is the operator's and is never chmodded.
+        directory.parent.mkdir(parents=True, exist_ok=True)
+        directory.mkdir(mode=0o700)
+        os.chmod(directory, 0o700)
     _write_new(key_path, (signing_key.seed().hex() + "\n").encode("ascii"), 0o600)
     _write_new(doc_path, (json.dumps(document, indent=2) + "\n").encode("utf-8"), 0o644)
     return key_path, doc_path
@@ -155,7 +164,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     document = json.loads(doc_path.read_text(encoding="utf-8"))
     sys.stdout.write(f"fingerprint={document['keys'][0]['fingerprint']}\n"
-                     f"{SIGNING_KEY_FILE_ENV}={key_path}\n{KEY_DOCUMENT_ENV}={doc_path}\n")
+                     f"{SIGNING_KEY_FILE_ENV}={key_path}\n{KEY_ID_ENV}={args.key_id}\n"
+                     f"{KEY_DOCUMENT_ENV}={doc_path}\n")
     return 0
 
 
