@@ -239,15 +239,40 @@ def reply_call_ids(reply: Any) -> list[str]:
     return call_ids(reply.get("output") if isinstance(reply, dict) else None)
 
 
-def note_reply_calls(session: Session, call_ids: list[str], body: Any) -> None:
+def _position(body: Any) -> int:
+    items = body.get("input") if isinstance(body, dict) else None
+    return len(items) if isinstance(items, list) else 0
+
+
+@dataclass(frozen=True)
+class Arrival:
+    """Where a request stood when it passed the input phase: its session and its arrival number there."""
+    session: Session
+    number: int
+
+
+def note_arrival(session: Session, body: Any) -> Arrival:
+    """Count a request in as it passes the input phase, under the session lock, so a later attempt at the same
+    position is known before an earlier one's reply comes back."""
+    session.arrivals += 1
+    session.latest_arrival[_position(body)] = session.arrivals
+    return Arrival(session, session.arrivals)
+
+
+def note_reply_calls(session: Session, call_ids: list[str], body: Any, arrival: Arrival | None = None) -> None:
     """Place this reply's calls where the request that produced them ended, for session_branch.
 
     A client keeps only the reply it last received for a request, so a removed call from an earlier attempt at the
-    same request, an SDK retry or a rerun, stops counting (fix round 3, CR3-1). Replay answers every attempt with
-    the same recorded reply, and capture now counts only the last one, so the two agree.
+    same request, an SDK retry or a rerun, stops counting (fix round 3, CR3-1). That is the attempt that arrived
+    last, not the one that finished last: a client retries an attempt it gave up on, which can still finish after
+    the retry, so a reply whose request a later arrival at the same position has replaced places nothing (final
+    review I-1). Capture keeps the line of the same attempt, so the two agree. An arrival counted on another
+    session, before an epoch bump or an eviction, says nothing about this one.
     """
-    items = body.get("input") if isinstance(body, dict) else None
-    position = len(items) if isinstance(items, list) else 0
+    position = _position(body)
+    if (arrival is not None and arrival.session is session
+            and session.latest_arrival.get(position, 0) > arrival.number):
+        return
     kept = set(call_ids)
     for call_id, outcome in session.calls.items():
         if call_id in kept:
@@ -767,8 +792,8 @@ class UpstreamSource:
             self._scenario = config.capture_scenario
             self._max_bytes = config.max_body_bytes
             if os.path.lexists(self._capture_path):
-                # Replay serves the first matching line, so lines appended after stale ones would never take effect
-                # (fix round 2, CR5).
+                # Replay serves the last matching line within a file, so stale lines from an earlier run would mix with
+                # this run's (fix round 2, CR5).
                 raise ValueError(f"ACS_CAPTURE_SCENARIO file {self._capture_path} already exists. Move it away or "
                                  "choose another scenario")
         if self.mode == "replay":

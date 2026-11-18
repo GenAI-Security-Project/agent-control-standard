@@ -223,3 +223,72 @@ def test_plain_live_sends_no_branch_header(gateway, upstream):
     upstream.reply(response_body(message_item("done")))
     gateway().post("/v1/responses", json=finbot_request(), headers={"x-acs-lab-branch": "d"})
     assert not [h for h in upstream.received[0].headers if h.startswith("x-acs-")]
+
+
+def test_a_retry_that_overtakes_its_first_attempt_keeps_the_retrys_branch(gateway, guardian, upstream, tmp_path,
+                                                                         audit):
+    """Final review I-1: the client gave up on a slow first attempt and retried. The first attempt finishes last, but
+    the client kept the retry's reply, so capture records the retry's reply and the retry's removed call, and replay
+    follows the same conversation with no miss."""
+    import threading
+    import time
+
+    client = capture(gateway, tmp_path, guardian)
+    upstream.reply(response_body(message_item("abandoned")), delay=1.0)
+    retry_reply = response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_2"),
+                                call_item("bash", {"command": "rm -rf /"}, "call_3"))
+    upstream.reply(retry_reply)
+    upstream.reply(response_body(message_item("done")))
+    got: dict[str, dict] = {}
+
+    def send(name, delay):
+        time.sleep(delay)
+        got[name] = client.post("/v1/responses", json=finbot_request()).json()
+
+    threads = [threading.Thread(target=send, args=("first", 0)), threading.Thread(target=send, args=("retry", 0.3))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert got["first"]["output"][0]["content"][0]["text"] == "abandoned"
+    [kept] = [i for i in got["retry"]["output"] if i["type"] == "function_call"]
+    captured_end = client.post("/v1/responses", json=finbot_request(kept, output("call_2", "{}"))).json()
+    assert [line["branch"] for line in lines(tmp_path)] == ["", "d,a,a"]
+
+    replay = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"), ACS_LAB_MODE="enforce",
+                     ACS_GUARDIAN_URL=guardian)
+    served = replay.post("/v1/responses", json=finbot_request()).json()
+    assert served["output"] == got["retry"]["output"]
+    calls = [i for i in served["output"] if i["type"] == "function_call"]
+    replayed_end = replay.post("/v1/responses",
+                               json=finbot_request(*calls, *(output(c["call_id"], "{}") for c in calls))).json()
+    assert replayed_end["output"] == captured_end["output"]
+    assert not [e for e in audit() if e["acs_audit_event"] == "replay_miss"]
+
+
+def test_a_streamed_retry_that_overtakes_its_first_attempt_keeps_the_retrys_branch(gateway, guardian, upstream,
+                                                                                  tmp_path):
+    """The stream path of the test above: a stream places its calls once it completes, so the abandoned stream
+    completing last must not take the retry's removed call out of the branch."""
+    import threading
+    import time
+
+    client = capture(gateway, tmp_path, guardian)
+    upstream.reply(SSE(encode(stream_events(message_item("abandoned")))), delay=1.0)
+    kept = call_item("get_vendor_details", {"vendor_id": 7}, "call_2")
+    upstream.reply(SSE(encode(stream_events(kept, call_item("bash", {"command": "rm -rf /"}, "call_3")))))
+    upstream.reply(response_body(message_item("done")))
+    streamed = {**finbot_request(), "stream": True}
+
+    def send(delay):
+        time.sleep(delay)
+        with client.stream("POST", "/v1/responses", json=streamed) as r:
+            b"".join(r.iter_bytes())
+
+    threads = [threading.Thread(target=send, args=(d,)) for d in (0, 0.3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    client.post("/v1/responses", json=finbot_request(kept, output("call_2", "{}")))
+    assert [line["branch"] for line in lines(tmp_path)] == ["", "d,a,a"]

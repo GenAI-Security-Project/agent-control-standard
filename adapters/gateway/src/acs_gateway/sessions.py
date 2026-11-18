@@ -146,6 +146,10 @@ class Session:
     open_failed_at: float | None = None
     # A step of this session hung past its bounded wait, so the session left the map and takes no more steps.
     retired: bool = False
+    # Requests counted as they pass the input phase, and the latest count at each request position, so a reply to an
+    # attempt the client has already retried never places its calls in the branch (issue #579, final review I-1).
+    arrivals: int = 0
+    latest_arrival: dict[int, int] = field(default_factory=dict)
 
     @property
     def busy(self) -> bool:
