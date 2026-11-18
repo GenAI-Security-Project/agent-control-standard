@@ -13,7 +13,6 @@ from acs.guardian import example_guardian as eg
 
 _evaluate_step = eg.evaluate_step
 _evaluate_handshake = eg.evaluate_handshake
-_handle_request = eg.handle_request
 _respond = eg.GuardianHandler._respond
 
 
@@ -71,7 +70,8 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
 _failed_hellos = 0
 
 
-def handle_request(request: dict) -> dict:
+def _inject(request: dict) -> dict | None:
+    """The harness's answer for a request it intercepts, or None to let the Guardian answer."""
     global _failed_hellos
     if request.get("method") == "handshake/hello" and _failed_hellos < int(os.environ.get("HARNESS_FAIL_HELLOS", "0")):
         _failed_hellos += 1
@@ -80,15 +80,44 @@ def handle_request(request: dict) -> dict:
     if count_file:
         with open(count_file, "a", encoding="utf-8") as f:
             f.write(f"{request.get('method')}\n")
-    tool = _tool(request.get("params") or {})
-    if tool == "rate_limited_tool":
+    if _tool(request.get("params") or {}) == "rate_limited_tool":
         return {"__harness_status__": 429}
-    response = _handle_request(request)
-    if tool == "tampered_tool" and "result" in response:
+    return None
+
+
+def _tamper(request: dict, response: dict) -> dict:
+    if _tool(request.get("params") or {}) == "tampered_tool" and "result" in response:
         signature = response["result"]["signature"]
         value = signature["value"]
         signature["value"] = ("A" if value[0] != "A" else "B") + value[1:]
     return response
+
+
+def _install_hooks() -> None:
+    """Hook the seam the Guardian's do_POST calls: _handle once the Guardian reads each request a single time,
+    handle_request before that. Hooking only the other one leaves every injection dead, so the two pull requests
+    that change the Guardian and this harness can merge in either order."""
+    if hasattr(eg, "_handle"):
+        guardian_handle = eg._handle
+
+        def handle(request: Any, read: Any) -> tuple[int, dict]:
+            injected = _inject(request)
+            if injected is not None:
+                return 200, injected
+            status, response = guardian_handle(request, read)
+            return status, _tamper(request, response)
+
+        eg._handle = handle
+        return
+    guardian_handle_request = eg.handle_request
+
+    def handle_request(request: dict) -> dict:
+        injected = _inject(request)
+        if injected is not None:
+            return injected
+        return _tamper(request, guardian_handle_request(request))
+
+    eg.handle_request = handle_request
 
 
 def respond(self: Any, status: int, body: dict) -> None:
@@ -99,7 +128,7 @@ def respond(self: Any, status: int, body: dict) -> None:
 
 eg.evaluate_step = evaluate_step
 eg.evaluate_handshake = evaluate_handshake
-eg.handle_request = handle_request
+_install_hooks()
 eg.GuardianHandler._respond = respond
 
 if __name__ == "__main__":
