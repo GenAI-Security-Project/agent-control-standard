@@ -7,7 +7,7 @@
     "openssl": "OpenSSL 4.0.3 29 Sep 2026",
     "source_sha256": "94f12b2a80c588ec85dea3248ee9b2c730e98b03b28bd577c6f00b58c9593a37",
     "acs_adapters": "0.2.0",
-    "date": "2026-11-17",
+    "date": "2026-11-18",
     "iterations": 1000,
     "warmup": 100
   },
@@ -17,30 +17,30 @@
       "signature_bytes": 32,
       "public_key_bytes": 32,
       "envelope_bytes": 366,
-      "sign_median_us": 9.833,
-      "sign_p95_us": 10.833,
+      "sign_median_us": 9.959,
+      "sign_p95_us": 12.5,
       "verify_median_us": 10.0,
-      "verify_p95_us": 10.541
+      "verify_p95_us": 12.791
     },
     {
       "algorithm": "ML-DSA-65",
       "signature_bytes": 3309,
       "public_key_bytes": 1952,
       "envelope_bytes": 4732,
-      "sign_median_us": 386.5,
-      "sign_p95_us": 1155.417,
-      "verify_median_us": 108.0,
-      "verify_p95_us": 126.917
+      "sign_median_us": 390.792,
+      "sign_p95_us": 1175.208,
+      "verify_median_us": 107.875,
+      "verify_p95_us": 120.667
     },
     {
       "algorithm": "ECDSA-P256",
       "signature_bytes": 64,
       "public_key_bytes": 65,
       "envelope_bytes": 409,
-      "sign_median_us": 25.959,
-      "sign_p95_us": 29.75,
-      "verify_median_us": 60.709,
-      "verify_p95_us": 66.834
+      "sign_median_us": 26.375,
+      "sign_p95_us": 28.667,
+      "verify_median_us": 52.541,
+      "verify_p95_us": 55.917
     }
   ],
   "not_measured": {

@@ -34,7 +34,7 @@ To rerun it, install the `pqc` extra and run this from `adapters/`:
 uv run --extra pqc python -m benchmarks.signatures
 ```
 
-The command prints the table and writes `results.json` and `results.md` under `adapters/benchmarks/signatures/results/`. The JSON file records the machine, versions, commit and date shown above.
+The command prints the table and writes `results.json`, `results.md` and `environment.md` to a new temporary directory, then prints that path. Your run never overwrites the numbers on this page. Only `--update-reference` rewrites the committed files this page includes. The JSON file records the machine, versions, source hash and date shown above.
 
 ## What the numbers mean
 
