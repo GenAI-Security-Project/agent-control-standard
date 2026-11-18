@@ -249,3 +249,28 @@ def test_every_report_field_that_carries_transcript_text_is_escaped():
     assert control_characters(report.to_text()) == []
     clean = Report(ok=True, session_id=FORGED, recorded_failures=[{"line": 2, "cause": FORGED}])
     assert control_characters(clean.to_text()) == []
+
+
+def test_format_characters_and_lone_surrogates_are_escaped_and_encodable():
+    from acs.testing.verify import Report
+    text = Report(ok=True, session_id="a‮b⁦c\ud800d\U000e0041").to_text()
+    for char in ("‮", "⁦", "\ud800", "\U000e0041"):
+        assert char not in text
+    assert "\\u202e" in text and "\\ud800" in text and "\\U000e0041" in text
+    text.encode("utf-8")
+    assert "naïve 日本語" in Report(ok=True, session_id="naïve 日本語").to_text()
+
+
+def test_a_cause_with_a_bidi_override_and_a_lone_surrogate_prints_and_exits_normally(tmp_path, hmac_run,
+                                                                                    secret_file, capsys):
+    from acs_verify_helpers import transcript_line
+    from acs.core import iso8601_now
+    ping = {"jsonrpc": "2.0", "id": "ping-1", "method": "system/ping",
+            "params": {"acs_version": "0.1.0", "request_id": "ping-1", "timestamp": iso8601_now(),
+                       "payload": {"echo": "x"}}}
+    cause = "x‮y\ud800z"
+    lines = record_session(hmac_run) + [transcript_line("req", ping), transcript_line("resp", None, cause)]
+    assert main([str(write(tmp_path, lines)), "--hmac-secret", str(secret_file)]) == EXIT_PASS
+    out = capsys.readouterr().out
+    assert "‮" not in out and "\ud800" not in out
+    out.encode("utf-8")

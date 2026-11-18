@@ -46,6 +46,7 @@ import itertools
 import json
 import re
 import sys
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -252,14 +253,23 @@ class Report:
                 "of the transcript can't be detected.")
 
 
-_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+# Categories a terminal or a reader can't see or that reorder what is shown: controls (Cc), format characters such as
+# bidi overrides and isolates (Cf), surrogates (Cs), and line and paragraph separators (Zl, Zp). Going by category
+# instead of a hand list keeps a character Unicode adds later from slipping past.
+_UNSAFE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp"})
+
+
+def _escape_char(char: str) -> str:
+    code = ord(char)
+    if code < 0x100:
+        return f"\\x{code:02x}"
+    return f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}"
 
 
 def _printable(text: str) -> str:
-    # A forged transcript can carry ANSI sequences in session_id, a cause, or a reason built from them. Printed raw
-    # they can repaint a FAIL as a PASS on the terminal, so each control character becomes a visible escape.
-    return _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}" if ord(m.group()) < 0x100 else f"\\u{ord(m.group()):04x}",
-                        text)
+    # A forged transcript can carry ANSI sequences or bidi overrides in session_id, a cause, or a reason built from
+    # them. Printed raw they can repaint a FAIL as a PASS, and a lone surrogate would crash the encoder on stdout.
+    return "".join(_escape_char(c) if unicodedata.category(c) in _UNSAFE_CATEGORIES else c for c in text)
 
 
 def _noun(items: Sequence[Any]) -> str:
