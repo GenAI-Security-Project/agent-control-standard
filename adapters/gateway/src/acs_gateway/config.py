@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 MODES = ("off", "shadow", "enforce")
@@ -134,6 +135,8 @@ class GatewayConfig:
     replay_scenario: str | None = None
     # Spans (LAB-09, issue #582). None leaves tracing off, with no exporter and no network call.
     otlp_endpoint: str | None = None
+    # The pinned Guardian decision key (acs.client ResponseKeys), or None for HMAC-SHA256 answers as before.
+    response_keys: Any = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -219,6 +222,7 @@ class GatewayConfig:
             upstream_model=model or None,
             replay_scenario=replay_scenario or None,
             otlp_endpoint=_otlp_endpoint(env),
+            response_keys=_response_keys(env) if mode != "off" else None,
         )
 
 
@@ -265,6 +269,26 @@ def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path |
     if mode == "capture" and not _SCENARIO.fullmatch(scenario):
         raise ValueError(f"ACS_CAPTURE_SCENARIO must be a plain name of letters, digits, _ and -, got {scenario!r}")
     return mode, Path(key) if key else None, Path(recordings) if recordings else None, scenario
+
+
+def _response_keys(env: Mapping[str, str]) -> Any:
+    """The decision key the Guardian's answers must verify under, read once at startup (issue #576).
+
+    ACS_RESPONSE_ALGORITHMS unset or HMAC-SHA256 gives None, which is the gateway at 031a451. ML-DSA-65 loads the key
+    document named by ACS_GUARDIAN_KEYS and pins ACS_GUARDIAN_KEY_ID, checked against ACS_GUARDIAN_KEY_FINGERPRINT when
+    set. Lab convention until issue #316 settles verifier rules. Any problem refuses startup, so a gateway never runs
+    on HMAC when it was told to verify ML-DSA-65.
+    """
+    # Imported here, since acs.client resolves its state directories on import and prepare_state_dirs runs first.
+    from acs.client import response_keys_from_env
+
+    try:
+        return response_keys_from_env(env)
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        # A missing pqc extra or an unreadable document surfaces as other errors. All of them stop startup alike.
+        raise ValueError(f"the decision key settings can't be used: {e}") from e
 
 
 def _under_home(path: Path) -> bool:

@@ -296,7 +296,8 @@ class GuardianClient:
 
         wire = Wire(self.transcript, session.session_id)
         handshake = open_session(config=self.acs_config, session_id=session.session_id, agent_id=self.config.agent_id,
-                                 platform=PLATFORM, methods_implemented=METHODS, start=start, on_wire=wire)
+                                 platform=PLATFORM, methods_implemented=METHODS, start=start, on_wire=wire,
+                                 response_keys=self.config.response_keys)
         session.handshake = handshake
         if wire.request_written and not wire.answer_seen and wire.error is None:
             # The ClientHello went out and no envelope came back, so its gap is explicit, as for a step. Nothing
@@ -382,7 +383,8 @@ class GuardianClient:
         wire = Wire(self.transcript, session_id, token)
         try:
             outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
-                                 session_id=session_id, gate=True, on_wire=wire)
+                                 session_id=session_id, gate=True, on_wire=wire,
+                                 response_keys=self.config.response_keys)
         finally:
             if wire.sending:
                 token.end_send()
