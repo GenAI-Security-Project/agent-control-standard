@@ -167,3 +167,109 @@ def test_a_hanging_session_end_never_holds_up_the_next_session(gateway, harness_
     output = client.post("/v1/responses", json=finbot_request(user="First conversation")).json()["output"]
     assert output[0]["call_id"] == "call_1"
     assert time.monotonic() - started < 3.0
+
+
+def cancel_while_sending(client, monkeypatch, delay):
+    """Hold each toolCallRequest's POST for delay seconds, as a slow network would, and cancel the request while the
+    loop settles the abandoned worker, which is still sending. Returns once the request ended cancelled."""
+    import asyncio
+
+    from acs.client import _exchange
+
+    real_post = _exchange.post
+
+    def post(body, **kwargs):
+        if b"steps/toolCallRequest" in body:
+            time.sleep(delay)
+        return real_post(body, **kwargs)
+
+    monkeypatch.setattr(_exchange, "post", post)
+    gw = client.app.state.gateway
+    session = next(iter(gw.sessions._sessions.values()))
+    payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+    settle = gw._settle_abandoned
+
+    async def run():
+        settling = asyncio.Event()
+
+        async def watched(*args, **kwargs):
+            settling.set()
+            return await settle(*args, **kwargs)
+
+        gw._settle_abandoned = watched
+        task = asyncio.create_task(gw._step(session, "steps/toolCallRequest", payload))
+        await settling.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return "cancelled"
+        return "finished"
+
+    assert client.portal.call(run) == "cancelled"
+    return session
+
+
+def received(path):
+    return path.read_text().split() if path.exists() else []
+
+
+def test_session_end_waits_for_a_cancelled_step_still_on_the_wire(gateway, harness_guardian, upstream, audit,
+                                                                  tmp_path, monkeypatch):
+    count = tmp_path / "guardian-received.txt"
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_COUNT_FILE=str(count)),
+                     ACS_DECISION_TIMEOUT_MS="500")
+    opened(client, upstream)
+    # Past the 1.5 s the loop waits before it settles, and inside the 1.5 s bound sessionEnd waits for the worker.
+    session = cancel_while_sending(client, monkeypatch, 2.0)
+    assert [e["cause"] for e in events(audit, "session_retired")] == ["request_cancelled"]
+    assert wait_for_end(audit, session.session_id)["reason"] == "cancelled"
+    methods = received(count)
+    # The Guardian chains the step it received before the session's end, so the transcript can match it.
+    assert methods.index("steps/toolCallRequest") < methods.index("steps/sessionEnd"), methods
+    lines = [line["envelope"]["method"] for line in lines_of(tmp_path, session.session_id) if line["dir"] == "req"]
+    assert lines[-1] == "steps/sessionEnd" and lines[-2] == "steps/toolCallRequest"
+
+
+def test_a_step_on_the_wire_past_the_bound_skips_session_end(gateway, harness_guardian, upstream, audit, tmp_path,
+                                                             monkeypatch):
+    count = tmp_path / "guardian-received.txt"
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(HARNESS_COUNT_FILE=str(count)),
+                     ACS_DECISION_TIMEOUT_MS="500")
+    opened(client, upstream)
+    session = cancel_while_sending(client, monkeypatch, 5.0)
+    ended = wait_for_end(audit, session.session_id)
+    assert (ended["reason"], ended["cause"]) == ("cancelled", "in_flight")
+    # The held request lands after the bound, and still nothing ends the session behind it.
+    time.sleep(4.0)
+    assert "steps/sessionEnd" not in received(count)
+    assert "steps/sessionEnd" not in [line["envelope"]["method"] for line in lines_of(tmp_path, session.session_id)
+                                      if line["dir"] == "req"]
+
+
+class UnmarkableEnd:
+    """Stalls the sessionEnd answer line past its deadline, then fails the discards line that would mark it."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if kwargs.get("discards"):
+            raise OSError("disk full")
+        if direction == "resp" and envelope is not None:
+            time.sleep(0.5)
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_session_end_whose_late_answer_cant_be_marked_is_retired(gateway, guardian, upstream, audit, tmp_path):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="300")
+    opened(client, upstream)
+    (session_id,) = [e["session_id"] for e in events(audit, "session_opened")]
+    gw = client.app.state.gateway
+    gw.guardian.transcript = UnmarkableEnd(gw.guardian.transcript)
+    gw.bump_epoch()
+    assert wait_for_end(audit, session_id)["cause"] == "decision_timeout"
+    gw.guardian.transcript = gw.guardian.transcript.inner
+    retired = events(audit, "session_retired")
+    assert [(e["method"], e["cause"]) for e in retired] == [("steps/sessionEnd", "discard_unwritten")]

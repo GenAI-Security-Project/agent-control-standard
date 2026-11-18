@@ -202,23 +202,36 @@ class Gateway:
         timeout = session.posture.timeout_for(SESSION_END) if session.posture else self.config.decision_timeout_s
         return timeout + _STEP_GRACE_S
 
-    def _schedule_end(self, session: Session, reason: str) -> None:
+    def _schedule_end(self, session: Session, reason: str, worker: asyncio.Future | None = None) -> None:
         """Send steps/sessionEnd for a session the gateway just dropped, without waiting for it (rehearsal R9).
 
         The drop itself is already done. A session that never negotiated and started sends nothing, and neither does
-        off mode. Safe to call from any thread.
+        off mode. worker is an abandoned step's worker that may still be sending or writing. Safe to call from any
+        thread.
         """
         if self.guardian is None or self.loop is None or session.ending or not _opened(session.handshake):
             return
         session.ending = True
-        future = asyncio.run_coroutine_threadsafe(self._end_session(session, reason), self.loop)
+        future = asyncio.run_coroutine_threadsafe(self._end_session(session, reason, worker), self.loop)
         self._ending.add(future)
         future.add_done_callback(self._ending.discard)
 
-    async def _end_session(self, session: Session, reason: str) -> None:
+    async def _end_session(self, session: Session, reason: str, worker: asyncio.Future | None = None) -> None:
         """sessionEnd under the session lock, after any request still holding it, each wait bounded. A failure is
-        audited as session_ended with its cause, and the transcript records it like any step's."""
+        audited as session_ended with its cause, and the transcript records it like any step's.
+
+        A cancelled request releases the lock while its abandoned worker may still be sending. sessionEnd waits for
+        that worker first, so the Guardian never chains the end ahead of a step already on the wire. Past the bound
+        nothing is sent, and session_ended says in_flight.
+        """
         bound = self._end_bound(session)
+        if worker is not None:
+            # asyncio.wait never raises for the worker's own outcome. Done in any way means it is off the wire.
+            _, pending = await asyncio.wait({worker}, timeout=bound)
+            if pending:
+                _audit("session_ended", session_id=session.session_id, reason=reason, cause="in_flight",
+                       request_id=None)
+                return
         try:
             await asyncio.wait_for(session.lock.acquire(), bound)
         except asyncio.TimeoutError:
@@ -232,6 +245,7 @@ class Gateway:
                     self.executor, functools.partial(self.guardian.end, session, reason, token))
                 result = await asyncio.wait_for(asyncio.shield(future), bound)
                 cause, request_id = result.cause, result.request_id
+                self._honor_retire(session, SESSION_END, token, result)
             except asyncio.TimeoutError:
                 # The worker never came back. Stop it writing or sending anything more, as for a hung step.
                 if not token.cancel():
@@ -1154,7 +1168,7 @@ class Gateway:
         try:
             await asyncio.wait_for(asyncio.shield(future), timeout + _STEP_GRACE_S)
         except asyncio.TimeoutError:
-            self._retire(session, method, token, "step_hung")
+            self._retire(session, method, token, "step_hung", future)
         except Exception as e:  # noqa: BLE001
             # The step already denies, but the transcript now ends on an allow nothing marks. The session takes no
             # more lines, so a verifier never reads a later decision past it.
@@ -1173,10 +1187,10 @@ class Gateway:
             result = await asyncio.wait_for(asyncio.shield(future), timeout)
             self._honor_retire(session, method, token, result)
         except asyncio.TimeoutError:
-            self._retire(session, method, token, "step_hung")
+            self._retire(session, method, token, "step_hung", future)
         except asyncio.CancelledError:
             # The request was cancelled while its claimed step was still landing. Retire, then let it end cancelled.
-            self._retire(session, method, token, "request_cancelled")
+            self._retire(session, method, token, "request_cancelled", future)
             raise
 
     def _honor_retire(self, session: Session, method: str, token: StepToken, result: StepResult) -> bool:
@@ -1190,13 +1204,14 @@ class Gateway:
         self._retire(session, method, token, result.retire)
         return True
 
-    def _retire(self, session: Session, method: str, token: StepToken, cause: str) -> None:
+    def _retire(self, session: Session, method: str, token: StepToken, cause: str,
+                worker: asyncio.Future | None = None) -> None:
         in_flight = token.retire()
         self.sessions.retire(session)
         # in_flight says a line or the send started before retirement and may still land, so a reader expects it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
-        self._schedule_end(session, "cancelled" if cause == "request_cancelled" else "error")
+        self._schedule_end(session, "cancelled" if cause == "request_cancelled" else "error", worker)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny",
                 causes: list[str] | None = None) -> None:
