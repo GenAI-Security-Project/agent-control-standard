@@ -466,6 +466,25 @@ def test_shadow_relays_the_rest_after_an_unparseable_event():
     assert out == b"".join(broken) and seen == []
 
 
+def test_shadow_stops_buffering_an_unterminated_event_at_the_limit_and_audits_once(monkeypatch):
+    from acs_gateway import stream
+
+    held = []
+    feed = stream._Frames.feed
+
+    def watching(self, chunk):
+        held.append(len(self.buffer) - self.start)
+        return feed(self, chunk)
+
+    monkeypatch.setattr(stream._Frames, "feed", watching)
+    raw = [b"data: " + b"x" * 399 for _ in range(50)]
+    out, audits, _ = run(raw, enforce=False, limit=1000)
+    assert out == b"".join(raw)
+    assert max(held) <= 1000
+    assert [a["event"] for a in audits] == ["upstream_error"]
+    assert audits[0]["cause"] == "upstream_too_large"
+
+
 def test_shadow_judges_the_finished_item_type():
     stream = stream_events(message_item("hello", "msg_x"))
     for event in stream:

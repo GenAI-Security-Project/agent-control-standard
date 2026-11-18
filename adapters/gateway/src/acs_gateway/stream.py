@@ -23,7 +23,7 @@ from typing import Any
 
 from starlette.responses import StreamingResponse
 
-from acs_gateway.apply import NEUTRAL_LINE, item_type, message_part, neutral_message, rebuilt_message
+from acs_gateway.apply import item_type, message_part, neutral_message, rebuilt_message
 from acs_gateway.strict import loads_recording
 
 _LIFECYCLE = frozenset({"response.created", "response.in_progress", "response.queued"})
@@ -355,11 +355,16 @@ class StreamEditor:
                                     "message", "reasoning"):
                                 self._record(item)
                             final = final or data["type"] in _TERMINAL or data["type"] == "error"
+                        if frames.pending() > self.limit:
+                            # An event that never ends can't be parsed within the limit. The bytes still relay, but
+                            # nothing more is held for parsing.
+                            raise _Unreadable("upstream_too_large", "event_too_large")
                     except _Unreadable as e:
                         # Shadow only observes, so it relays the rest ungated.
                         self._audit("upstream_error", cause=e.cause, detail=e.detail, mode="shadow", stream=True,
                                     **self._fields)
                         reading = False
+                        frames.buffer.clear()
                 if final:
                     async for chunk in self._tail(source):
                         yield chunk
