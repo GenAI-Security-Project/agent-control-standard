@@ -885,4 +885,284 @@ def test_tilde_block_below_the_sign_off_is_refused(tree):
 def test_ledger_names_the_renderer_divergences():
     text = _section("What the tests enforce and what only a reader catches")
     assert "more text" not in text and "not GitHub's renderer" in text
-    assert "list" in text and "markdown=\"1\"" in text
+    assert "list" in text and "markdown=\"block\"" in text
+
+
+# ---------------------------------------------------------------- Fix round 6: named fixes
+
+C2 = "<!-- claim:C-02 -->"
+N6 = "<!-- claim:N-06 -->"
+
+R6_CAUGHT = [
+    # I1: each suffix is read the way its renderer reads it, so a hard wrap can't split a phrase.
+    ("wrap.markdown", "We compared the lab with the Agent\nGovernance Toolkit.\n", "banned"),
+    ("wrap.htm", "<p>We compared the lab with the Agent\nGovernance Toolkit.</p>\n", "banned"),
+    ("trig_wrap.markdown", "The gateway can\nforge an allow.\n", "unledgered"),
+    ("trig_wrap.htm", "<p>The gateway can\nforge an allow.</p>\n", "unledgered"),
+    # I2: a nested list after a paragraph line inside a list item is its own list on GitHub.
+    ("nested4_ul_N06.md", f"- Check the hooks.\n\n    It isn't ACS-Core conformant. {N6}\n"
+                          "    - The gateway is ACS-Core conformant.\n", "banned"),
+    ("nested4_ol_N06.md", f"1. Check the hooks.\n\n    It sends 4 of the 7 minimum hooks. {N6}\n"
+                          "    - The gateway is ACS-Core conformant.\n", "banned"),
+    ("nested4_ol_C02_forge.md", f"1. Start the stack.\n\n    Signed with ML-DSA-65. {C2}\n"
+                                "    - The gateway can forge an allow.\n", "unledgered"),
+    # I3: table cells render their Markdown on GitHub, so each inner paragraph is its own unit.
+    ("th_agt.md", "<table>\n<tr>\n<th>\n\nVs **Agent Governance** Toolkit\n\n</th>\n</tr>\n</table>\n", "banned"),
+    ("td_N06.md", f"<table><tr>\n<td>\n\nIt isn't ACS-Core conformant. {N6}\n\n"
+                  "The gateway is ACS-Core conformant.\n\n</td>\n</tr></table>\n", "banned"),
+    ("html_td_marker.md", f"<table>\n<tr>\n<td>\n\nSigned with ML-DSA-65. {C2}\n\nThe gateway can forge an allow.\n\n"
+                          "</td>\n</tr>\n</table>\n", "unledgered"),
+    ("html_td_md.md", "<table>\n<tr>\n<td>\n\nWe looked at the **Agent Governance** Toolkit.\n\n</td>\n</tr>\n</table>\n",
+     "banned"),
+    # M1: emphasis marks Python-Markdown leaves as text in raw HTML don't split a phrase.
+    ("summary_agt.md", "<details><summary>We compared with **Agent Governance** Toolkit</summary>\n\nBody.\n\n"
+                       "</details>\n", "banned"),
+    ("summary_code.md", "<details><summary>The lab is `ACS-Core` conformant</summary>\n\nBody.\n\n</details>\n", "banned"),
+]
+
+
+@pytest.mark.parametrize("name,body,kind", R6_CAUGHT, ids=[c[0] for c in R6_CAUGHT])
+def test_round_6_github_reading_is_caught(tree, name, body, kind):
+    assert kind in _kinds(_scan(tree, {name: body}))
+
+
+R6_PASSES = [
+    ("marked_wrap.markdown", f"Decisions are signed with ML-DSA-65,\nas the spec requires. {C2}\n"),
+    ("marked.htm", f"<p>{C2}\nDecisions are signed with ML-DSA-65.</p>\n"),
+    ("script.htm", "<script>\nconst secure = verify(x);\n</script>\n<p>Hello.</p>\n"),
+    ("lazy_indent.md", "Run the stack\n    - or rather, start it.\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", R6_PASSES, ids=[c[0] for c in R6_PASSES])
+def test_round_6_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+def test_markdown_and_html_suffixes_are_one_set_each():
+    assert lab_claims.MARKDOWN_SUFFIXES == {".md", ".markdown"}
+    assert lab_claims.HTML_SUFFIXES == {".html", ".htm"}
+    assert lab_claims.MARKDOWN_SUFFIXES | lab_claims.HTML_SUFFIXES | {".txt"} == lab_claims.SCANNED
+
+
+def test_ledger_sign_gate_names_every_placeholder():
+    line = next(ln for ln in _section("What the tests enforce and what only a reader catches").splitlines()
+                if "--require-signed" in ln).lower()
+    words = set(lab_claims.PLACEHOLDER_LEAD) | {"n/a" if w == "n a" else w for w in lab_claims.PLACEHOLDER_WORDS}
+    missing = sorted(w for w in words if w not in line)
+    assert not missing, f"the sign-gate line doesn't name {missing}"
+
+
+def test_viewer_evidence_on_c04_and_c08():
+    rows = {r[0]: r for r in _rows(_section("Claims"))}
+    assert "labs/finbot/viewer" in rows["C-04"][2]
+    assert "labs/finbot/viewer" in rows["C-08"][2]
+    unconfirmed = rows["C-08"][2].split("Unconfirmed:", 1)[-1]
+    assert "viewer" not in unconfirmed and "LAB-13" not in unconfirmed
+
+
+# ---------------------------------------------------------------- Fix round 6: the container-by-placement matrix
+#
+# Every container a lab page can hold prose in, crossed with every way an author places a phrase in it. Each case puts
+# the phrase in its own unit, optionally beside a sibling unit whose marker would excuse the phrase if it reached it.
+# Every combination here renders as visible prose on GitHub, so each must be caught, and no sibling marker may clear it.
+
+# (kind, sentence parts) where the sentence is prefix + phrase + suffix. The hard wrap goes at the "|" in the phrase.
+MATRIX_PHRASES = {
+    "banned": ("We compared the lab with the ", "Agent|Governance Toolkit", "."),
+    "trigger": ("The gateway can ", "|forge", " an allow."),
+}
+# The sibling's marker excuses the banned phrase (N-10) or covers the trigger (C-02) if it reached the target unit.
+MATRIX_SIBLINGS = {
+    "banned": "The lab doesn't compare ACS with that toolkit. <!-- claim:N-10 -->",
+    "trigger": "Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->",
+}
+MATRIX_EXPECT = {"banned": "banned", "trigger": "unledgered"}
+
+
+def _md_placement(kind: str, placement: str) -> str:
+    """The target sentence in Markdown. A hard wrap is a newline, and containers indent it."""
+    pre, phrase, post = MATRIX_PHRASES[kind]
+    whole = phrase.replace("|", " ").strip()
+    if placement == "wrap":
+        return pre.rstrip() + ("\n" if phrase.startswith("|") else " ") + phrase.replace("|", "\n").lstrip("\n") + post
+    wrapped = {"alone": whole, "emphasis": f"**{whole}**", "code": f"`{whole}`",
+               "link": f"[{whole}](https://example.com)"}[placement]
+    return pre + wrapped + post
+
+
+def _html_placement(kind: str, placement: str) -> str:
+    pre, phrase, post = MATRIX_PHRASES[kind]
+    whole = phrase.replace("|", " ").strip()
+    if placement == "wrap":
+        return pre.rstrip() + ("\n" if phrase.startswith("|") else " ") + phrase.replace("|", "\n").lstrip("\n") + post
+    wrapped = {"alone": whole, "emphasis": f"<strong>{whole}</strong>", "code": f"<code>{whole}</code>",
+               "link": f'<a href="https://example.com">{whole}</a>'}[placement]
+    return pre + wrapped + post
+
+
+def _indent(text: str, pad: str) -> str:
+    """Indent every line after the first, so a hard wrap stays inside its container."""
+    return text.replace("\n", "\n" + pad)
+
+
+def _para(t, s):
+    return (f"{s}\n\n" if s else "") + t + "\n"
+
+
+def _list_after_para(indent):
+    def build(t, s):
+        pad = " " * indent
+        sib = f"{pad}- {s}\n" if s else ""
+        return f"Notes:\n{sib}{pad}- {_indent(t, pad + '  ')}\n"
+    return build
+
+
+def _nested_after_para(indent):
+    # A list item whose own paragraph is followed by a nested list at this indent, the GitHub reading of I2.
+    def build(t, s):
+        outer = " " * (indent - 4)
+        pad = " " * indent
+        para = s or "Read this first."
+        return f"{outer}- Start the stack.\n\n{pad}{para}\n{pad}- {_indent(t, pad + '  ')}\n"
+    return build
+
+
+def _nested(t, s):
+    sib = f"    - {s}\n" if s else ""
+    return f"- Outer item.\n{sib}    - {_indent(t, '      ')}\n"
+
+
+def _quote(t, s):
+    return (f"> {s}\n>\n" if s else "") + "> " + _indent(t, "> ") + "\n"
+
+
+def _quote_list(t, s):
+    sib = f"> - {s}\n" if s else ""
+    return f"> Notes:\n{sib}> - {_indent(t, '>   ')}\n"
+
+
+def _admonition(t, s):
+    return (f"{s}\n\n" if s else "") + "!!! note\n    " + _indent(t, "    ") + "\n"
+
+
+def _collapsible(t, s):
+    return (f"{s}\n\n" if s else "") + '??? note "More"\n    ' + _indent(t, "    ") + "\n"
+
+
+def _deflist(t, s):
+    return (f"Guardian\n:   {s}\n\n" if s else "") + "Gateway\n:   " + _indent(t, "    ") + "\n"
+
+
+def _task(t, s):
+    sib = f"- [x] {s}\n" if s else ""
+    return f"{sib}- [ ] {_indent(t, '      ')}\n"
+
+
+def _footnote(t, s):
+    sib = f"[^1]: {s}\n" if s else ""
+    return f"Text.[^1][^2]\n\n{sib}[^2]: {_indent(t, '    ')}\n"
+
+
+def _table(t, s):
+    sib = f"| {s} | x |\n" if s else ""
+    return f"| A | B |\n|---|---|\n{sib}| {t} | y |\n"
+
+
+def _md_html(tag):
+    # Raw HTML in a Markdown file, with the blank lines GitHub needs to render the Markdown inside it.
+    def build(t, s):
+        if tag == "summary":
+            return f"<details>\n<summary>{t}</summary>\n\n{s or 'Body.'}\n\n</details>\n"
+        # The sibling is a second paragraph in the same element, which GitHub shows as its own paragraph.
+        inner = (f"\n{s}\n" if s else "") + f"\n{t}\n\n"
+        if tag in ("td", "th"):
+            return f"<table>\n<tr>\n<{tag}>\n{inner}</{tag}>\n</tr>\n</table>\n"
+        if tag == "li":
+            return f"<ul>\n<li>\n{inner}</li>\n</ul>\n"
+        head = "<details>\n<summary>More</summary>\n" if tag == "details" else f"<{tag}>\n"
+        close = "</details>" if tag == "details" else f"</{tag}>"
+        return head + inner + close + "\n"
+    return build
+
+
+def _html_file(tag):
+    def build(t, s):
+        if tag == "summary":
+            return f"<details><summary>{t}</summary><p>{s or 'Body.'}</p></details>\n"
+        if tag in ("td", "th"):
+            row = "<tr><{0}>{1}</{0}></tr>\n"
+            return "<table>\n" + (row.format(tag, s) if s else "") + row.format(tag, t) + "</table>\n"
+        if tag == "li":
+            return "<ul>\n" + (f"<li>{s}</li>\n" if s else "") + f"<li>{t}</li>\n</ul>\n"
+        if tag == "details":
+            unit = "<details>\n<summary>More</summary>\n{}\n</details>\n"
+            return (unit.format(s) if s else "") + unit.format(t)
+        return (f"<{tag}>{s}</{tag}>\n" if s else "") + f"<{tag}>{t}</{tag}>\n"
+    return build
+
+
+MD_CONTAINERS = {
+    "paragraph": _para,
+    "list_after_para_0": _list_after_para(0),
+    "list_after_para_2": _list_after_para(2),
+    "list_after_para_3": _list_after_para(3),
+    "list_after_para_4": _nested_after_para(4),
+    "list_after_para_6": _nested_after_para(6),
+    "nested_list": _nested,
+    "blockquote": _quote,
+    "blockquote_list": _quote_list,
+    "admonition": _admonition,
+    "collapsible": _collapsible,
+    "definition_list": _deflist,
+    "task_list": _task,
+    "footnote": _footnote,
+    "table_cell": _table,
+}
+HTML_TAGS = ("details", "summary", "div", "section", "p", "td", "th", "li")
+MD_CONTAINERS.update({f"html_{tag}": _md_html(tag) for tag in HTML_TAGS})
+HTML_CONTAINERS = {f"html_{tag}": _html_file(tag) for tag in HTML_TAGS}
+MATRIX_PLACEMENTS = ("alone", "wrap", "emphasis", "code", "link")
+# A GFM table row ends at the newline, so a hard wrap can't sit inside a Markdown table cell.
+MATRIX_IMPOSSIBLE = {("table_cell", "wrap")}
+
+
+def _matrix() -> list[tuple[str, str, str]]:
+    cases = []
+    for suffixes, containers, place in (((".md", ".markdown"), MD_CONTAINERS, _md_placement),
+                                        ((".html", ".htm"), HTML_CONTAINERS, _html_placement)):
+        for suffix in suffixes:
+            for cname, build in containers.items():
+                for placement in MATRIX_PLACEMENTS:
+                    if (cname, placement) in MATRIX_IMPOSSIBLE:
+                        continue
+                    for kind in MATRIX_PHRASES:
+                        for sibling in (False, True):
+                            body = build(place(kind, placement), MATRIX_SIBLINGS[kind] if sibling else None)
+                            name = f"{cname}-{placement}-{kind}-{'sibling' if sibling else 'alone'}{suffix}"
+                            cases.append((name, body, MATRIX_EXPECT[kind]))
+    return cases
+
+
+MATRIX = _matrix()
+MATRIX_LEDGER = lab_claims.load_ledger(LEDGER)
+
+
+def test_matrix_size():
+    expected = ((len(MD_CONTAINERS) * 2 + len(HTML_CONTAINERS) * 2) * len(MATRIX_PLACEMENTS)
+                - len(MATRIX_IMPOSSIBLE) * 2) * len(MATRIX_PHRASES) * 2
+    print(f"container-by-placement matrix: {len(MATRIX)} cases")
+    assert len(MATRIX) == expected == len({c[0] for c in MATRIX})
+
+
+@pytest.mark.parametrize("name,body,kind", MATRIX, ids=[c[0] for c in MATRIX])
+def test_matrix_phrase_is_caught(tmp_path, name, body, kind):
+    (tmp_path / name).write_text(body, encoding="utf-8")
+    findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
+    assert kind in _kinds(findings), f"{name} passed the check:\n{body}"
+
+
+def test_ledger_names_the_reader_for_each_suffix():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    assert "`.md` and `.markdown` render as Markdown" in text
+    assert "`.html` and `.htm` parse as HTML" in text

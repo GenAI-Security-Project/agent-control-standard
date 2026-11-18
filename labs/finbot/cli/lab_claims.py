@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.1.0. Owner: ACS lab maintainers.
+Version 1.2.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -205,7 +205,11 @@ class Finding:
 
 # The one allowlist of scanned file types: prose an attendee reads. Code comments and identifiers make no claim to
 # attendees, so code is never scanned, and neither are test directories (the ledger's exclusion list names them).
-SCANNED = frozenset({".md", ".markdown", ".html", ".htm", ".txt"})
+# Each prose suffix belongs to exactly one reader. Routing uses these sets in every place, so a new spelling can't be
+# rendered one way and matched another.
+MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
+HTML_SUFFIXES = frozenset({".html", ".htm"})
+SCANNED = MARKDOWN_SUFFIXES | HTML_SUFFIXES | {".txt"}
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
@@ -228,18 +232,24 @@ IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x11
 # The Braille blank draws as a space but isn't default-ignorable, so it is listed on its own.
 BLANKS = frozenset({0x2800})
 # The Markdown extensions mkdocs.yml enables that ship with Python-Markdown and change what a reader sees.
-# md_in_html renders Markdown inside a raw HTML block that carries markdown="1", which _prepare adds.
-MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list", "md_in_html")
+# md_in_html renders Markdown inside a raw HTML block that carries a markdown attribute, which _prepare adds.
+# footnotes ships with Python-Markdown too. GitHub shows each footnote as its own item, so each is its own unit.
+MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list", "md_in_html", "footnotes")
 # Fence lines, so the pre-render steps never touch code. A block-quote prefix may lead them.
 QUOTE_PREFIX = re.compile(r"^((?: {0,3}> ?)*)")
 FENCE_OPEN = re.compile(r" {0,3}(`{3,}|~{3,})")
 # A line GitHub reads as a list item. Only a bullet or an ordered list starting at 1 may interrupt a paragraph.
 LIST_MARKER = re.compile(r" {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
 INTERRUPTS = re.compile(r" {0,3}(?:[-*+]|1[.)])[ \t]+\S")
+# A list marker at any indent. Inside a list item, a nested list may follow a paragraph line at any depth.
+ANY_MARKER = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
 # Block-level HTML whose content GitHub renders as Markdown after a blank line.
 MD_HTML_BLOCKS = ("address|article|aside|blockquote|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|"
-                  "footer|form|header|hgroup|li|main|nav|ol|p|section|summary|ul")
-HTML_OPEN = re.compile(rf"^( {{0,3}})<({MD_HTML_BLOCKS})(?=[\s>])(?![^>]*\bmarkdown\s*=)([^>]*)>", re.I)
+                  "footer|form|header|hgroup|li|main|nav|ol|p|section|summary|table|tbody|td|th|thead|tr|ul")
+HTML_OPEN = re.compile(rf"^ {{0,3}}<(?:{MD_HTML_BLOCKS})(?=[\s>])", re.I)
+# Every block-level opening tag on a line that starts one, so <table><tr> on one line both render their content.
+# md_in_html leaves a child raw when its parent carries no markdown attribute.
+HTML_BLOCK_TAG = re.compile(rf"<({MD_HTML_BLOCKS})(?=[\s>])(?![^>]*\bmarkdown\s*=)([^>]*)>", re.I)
 # Each of these elements is one unit, so one marker clears only the block it sits in.
 BLOCKS = frozenset(
     "address article aside blockquote body caption dd details dialog div dl dt fieldset figcaption figure footer "
@@ -436,16 +446,19 @@ def _walk(html_text: str) -> list[Unit]:
 
 
 def _prepare(source: str) -> str:
-    """Two pre-render steps where Python-Markdown reads less than GitHub shows. Fenced code is left alone.
+    """Pre-render steps where Python-Markdown reads less than GitHub shows. Fenced code is left alone.
 
-    A list item right after a paragraph line starts a list on GitHub, while Python-Markdown folds it into the
-    paragraph, so a blank line goes before it. Markdown inside a raw HTML block renders on GitHub, while
-    Python-Markdown keeps it as raw text, so each block-level opening tag gets markdown="1" for md_in_html.
+    A list item right after a paragraph line starts a list on GitHub, at the top level and at any depth inside a
+    list item, while Python-Markdown folds it into the paragraph, so a blank line goes before it. Markdown inside a
+    raw HTML block renders on GitHub, while Python-Markdown keeps it as raw text, so each block-level opening tag on
+    a line that opens one gets markdown="block" for md_in_html.
     """
     out: list[str] = []
     fence: str | None = None
     previous = ""
     in_list = False
+    # True from a list item until a line back at the left margin after a blank line, which ends the list.
+    in_item = False
     for line in source.splitlines():
         prefix = QUOTE_PREFIX.match(line).group(1)
         body = line[len(prefix):]
@@ -460,14 +473,25 @@ def _prepare(source: str) -> str:
             fence = opener.group(1)
         elif not body.strip():
             in_list = False
+        elif in_item and ANY_MARKER.match(body) and not LIST_MARKER.match(body):
+            # A nested list right after a paragraph line inside an item is its own list on GitHub. Python-Markdown
+            # folds it into the paragraph without the blank line.
+            prev_body = previous[len(QUOTE_PREFIX.match(previous).group(1)):]
+            if prev_body.strip() and not ANY_MARKER.match(prev_body) and not re.match(r"\s*(?:#|\||<)", prev_body):
+                out.append(prefix.rstrip())
+            in_list = True
         elif LIST_MARKER.match(body):
             prev_body = previous[len(QUOTE_PREFIX.match(previous).group(1)):]
             if (not in_list and INTERRUPTS.match(body) and prev_body.strip() and not prev_body.startswith("    ")
                     and not re.match(r" {0,3}(?:#|\||<)", prev_body)):
                 out.append(prefix.rstrip())
-            in_list = True
-        else:
-            line = prefix + HTML_OPEN.sub(r'\1<\2 markdown="1"\3>', body)
+            in_list = in_item = True
+        elif HTML_OPEN.match(body):
+            # "block" rather than "1": md_in_html reads p, summary and td as inline by default, which would join two
+            # paragraphs GitHub shows apart into one unit.
+            line = prefix + HTML_BLOCK_TAG.sub(r'<\1 markdown="block"\2>', body)
+        if body.strip() and not body[0].isspace() and not previous.strip() and not LIST_MARKER.match(body):
+            in_item = False
         out.append(line)
         previous = line
     return "\n".join(out) + "\n"
@@ -512,14 +536,27 @@ def _source_lines(source: str, units: list[Unit]) -> None:
 
 def _units(text: str, suffix: str) -> list[Unit]:
     """Markdown is rendered and HTML is parsed, so each block is a unit. Plain text is one unit per line."""
-    if suffix == ".md":
+    if suffix in MARKDOWN_SUFFIXES:
         units = _walk(_render(_prepare(text)))
         _source_lines(text, units)
         return units
-    if suffix == ".html":
+    if suffix in HTML_SUFFIXES:
         return _walk(text)
     return [Unit(n, line, tuple(m for c in COMMENT.findall(line) for m in MARKER.findall(c)), False)
             for n, line in enumerate(text.splitlines(), 1)]
+
+
+def _seen(text: str, suffix: str) -> str:
+    """The matching copy of a unit, by the reader its suffix names.
+
+    Rendered Markdown can still hold emphasis and code marks as text, where Python-Markdown leaves raw HTML content
+    unrendered and GitHub renders it, so those marks are dropped too.
+    """
+    if suffix in MARKDOWN_SUFFIXES:
+        return _fold(text.translate(MARKUP))
+    if suffix in HTML_SUFFIXES:
+        return _fold(text)
+    return _normalize(text)
 
 
 def _check(unit: Unit, seen: str, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str],
@@ -575,7 +612,7 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
             text = raw.decode("utf-8", errors="replace")
             suffix = path.suffix.lower()
             for unit in _units(text, suffix):
-                seen = _normalize(unit.text) if suffix not in (".md", ".html") else _fold(unit.text)
+                seen = _seen(unit.text, suffix)
                 for kind, shown in _check(unit, seen, ledger, banned, triggers, excused):
                     findings.append(Finding(rel, unit.line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
     return findings, scanned
