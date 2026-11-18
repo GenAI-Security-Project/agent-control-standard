@@ -140,6 +140,8 @@ services:
       - acs-admin-token
       - acs-approver-token
     tmpfs:
+      # The entrypoint's secret copies stay in memory, out of the container's writable layer.
+      - /run/acs
       - /run/acs-state
       - /lab/state/secrets
     volumes:
@@ -190,6 +192,8 @@ services:
       - acs-hmac
       - acs-guardian-key
     tmpfs:
+      # The entrypoint's secret copies stay in memory, out of the container's writable layer.
+      - /run/acs
       - /lab/state/secrets
     volumes:
       - ./state:/lab/state

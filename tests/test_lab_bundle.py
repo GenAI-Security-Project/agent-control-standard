@@ -488,3 +488,22 @@ def test_every_long_running_acs_service_has_a_healthcheck():
     # `up --wait` passes a service with no healthcheck while it restarts in a loop.
     for name in ("finbot", "redis", "acs-gateway", "acs-guardian", "acs-viewer"):
         assert "healthcheck" in _services()[name], name
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Fix round 1: the review's minors
+# ---------------------------------------------------------------------------------------------------------------------
+
+def _uses_run_acs(service: dict) -> bool:
+    env = _env(service) if "environment" in service else {}
+    return "LAB_SECRETS" in env or any(v.startswith("/run/acs/") for v in env.values())
+
+
+def test_run_acs_is_a_tmpfs_wherever_it_is_used():
+    # The entrypoint copies each secret into /run/acs. On a tmpfs the copies live in memory and go with the container,
+    # never in its writable layer, where `docker commit` or `docker export` would carry them out.
+    users = [name for name, service in _services().items() if _uses_run_acs(service)]
+    assert set(users) == {"acs-gateway", "acs-guardian"}
+    for name in users:
+        assert "/run/acs" in _services()[name]["tmpfs"], name
+
