@@ -24,6 +24,11 @@ a null or missing answer, a step answered without a chain head, and a ping. Whil
 transcript ends without a verified sessionEnd, the report says the transcript is not complete and never says the
 whole log verified (PREMORTEM P31). The exit code stays 0 for such a pass.
 
+Three gateway lines are recorded events, never decisions (fix round 4). A gap line, or a JSON object that is no
+JSON-RPC answer written with the cause acs.client gave, is a recorded failure. A discards line, and an answer written
+with a cause, mark a verified answer the gateway withheld. An unsigned -32004 answering a request that names a key_id
+is the one unsigned error specification section 10 allows. Any other unsigned answer still fails.
+
 Lab conventions: the key document format acs-lab-keys/1 (issue #460), the request hash (issue #576, closest
 tracking issue #13), and ML-DSA-65 response signing (issue #316). This module imports acs.core, acs.client and the
 Guardian's chain predicate, and loads cryptography only when a key document is given, so the HMAC mode needs no
@@ -62,6 +67,7 @@ from acs.core import (
     parse_iso8601,
     response_binding_problem,
     response_names_request,
+    response_shape_problem,
     server_hello_problem,
     verify_with_key,
 )
@@ -82,6 +88,11 @@ MAX_UNSETTLED = 20
 # side of the send, and on_wire_failed names a callback failure on "req" or on "resp" alike (fix round 3, F1).
 NEVER_SENT_CAUSES = frozenset({"guardian_url_rejected", "envelope_not_signable", "request_envelope_invalid",
                                "request_exceeds_max_payload"})
+# Section 10 names the one error a Guardian sends unsigned: SIGNATURE_INVALID for a key_id it holds no secret for
+# (specification section 10, "key_id for HMAC", and decision D-039). acs.client reads it the same way (key_id_rejected).
+SIGNATURE_INVALID = -32004
+UNSIGNED_TEXT = ("the response carries no signature. Only system/ping and the -32004 a Guardian sends for a key_id it "
+                 "holds no secret for may go unsigned (specification section 10, decision D-039)")
 # Section 10 asks for at least 32 bytes of secret, the bound acs.client applies.
 MIN_SECRET_BYTES = 32
 # A secret file is a few dozen bytes. The bound keeps a wrong path, such as a log, from being read whole.
@@ -132,6 +143,9 @@ class Report:
     checkpoint_method: str | None = None
     unverified_lines: list[int] = field(default_factory=list)
     unsigned_lines: list[int] = field(default_factory=list)
+    discarded_lines: list[int] = field(default_factory=list)
+    recorded_failures: list[dict[str, Any]] = field(default_factory=list)
+    unsigned_errors: list[dict[str, Any]] = field(default_factory=list)
     response_algorithm: str = ""
     chain_checked: bool = True
     session_id: str | None = None
@@ -152,6 +166,9 @@ class Report:
             "checkpoint_method": self.checkpoint_method,
             "unverified_lines": self.unverified_lines,
             "unsigned_lines": self.unsigned_lines,
+            "discarded_lines": self.discarded_lines,
+            "recorded_failures": self.recorded_failures,
+            "unsigned_errors": self.unsigned_errors,
             "response_algorithm": self.response_algorithm,
             "chain_checked": self.chain_checked,
             "session_id": self.session_id,
@@ -184,8 +201,19 @@ class Report:
         if self.failure is None:
             out.append(self._chain_line())
             if self.unsigned_lines:
-                out.append(f"  no signed decision: request lines {_ranges(self.unsigned_lines)}. No signature covers "
+                out.append(f"  no signed decision: {_request_lines(self.unsigned_lines)}. No signature covers "
                            "what was decided for them.")
+            if self.discarded_lines:
+                out.append(f"  withheld by the gateway: {_request_lines(self.discarded_lines)}. Each signed answer "
+                           "came too late and was not carried out.")
+            if self.recorded_failures:
+                failures = ", ".join(f"{f['line']} ({f['cause']})" for f in self.recorded_failures)
+                out.append(f"  recorded failures: {_noun(self.recorded_failures)} {failures}. No usable answer came "
+                           "back, as the gateway recorded.")
+            if self.unsigned_errors:
+                out.append(f"  unsigned -32004 for an unknown key_id: "
+                           f"{_request_lines([e['line'] for e in self.unsigned_errors])}. The Guardian refused the "
+                           "request's key, so it decided nothing (specification section 10).")
         out.extend(f"  warning: {warning}" for warning in self.warnings)
         out.extend(f"  note: {note}" for note in self.notes)
         return "\n".join(out)
@@ -201,9 +229,19 @@ class Report:
         if not self.unverified_lines and self.checkpoint_method == SESSION_END:
             return f"  chain: {through}. Not complete, since some requests have no signed decision."
         tail = _ranges(self.unverified_lines)
-        tail_text = f" Lines {tail} are not covered by any signed chain_hash." if tail else ""
+        lines = "Line" if len(self.unverified_lines) == 1 else "Lines"
+        verb = "is" if len(self.unverified_lines) == 1 else "are"
+        tail_text = f" {lines} {tail} {verb} not covered by any signed chain_hash." if tail else ""
         return (f"  chain: {through}. tail unverified: no {SESSION_END}.{tail_text} Entries cut from the end "
                 "of the transcript can't be detected.")
+
+
+def _noun(items: Sequence[Any]) -> str:
+    return "request line" if len(items) == 1 else "request lines"
+
+
+def _request_lines(numbers: Sequence[int]) -> str:
+    return f"{_noun(numbers)} {_ranges(numbers)}"
 
 
 def _ranges(numbers: Sequence[int]) -> str:
@@ -258,12 +296,25 @@ def _parse_line(raw: str | bytes, number: int) -> dict[str, Any]:
         raise _Fail(number, "line_invalid", "a request line must carry its envelope as an object")
     if record["dir"] == "resp" and envelope is not None and not isinstance(envelope, dict):
         raise _Fail(number, "line_invalid", "a response line carries an envelope object, or null with a cause")
+    if "discards" in record:
+        # The gateway's discards line, a lab convention until issue #577 settles it: {"dir": "resp", "envelope":
+        # null, "cause": "decision_timeout", "discards": <request_id>}.
+        discards = record["discards"]
+        if record["dir"] != "resp" or envelope is not None or not isinstance(discards, str) or not discards:
+            raise _Fail(number, "line_invalid", "a discards line is a response line with a null envelope that names "
+                                                "one request_id")
     return record
 
 
 def _params(request: Mapping[str, Any]) -> Mapping[str, Any]:
     params = request.get("params")
     return params if isinstance(params, Mapping) else {}
+
+
+def _request_key_id(request: Mapping[str, Any]) -> str | None:
+    signature = _params(request).get("signature")
+    key_id = signature.get("key_id") if isinstance(signature, Mapping) else None
+    return key_id if isinstance(key_id, str) else None
 
 
 def _timestamp(request: Mapping[str, Any]) -> str | None:
@@ -407,6 +458,13 @@ class _Verifier:
         self.request_ids: set[str] = set()
         self.content: dict[int, bytes | None] = {}
         self.warned: set[str] = set()
+        # A request whose signature failed under the HMAC session key. It fails unless its answer is the unsigned
+        # -32004, since a request under a key the Guardian doesn't hold can't verify under the Guardian's secret.
+        self.pending: _Fail | None = None
+        # Request key_ids the Guardian answered with a verified signature, and those it refused with the unsigned
+        # -32004, each with the first line that showed it. One key_id can't be both in one transcript.
+        self.accepted_key_ids: dict[str, int] = {}
+        self.rejected_key_ids: dict[str, int] = {}
 
     # Requests
 
@@ -443,8 +501,12 @@ class _Verifier:
             raise _Fail(line, "session_mismatch", f"the request names session {session_id}, but the transcript "
                                                   f"began with session {self.report.session_id}")
         if self.session_key is not None and not verify_with_key(request, self.session_key):
-            raise _Fail(line, "request_signature_invalid",
-                        "the request signature does not verify under the HMAC session key")
+            self.pending = _Fail(line, "request_signature_invalid",
+                                 "the request signature does not verify under the HMAC session key")
+
+    def raise_pending(self) -> None:
+        if self.pending is not None:
+            raise self.pending
 
     # Responses
 
@@ -457,16 +519,25 @@ class _Verifier:
         container = response.get("result") if "result" in response else response.get("error")
         signature = container.get("signature") if isinstance(container, Mapping) else None
         if not isinstance(signature, Mapping):
-            raise _Fail(resp_line, "unsigned_response", "the response carries no signature")
-        problem = response_binding_problem(request, response)
-        if problem is not None:
-            reason = _BINDING_TEXT.get(problem, f"binding problem {problem!r}")
-            raise _Fail(req_line, "binding", f"the response at line {resp_line} does not answer this request: "
-                                             f"{reason}")
+            if self._key_id_rejected(response):
+                self._unsigned_error(req_line, request, resp_line, response)
+                return
+            self.raise_pending()
+            raise _Fail(resp_line, "unsigned_response", UNSIGNED_TEXT)
+        self.raise_pending()
+        self._check_binding(req_line, request, resp_line, response)
         if self.keys is not None:
             self._verify_mldsa(req_line, request, resp_line, response, signature)
         else:
             self._verify_hmac(resp_line, response)
+        key_id = _request_key_id(request)
+        if key_id is not None:
+            if key_id in self.rejected_key_ids:
+                raise _Fail(resp_line, "unsigned_response",
+                            f"this signed answer accepts key_id {key_id!r}, which the unsigned -32004 at line "
+                            f"{self.rejected_key_ids[key_id]} said the Guardian holds no secret for. That -32004 is "
+                            "not the section 10 exemption, so it is an unsigned answer")
+            self.accepted_key_ids.setdefault(key_id, resp_line)
         if method == HANDSHAKE_METHOD:
             self._check_server_hello(request, resp_line, response)
             return
@@ -477,6 +548,57 @@ class _Verifier:
                 self._checkpoint(req_line, request, resp_line, chain_hash)
         else:
             self.unanswered(req_line, request, None)
+
+    def _check_binding(self, req_line: int, request: dict, resp_line: int, response: dict) -> None:
+        problem = response_binding_problem(request, response)
+        if problem is not None:
+            reason = _BINDING_TEXT.get(problem, f"binding problem {problem!r}")
+            raise _Fail(req_line, "binding", f"the response at line {resp_line} does not answer this request: "
+                                             f"{reason}")
+
+    @staticmethod
+    def _key_id_rejected(response: Mapping[str, Any]) -> bool:
+        """The unsigned -32004, by acs.client's own key_id_rejected rule: an error with that code and no signature."""
+        error = response.get("error") if "result" not in response else None
+        return isinstance(error, Mapping) and error.get("code") == SIGNATURE_INVALID and "signature" not in error
+
+    def _unsigned_error(self, req_line: int, request: dict, resp_line: int, response: dict) -> None:
+        """Accept the section 10 exemption, an unsigned -32004 for a key_id the Guardian holds no secret for.
+
+        Nothing signs it, so it is listed and held like an unanswered request. Two checks keep it to the exemption:
+        the request must name a key_id, as the Guardian answers this only to a readable signature object, and no
+        verified answer in this transcript may accept that key_id.
+        """
+        self._check_binding(req_line, request, resp_line, response)
+        key_id = _request_key_id(request)
+        if key_id is None:
+            raise _Fail(resp_line, "unsigned_response", "an unsigned -32004 answers a request that names no key_id, "
+                                                        f"so it is not the section 10 exemption. {UNSIGNED_TEXT}")
+        if key_id in self.accepted_key_ids:
+            raise _Fail(resp_line, "unsigned_response",
+                        f"an unsigned -32004 refuses key_id {key_id!r}, which the Guardian accepted with the signed "
+                        f"answer at line {self.accepted_key_ids[key_id]}, so it is not the section 10 exemption")
+        self.rejected_key_ids.setdefault(key_id, resp_line)
+        # The Guardian refused this key, so the request's own signature couldn't verify under the Guardian's secret.
+        self.pending = None
+        self.report.unsigned_errors.append({"line": req_line, "code": SIGNATURE_INVALID})
+        self.unanswered(req_line, request, None)
+
+    def recorded_failure(self, req_line: int, request: dict[str, Any], cause: str) -> None:
+        """A gap line or a verbatim non-answer body with the cause acs.client gave: no usable answer came back."""
+        self.raise_pending()
+        self.report.recorded_failures.append({"line": req_line, "cause": cause})
+        self.unanswered(req_line, request, cause)
+
+    def discard(self, line: int, request_id: str, answered: tuple[int, str | None] | None) -> None:
+        """The gateway's discards line: the signed answer on the line before was withheld (lab convention, #577)."""
+        if request_id not in self.request_ids:
+            raise _Fail(line, "discards_invalid", f"the discards line names request_id {request_id!r}, which the "
+                                                  "transcript has not seen")
+        if answered is None or answered[1] != request_id:
+            raise _Fail(line, "discards_invalid", f"the discards line names request_id {request_id!r}, but the line "
+                                                  "before it is not that request's answer")
+        self.report.discarded_lines.append(answered[0])
 
     def _check_server_hello(self, request: dict, resp_line: int, response: dict) -> None:
         """A verified ServerHello must also be one acs.client would negotiate on, by the same rule it applies."""
@@ -633,12 +755,22 @@ def verify_transcript(lines: Iterable[str | bytes], *, key_document: Mapping[str
 def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
     report = verifier.report
     open_request: tuple[int, dict[str, Any]] | None = None
+    # The request line and request_id of the answer on the line just read, the only answer a discards line can mark.
+    answered: tuple[int, str | None] | None = None
     for number, raw in enumerate(lines, start=1):
         report.lines = number
         record = _parse_line(raw, number)
         envelope = record.get("envelope")
+        just_answered, answered = answered, None
+        if "discards" in record:
+            if open_request is not None:
+                raise _Fail(number, "discards_invalid", f"a discards line follows the answer it marks, but request "
+                                                        f"line {open_request[0]} has no answer before it")
+            verifier.discard(number, record["discards"], just_answered)
+            continue
         if record["dir"] == "req":
             if open_request is not None:
+                verifier.raise_pending()
                 verifier.unanswered(*open_request, None)
             verifier.request(number, envelope)
             open_request = (number, envelope)
@@ -647,11 +779,28 @@ def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
             raise _Fail(number, "order", "a response line with no unanswered request line before it")
         req_line, request = open_request
         open_request = None
+        cause = record.get("cause")
         if envelope is None:
-            verifier.unanswered(req_line, request, record.get("cause"))
+            if isinstance(cause, str) and cause:
+                verifier.recorded_failure(req_line, request, cause)
+            else:
+                verifier.raise_pending()
+                verifier.unanswered(req_line, request, cause)
+        elif response_shape_problem(envelope) is not None and isinstance(cause, str) and cause:
+            # The gateway writes any JSON object that is no JSON-RPC answer verbatim with the cause acs.client gave,
+            # such as a 429's {"detail": ...}. Without a cause it is not a line the gateway writes, so it is read as
+            # an answer and fails unsigned.
+            verifier.recorded_failure(req_line, request, cause)
         else:
             verifier.response(req_line, request, number, envelope)
+            request_id = _params(request).get("request_id")
+            if cause is not None:
+                # A JSON-RPC answer carries a cause only when it arrived after the deadline, so it was withheld.
+                report.discarded_lines.append(req_line)
+            else:
+                answered = (req_line, request_id if isinstance(request_id, str) else None)
     if open_request is not None:
+        verifier.raise_pending()
         verifier.unanswered(*open_request, None)
     if report.lines == 0:
         raise _Fail(1, "empty", "the transcript holds no lines")
