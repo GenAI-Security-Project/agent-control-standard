@@ -1,0 +1,18 @@
+{
+  "steps/sessionStart": {},
+  "steps/toolCallRequest": {
+    "tool": {"name": "lookup"},
+    "arguments": {"account": {"value": "example"}}
+  },
+  "steps/toolCallResult": {
+    "tool": {"name": "lookup"},
+    "request_id_ref": "15c962e7-3abc-4dc3-9c57-ddae03c9e231",
+    "exit_status": "success",
+    "outputs": [{"value": {"account": "example"}}],
+    "duration_ms": 10
+  },
+  "steps/sessionEnd": {
+    "reason": "completed",
+    "summary": {"step_count": 1, "decision_failures": {}}
+  }
+}

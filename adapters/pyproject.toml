@@ -14,6 +14,7 @@ requires-python = ">=3.11"
 dependencies = ["rfc8785>=0.1.4,<0.2", "jsonschema[format-nongpl]>=4.25,<5"]
 
 [project.optional-dependencies]
+relay = ["nemo-relay==0.11.1"]
 nat = ["nvidia-nat-core>=1.7,<1.8", "ruamel.yaml>=0.19,<0.20"]
 
 [project.scripts]
@@ -30,6 +31,7 @@ acs-example-guardian = "acs.guardian.example_guardian:main"
 claude_code = "acs.integrations.claude_code"
 cursor = "acs.integrations.cursor"
 nat = "acs.integrations.nat"
+relay = "acs.integrations.relay"
 
 # NAT imports this module at startup, which registers `_type: acs_guardian`.
 [project.entry-points."nat.components"]
