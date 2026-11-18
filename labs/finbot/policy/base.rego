@@ -18,6 +18,11 @@ tool_name := input.payload.tool.name
 # FinBot's arguments arrive wrapped, one {"value": ...} per argument name.
 arg(name) := input.payload.arguments[name].value
 
+# A rule that reads arg(...) judges the call only, so its body starts with tool_call. The result step carries the
+# tool's output and no arguments, so without the guard the rule would read the missing argument as unreadable and
+# deny or ask on the result of a call the pack allowed. A result is judged only by rules that read its output.
+tool_call if input.method == "steps/toolCallRequest"
+
 # The registry holds every tool FinBot declares, filled by tools/pins.py from a real run. A name it doesn't hold
 # denies before any module runs, so a tool nobody reviewed never reaches a module that would let it through.
 registered if data.finbot_lab.tools[tool_name]

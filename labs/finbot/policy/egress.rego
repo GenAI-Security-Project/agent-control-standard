@@ -25,8 +25,9 @@ egress_allowed if {
 }
 
 # No url, one that isn't a string, one with a backslash, a scheme other than http or https, one the pattern can't
-# read, and an empty host all deny.
+# read, and an empty host all deny. The call is judged, not its result, which carries no url.
 deny_codes contains "egress_blocked" if {
+	tool_call
 	tool_name == "systemutils__network_request"
 	not egress_allowed
 }

@@ -170,3 +170,28 @@ test_non_string_url_denies if {
 		with data.finbot_lab.egress_allow as ["status.example"]
 	v.reason_codes == ["egress_blocked"]
 }
+
+# The egress rule reads the call's url argument, so it judges the call only. The result carries no arguments and is
+# judged on its output, which no egress rule reads.
+test_allowed_fetch_result_allows if {
+	v := finbot.verdict with input as result("systemutils__network_request", {"status": 200, "body": "ok"})
+		with data.finbot_lab.tools as tools
+		with data.finbot_lab.egress_allow as ["status.example"]
+	v == {"decision": "allow"}
+}
+
+test_unregistered_result_denies if {
+	v := finbot.verdict with input as result("made_up__tool", {"status": 200}) with data.finbot_lab.tools as tools
+	v.decision == "deny"
+	v.reason_codes == ["tool_unregistered"]
+}
+
+# The pack keeps no state between steps, so a result never knows whether its call was allowed. The default for a
+# registered tool's result is allow unless a result rule reads its output, even with an empty egress allow list,
+# under which no call could have been allowed.
+test_result_without_call_context_follows_the_result_default if {
+	v := finbot.verdict with input as result("systemutils__network_request", {"status": 200, "body": "ok"})
+		with data.finbot_lab.tools as tools
+		with data.finbot_lab.egress_allow as []
+	v == {"decision": "allow"}
+}

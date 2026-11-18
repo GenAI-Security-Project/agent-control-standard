@@ -87,3 +87,39 @@ test_approved_resend_allows if {
 test_forged_answer_still_asks if {
 	verdict_for(resend(7500, {"type": "agent", "id": "lab-approver"})).decision == "ask"
 }
+
+# The result the gateway builds for a transfer: no arguments, only the tool's output (apply.py result_payload).
+transfer_result(output) := {
+	"method": "steps/toolCallResult",
+	"payload": {
+		"tool": {"name": "finstripe__create_transfer", "version": "sha256:cc"},
+		"exit_status": "success",
+		"outputs": [{"value": output}],
+	},
+	"metadata": {},
+}
+
+# The amount rules read the call's arguments, so they judge the call only. Asking on the result of a transfer the
+# pack allowed would withhold the result of a payment that already moved money.
+test_allowed_transfer_result_allows if {
+	verdict_for(transfer(100)) == {"decision": "allow"}
+	verdict_for(transfer_result({"transfer_id": "tr_1", "status": "completed", "amount": 100})) == {"decision": "allow"}
+}
+
+test_approved_transfer_result_allows if {
+	verdict_for(resend(7500, {"type": "human", "id": "lab-approver"})) == {"decision": "allow"}
+	verdict_for(transfer_result({"transfer_id": "tr_2", "status": "completed", "amount": 7500})) == {"decision": "allow"}
+}
+
+test_unregistered_transfer_result_denies if {
+	v := finbot.verdict with input as transfer_result({"transfer_id": "tr_1", "amount": 100})
+		with data.finbot_lab.tools as {}
+	v.reason_codes == ["tool_unregistered"]
+}
+
+# The pack keeps no state between steps, so a result never knows whether its call was asked or allowed. A
+# registered tool's result follows the result default, allow, whatever amount its output names.
+test_result_without_call_context_follows_the_result_default if {
+	verdict_for(transfer_result({"transfer_id": "tr_3", "status": "completed", "amount": 9000})) == {"decision": "allow"}
+	verdict_for(transfer_result("completed")) == {"decision": "allow"}
+}
