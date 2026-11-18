@@ -1211,7 +1211,23 @@ class Gateway:
         # in_flight says a line or the send started before retirement and may still land, so a reader expects it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
+        if cause == "discard_unwritten":
+            self._withhold_end(session)
+            return
         self._schedule_end(session, "cancelled" if cause == "request_cancelled" else "error", worker)
+
+    def _withhold_end(self, session: Session) -> None:
+        """Send no sessionEnd for a session whose transcript ends on an allow it withheld and couldn't mark.
+
+        A sessionEnd tail would make a verifier read the session as complete with that allow carried out. Without it
+        the unmarked allow stays the last line and the session reads as incomplete. A sessionEnd already under way
+        audits its own outcome, so nothing more is said for it here.
+        """
+        if session.ending:
+            return
+        session.ending = True
+        _audit("session_ended", session_id=session.session_id, reason="error", cause="discard_unwritten",
+               request_id=None)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny",
                 causes: list[str] | None = None) -> None:

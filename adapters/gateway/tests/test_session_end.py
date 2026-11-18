@@ -81,7 +81,8 @@ class UnmarkableLine:
         self.inner.append(session_id, direction, envelope, **kwargs)
 
 
-def test_a_retired_session_ends_once_its_request_lets_go(gateway, guardian, upstream, audit, tmp_path):
+def test_a_session_retired_for_an_unmarked_answer_sends_no_session_end(gateway, guardian, upstream, audit, tmp_path):
+    """The withheld allow stays the transcript's last line, so a verifier reads the session as incomplete."""
     client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="300")
     opened(client, upstream)
     gw = client.app.state.gateway
@@ -89,9 +90,16 @@ def test_a_retired_session_ends_once_its_request_lets_go(gateway, guardian, upst
     upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
     client.post("/v1/responses", json=finbot_request(user="First conversation"))
     (retired,) = events(audit, "session_retired")
+    assert retired["cause"] == "discard_unwritten"
     ended = wait_for_end(audit, retired["session_id"])
-    assert ended["reason"] == "error"
-    assert_ends_with_session_end(tmp_path, retired["session_id"], "error")
+    assert (ended["reason"], ended["cause"], ended["request_id"]) == ("error", "discard_unwritten", None)
+    # Give a wrongly scheduled end time to land, then check nothing follows the unmarked allow.
+    time.sleep(1.0)
+    lines = lines_of(tmp_path, retired["session_id"])
+    assert lines[-1]["dir"] == "resp" and lines[-1]["envelope"]["result"]["decision"] == "allow", lines[-2:]
+    assert lines[-2]["envelope"]["method"] == "steps/toolCallRequest", lines[-2:]
+    assert "steps/sessionEnd" not in [line["envelope"]["method"] for line in lines if line["dir"] == "req"]
+    assert len(events(audit, "session_ended")) == 1
 
 
 def test_a_graceful_shutdown_ends_every_open_session(gateway, guardian, upstream, audit, tmp_path):
