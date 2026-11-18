@@ -10,8 +10,11 @@ import tempfile
 from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from acs.client import ResponseKeys
 
 MODES = ("off", "shadow", "enforce")
 DEFAULT_GUARDIAN_URL = "http://127.0.0.1:8787/"
@@ -136,7 +139,7 @@ class GatewayConfig:
     # Spans (LAB-09, issue #582). None leaves tracing off, with no exporter and no network call.
     otlp_endpoint: str | None = None
     # The pinned Guardian decision key (acs.client ResponseKeys), or None for HMAC-SHA256 answers as before.
-    response_keys: Any = None
+    response_keys: ResponseKeys | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -271,7 +274,7 @@ def _upstream_settings(env: Mapping[str, str]) -> tuple[str, Path | None, Path |
     return mode, Path(key) if key else None, Path(recordings) if recordings else None, scenario
 
 
-def _response_keys(env: Mapping[str, str]) -> Any:
+def _response_keys(env: Mapping[str, str]) -> ResponseKeys | None:
     """The decision key the Guardian's answers must verify under, read once at startup (issue #576).
 
     ACS_RESPONSE_ALGORITHMS unset or HMAC-SHA256 gives None, which is the gateway at 031a451. ML-DSA-65 loads the key
