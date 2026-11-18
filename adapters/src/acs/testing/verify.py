@@ -24,10 +24,11 @@ a null or missing answer, a step answered without a chain head, and a ping. Whil
 transcript ends without a verified sessionEnd, the report says the transcript is not complete and never says the
 whole log verified (PREMORTEM P31). The exit code stays 0 for such a pass.
 
-Three gateway lines are recorded events, never decisions (fix round 4). A gap line, or a JSON object that is no
-JSON-RPC answer written with the cause acs.client gave, is a recorded failure. A discards line, and an answer written
-with a cause, mark a verified answer the gateway withheld. An unsigned -32004 answering a request that names a key_id
-is the one unsigned error specification section 10 allows. Any other unsigned answer still fails.
+Three gateway lines are unsigned claims, reported and never read as decisions, and a transcript carrying one is never
+complete (fix rounds 4 and 5). A gap line, or a JSON object that is no JSON-RPC answer written with the cause
+acs.client gave, is a recorded failure. A discards line, and an answer written with the cause decision_timeout, say
+the gateway withheld a verified answer. An unsigned -32004 answering a request that names a key_id is the one unsigned
+error specification section 10 allows. Any other unsigned answer still fails.
 
 Lab conventions: the key document format acs-lab-keys/1 (issue #460), the request hash (issue #576, closest
 tracking issue #13), and ML-DSA-65 response signing (issue #316). This module imports acs.core, acs.client and the
@@ -91,6 +92,8 @@ NEVER_SENT_CAUSES = frozenset({"guardian_url_rejected", "envelope_not_signable",
 # Section 10 names the one error a Guardian sends unsigned: SIGNATURE_INVALID for a key_id it holds no secret for
 # (specification section 10, "key_id for HMAC", and decision D-039). acs.client reads it the same way (key_id_rejected).
 SIGNATURE_INVALID = -32004
+# The one cause the gateway writes on a discards line and on a signed answer: the answer came after the deadline.
+LATE_CAUSE = "decision_timeout"
 UNSIGNED_TEXT = ("the response carries no signature. Only system/ping and the -32004 a Guardian sends for a key_id it "
                  "holds no secret for may go unsigned (specification section 10, decision D-039)")
 # Section 10 asks for at least 32 bytes of secret, the bound acs.client applies.
@@ -204,8 +207,9 @@ class Report:
                 out.append(f"  no signed decision: {_request_lines(self.unsigned_lines)}. No signature covers "
                            "what was decided for them.")
             if self.discarded_lines:
-                out.append(f"  withheld by the gateway: {_request_lines(self.discarded_lines)}. Each signed answer "
-                           "came too late and was not carried out.")
+                out.append(f"  withheld by the gateway: {_request_lines(self.discarded_lines)}. The gateway's unsigned "
+                           "line says it withheld the answer and denied the step as decision_timeout. No signature "
+                           "covers that claim.")
             if self.recorded_failures:
                 failures = ", ".join(f"{f['line']} ({f['cause']})" for f in self.recorded_failures)
                 out.append(f"  recorded failures: {_noun(self.recorded_failures)} {failures}. No usable answer came "
@@ -300,9 +304,10 @@ def _parse_line(raw: str | bytes, number: int) -> dict[str, Any]:
         # The gateway's discards line, a lab convention until issue #577 settles it: {"dir": "resp", "envelope":
         # null, "cause": "decision_timeout", "discards": <request_id>}.
         discards = record["discards"]
-        if record["dir"] != "resp" or envelope is not None or not isinstance(discards, str) or not discards:
-            raise _Fail(number, "line_invalid", "a discards line is a response line with a null envelope that names "
-                                                "one request_id")
+        if (record["dir"] != "resp" or envelope is not None or not isinstance(discards, str) or not discards
+                or record.get("cause") != LATE_CAUSE):
+            raise _Fail(number, "line_invalid", "a discards line is a response line with a null envelope, the cause "
+                                                f"{LATE_CAUSE} and one request_id")
     return record
 
 
@@ -510,18 +515,19 @@ class _Verifier:
 
     # Responses
 
-    def response(self, req_line: int, request: dict[str, Any], resp_line: int, response: dict[str, Any]) -> None:
+    def response(self, req_line: int, request: dict[str, Any], resp_line: int, response: dict[str, Any]) -> bool:
+        """Check one answer. True when it is a verified answer to a step, the only answer the gateway can withhold."""
         method = request.get("method")
         if method == PING_METHOD:
             # Section 13 leaves ping unsigned, so nothing covers it and nothing is chained.
             self.report.unsigned_lines.append(req_line)
-            return
+            return False
         container = response.get("result") if "result" in response else response.get("error")
         signature = container.get("signature") if isinstance(container, Mapping) else None
         if not isinstance(signature, Mapping):
             if self._key_id_rejected(response):
                 self._unsigned_error(req_line, request, resp_line, response)
-                return
+                return False
             self.raise_pending()
             raise _Fail(resp_line, "unsigned_response", UNSIGNED_TEXT)
         self.raise_pending()
@@ -540,7 +546,7 @@ class _Verifier:
             self.accepted_key_ids.setdefault(key_id, resp_line)
         if method == HANDSHAKE_METHOD:
             self._check_server_hello(request, resp_line, response)
-            return
+            return False
         result = response.get("result")
         chain_hash = result.get("chain_hash") if isinstance(result, Mapping) else None
         if isinstance(chain_hash, str):
@@ -548,6 +554,7 @@ class _Verifier:
                 self._checkpoint(req_line, request, resp_line, chain_hash)
         else:
             self.unanswered(req_line, request, None)
+        return True
 
     def _check_binding(self, req_line: int, request: dict, resp_line: int, response: dict) -> None:
         problem = response_binding_problem(request, response)
@@ -747,8 +754,10 @@ def verify_transcript(lines: Iterable[str | bytes], *, key_document: Mapping[str
     report.unsigned_lines.sort()
     after = report.checkpoint_line or 0
     report.unverified_lines = list(range(after + 1, report.lines + 1)) if report.chain_checked else []
+    # A withheld answer rests on an unsigned gateway line anyone who can edit the file can add or remove, and a
+    # complete pass rests on signatures alone (fix round 5, coordinator ruling on I1).
     report.complete = (report.chain_checked and report.checkpoint_method == SESSION_END
-                       and not report.unverified_lines and not report.unsigned_lines)
+                       and not report.unverified_lines and not report.unsigned_lines and not report.discarded_lines)
     return report
 
 
@@ -790,14 +799,20 @@ def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
             # The gateway writes any JSON object that is no JSON-RPC answer verbatim with the cause acs.client gave,
             # such as a 429's {"detail": ...}. Without a cause it is not a line the gateway writes, so it is read as
             # an answer and fails unsigned.
+            if cause in NEVER_SENT_CAUSES:
+                raise _Fail(number, "line_invalid", f"a body came back with the cause {cause}, which says the request "
+                                                    "was never sent. A request that got a body was sent")
             verifier.recorded_failure(req_line, request, cause)
         else:
-            verifier.response(req_line, request, number, envelope)
+            if "cause" in record and cause != LATE_CAUSE:
+                raise _Fail(number, "line_invalid", f"a JSON-RPC answer carries a cause only when it came back late, "
+                                                    f"as {LATE_CAUSE}, not {cause!r}")
+            step_answer = verifier.response(req_line, request, number, envelope)
             request_id = _params(request).get("request_id")
-            if cause is not None:
-                # A JSON-RPC answer carries a cause only when it arrived after the deadline, so it was withheld.
+            if "cause" in record:
+                # Late on arrival, so the gateway withheld it. The cause is the gateway's unsigned claim.
                 report.discarded_lines.append(req_line)
-            else:
+            elif step_answer:
                 answered = (req_line, request_id if isinstance(request_id, str) else None)
     if open_request is not None:
         verifier.raise_pending()

@@ -83,8 +83,12 @@ def test_a_discards_line_marks_the_answer_before_it_as_discarded(hmac_run):
     report = verify(lines, hmac_run)
     assert report.ok, report.to_text()
     assert report.discarded_lines == [req]
-    assert report.complete
-    assert f"withheld by the gateway: request line {req}" in report.to_text()
+    # The discards line is an unsigned gateway claim, so it never yields complete (fix round 5, I1).
+    assert not report.complete
+    text = report.to_text()
+    assert "The whole transcript verified" not in text
+    assert f"withheld by the gateway: request line {req}" in text
+    assert "No signature covers that claim" in text
     assert report.to_json()["discarded_lines"] == [req]
 
 
@@ -329,3 +333,95 @@ def test_the_gateways_in_flight_transcript_stays_tail_unverified():
     assert not report.complete
     assert report.unverified_lines == [5]
     assert report.to_text().startswith("acs-verify: PASS, tail unverified")
+
+
+# Fix round 5: unsigned gateway claims never read as complete, and only the gateway's own shapes are accepted.
+# The reviewer's probes P1 to P6 and I4, each as a red test.
+
+
+@pytest.mark.parametrize("decision", ["deny", "allow"])
+def test_an_inserted_discards_line_never_yields_complete(hmac_run, decision):
+    # Probes P1 and P2: anyone who can edit the file can add this line, so a complete PASS can't rest on it.
+    lines = record_session(hmac_run)
+    resp, req, request_id = answer_line(lines, decision)
+    lines.insert(resp, discards(request_id))
+    report = verify(lines, hmac_run)
+    assert report.ok, report.to_text()
+    assert report.discarded_lines == [req]
+    assert not report.complete
+    assert not report.to_text().startswith("acs-verify: PASS\n")
+
+
+def test_a_verbatim_late_answer_never_yields_complete(hmac_run):
+    lines = record_session(hmac_run)
+    resp, req, _ = answer_line(lines, "allow")
+    record = json.loads(lines[resp - 1])
+    lines[resp - 1] = body_line(record["envelope"], "decision_timeout")
+    report = verify(lines, hmac_run)
+    assert report.discarded_lines == [req]
+    assert not report.complete
+
+
+def test_a_discards_line_after_the_session_end_answer_never_yields_complete(hmac_run):
+    # Probe P6.
+    lines = record_session(hmac_run)
+    end_id = records(lines)[-2]["envelope"]["params"]["request_id"]
+    lines.append(discards(end_id))
+    report = verify(lines, hmac_run)
+    assert report.ok, report.to_text()
+    assert not report.complete
+
+
+@pytest.mark.parametrize("cause", [None, "totally_made_up", "", 0])
+def test_a_discards_line_without_the_decision_timeout_cause_fails(hmac_run, cause):
+    # Probe P3: the gateway writes exactly one cause on a discards line.
+    lines = record_session(hmac_run)
+    resp, _, request_id = answer_line(lines, "allow")
+    record = {"dir": "resp", "envelope": None, "discards": request_id}
+    if cause is not None:
+        record["cause"] = cause
+    lines.insert(resp, json.dumps(record))
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (resp + 1, "line_invalid")
+
+
+@pytest.mark.parametrize("cause", ["", 0, False, {"x": 1}, None, "http_429_error"])
+def test_a_signed_answer_with_any_cause_but_decision_timeout_fails(hmac_run, cause):
+    # Probe P4: a JSON-RPC answer carries a cause only when it came back late.
+    lines = record_session(hmac_run)
+    resp, _, _ = answer_line(lines, "deny")
+    record = json.loads(lines[resp - 1])
+    record["cause"] = cause
+    lines[resp - 1] = json.dumps(record)
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (resp, "line_invalid")
+
+
+def test_a_discards_line_after_the_server_hello_fails(hmac_run):
+    # Probe P5: the handshake is no step, so the gateway never withholds its answer.
+    lines = record_session(hmac_run)
+    hello_id = records(lines)[0]["envelope"]["params"]["request_id"]
+    lines.insert(2, discards(hello_id))
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (3, "discards_invalid")
+
+
+def test_a_discards_line_after_an_unsigned_minus_32004_fails(hmac_run):
+    # I3: an unsigned error decided nothing, so there is no answer to withhold.
+    lines = record_custom(hmac_run, [foreign_key_step])
+    req = len(lines) - 3
+    request_id = records(lines)[req - 1]["envelope"]["params"]["request_id"]
+    lines.insert(req + 1, discards(request_id))
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (req + 2, "discards_invalid")
+
+
+@pytest.mark.parametrize("cause", ["guardian_url_rejected", "envelope_not_signable", "request_envelope_invalid",
+                                   "request_exceeds_max_payload"])
+def test_a_verbatim_body_with_a_never_sent_cause_fails(hmac_run, cause):
+    # I4: a body came back, so the request was sent, and that cause can't be true.
+    lines = record_session(hmac_run)
+    resp, _, _ = answer_line(lines, "deny")
+    lines[resp - 1] = body_line({"detail": "Too Many Requests"}, cause)
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (resp, "line_invalid")
