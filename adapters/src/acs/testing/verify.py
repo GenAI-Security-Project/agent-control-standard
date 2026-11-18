@@ -231,7 +231,13 @@ class Report:
         through = (f"verified through line {self.checkpoint_line} ({self.checkpoint_method})"
                    if self.checkpoint_line else "no checkpoint verified")
         if not self.unverified_lines and self.checkpoint_method == SESSION_END:
-            return f"  chain: {through}. Not complete, since some requests have no signed decision."
+            # Name only the reasons that hold. A withheld answer alone leaves every request with a signed decision.
+            reasons = []
+            if self.unsigned_lines:
+                reasons.append("some requests have no signed decision")
+            if self.discarded_lines:
+                reasons.append("an unsigned gateway line says an answer was withheld")
+            return f"  chain: {through}. Not complete, since {' and '.join(reasons)}."
         tail = _ranges(self.unverified_lines)
         lines = "Line" if len(self.unverified_lines) == 1 else "Lines"
         verb = "is" if len(self.unverified_lines) == 1 else "are"
@@ -304,8 +310,8 @@ def _parse_line(raw: str | bytes, number: int) -> dict[str, Any]:
         # The gateway's discards line, a lab convention until issue #577 settles it: {"dir": "resp", "envelope":
         # null, "cause": "decision_timeout", "discards": <request_id>}.
         discards = record["discards"]
-        if (record["dir"] != "resp" or envelope is not None or not isinstance(discards, str) or not discards
-                or record.get("cause") != LATE_CAUSE):
+        if (record["dir"] != "resp" or "envelope" not in record or envelope is not None
+                or not isinstance(discards, str) or not discards or record.get("cause") != LATE_CAUSE):
             raise _Fail(number, "line_invalid", "a discards line is a response line with a null envelope, the cause "
                                                 f"{LATE_CAUSE} and one request_id")
     return record
@@ -810,7 +816,11 @@ def _walk(verifier: _Verifier, lines: Iterable[str | bytes]) -> None:
             step_answer = verifier.response(req_line, request, number, envelope)
             request_id = _params(request).get("request_id")
             if "cause" in record:
-                # Late on arrival, so the gateway withheld it. The cause is the gateway's unsigned claim.
+                # Late on arrival, so the gateway withheld it. The cause is the gateway's unsigned claim. Only a step
+                # answer can be withheld as a denied step, the rule a discards line follows too (fix round 6, M2).
+                if not step_answer:
+                    raise _Fail(number, "line_invalid", f"the cause {LATE_CAUSE} marks a step answer the gateway "
+                                                        "withheld, and this answer is no verified step answer")
                 report.discarded_lines.append(req_line)
             elif step_answer:
                 answered = (req_line, request_id if isinstance(request_id, str) else None)

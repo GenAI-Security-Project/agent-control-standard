@@ -425,3 +425,68 @@ def test_a_verbatim_body_with_a_never_sent_cause_fails(hmac_run, cause):
     lines[resp - 1] = body_line({"detail": "Too Many Requests"}, cause)
     report = verify(lines, hmac_run)
     assert (report.failure.line, report.failure.code) == (resp, "line_invalid")
+
+
+# Fix round 6: the chain line names the real reason, and a late cause is accepted only on a step answer.
+
+
+def with_late_cause(line):
+    record = json.loads(line)
+    record["cause"] = "decision_timeout"
+    return json.dumps(record)
+
+
+def test_a_late_session_end_answer_names_the_withheld_answer_as_the_reason(hmac_run):
+    # Probe R2: only a withheld answer keeps this transcript from complete, so the chain line must say so.
+    lines = record_session(hmac_run)
+    lines[-1] = with_late_cause(lines[-1])
+    report = verify(lines, hmac_run)
+    assert report.ok, report.to_text()
+    assert report.unsigned_lines == [] and report.discarded_lines == [len(lines) - 1]
+    text = report.to_text()
+    assert "Not complete, since an unsigned gateway line says an answer was withheld." in text
+    assert "some requests have no signed decision" not in text
+
+
+def test_an_unsigned_gap_keeps_the_no_signed_decision_reason(hmac_run):
+    lines = record_session(hmac_run)
+    resp, _, _ = answer_line(lines, "deny")
+    lines[resp - 1] = transcript_line("resp", None, "http_503_error")
+    text = verify(lines, hmac_run).to_text()
+    assert "Not complete, since some requests have no signed decision." in text
+    assert "withheld" not in text.split("chain:")[1].split("\n")[0]
+
+
+def test_both_reasons_are_named_when_both_hold(hmac_run):
+    lines = record_session(hmac_run)
+    resp, _, _ = answer_line(lines, "deny")
+    lines[resp - 1] = transcript_line("resp", None, "http_503_error")
+    lines[-1] = with_late_cause(lines[-1])
+    text = verify(lines, hmac_run).to_text()
+    assert ("Not complete, since some requests have no signed decision and an unsigned gateway line says an answer "
+            "was withheld.") in text
+
+
+def test_a_late_cause_on_the_server_hello_fails(hmac_run):
+    # Probe R1: the handshake is no step, so the gateway never withholds it as one.
+    lines = record_session(hmac_run)
+    lines[1] = with_late_cause(lines[1])
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (2, "line_invalid")
+
+
+def test_a_late_cause_on_an_unsigned_minus_32004_fails(hmac_run):
+    lines = record_custom(hmac_run, [foreign_key_step])
+    resp = len(lines) - 2
+    lines[resp - 1] = with_late_cause(lines[resp - 1])
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (resp, "line_invalid")
+
+
+def test_a_discards_line_with_no_envelope_key_fails(hmac_run):
+    # Probe R3: the gateway always writes "envelope": null on a discards line.
+    lines = record_session(hmac_run)
+    resp, _, request_id = answer_line(lines, "allow")
+    lines.insert(resp, json.dumps({"dir": "resp", "cause": "decision_timeout", "discards": request_id}))
+    report = verify(lines, hmac_run)
+    assert (report.failure.line, report.failure.code) == (resp + 1, "line_invalid")
