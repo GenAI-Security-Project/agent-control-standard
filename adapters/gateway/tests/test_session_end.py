@@ -250,6 +250,65 @@ def cancel_while_sending(client, monkeypatch, delay):
     return session
 
 
+class SlowAnswerLine:
+    """Stalls the next answer line that carries no cause, so it lands after the loop has given up on its step."""
+
+    def __init__(self, inner, stall_s):
+        self.inner, self.stall_s, self.armed = inner, stall_s, True
+
+    def append(self, session_id, direction, envelope, **kwargs):
+        if direction == "resp" and envelope is not None and kwargs.get("cause") is None and self.armed:
+            self.armed = False
+            time.sleep(self.stall_s)
+        self.inner.append(session_id, direction, envelope, **kwargs)
+
+
+def test_a_cancelled_step_whose_allow_lands_sends_no_session_end(gateway, guardian, upstream, audit, tmp_path):
+    """The Guardian answers in time, but the answer line lands after the request was cancelled. The retired token
+    refuses the discards line, so the allow stands unmarked and no sessionEnd may follow it."""
+    import asyncio
+
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="500")
+    opened(client, upstream)
+    gw = client.app.state.gateway
+    session = next(iter(gw.sessions._sessions.values()))
+    gw.guardian.transcript = SlowAnswerLine(gw.guardian.transcript, 2.0)
+    payload = {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
+    settle = gw._settle_abandoned
+
+    async def run():
+        settling = asyncio.Event()
+
+        async def watched(*args, **kwargs):
+            settling.set()
+            return await settle(*args, **kwargs)
+
+        gw._settle_abandoned = watched
+        task = asyncio.create_task(gw._step(session, "steps/toolCallRequest", payload))
+        await settling.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return "cancelled"
+        return "finished"
+
+    assert client.portal.call(run) == "cancelled"
+    (retired,) = events(audit, "session_retired")
+    assert (retired["cause"], retired["in_flight"]) == ("request_cancelled", True)
+    ended = wait_for_end(audit, session.session_id)
+    assert (ended["reason"], ended["cause"], ended["request_id"]) == ("cancelled", "discard_unwritten", None)
+    time.sleep(1.0)
+    gw.guardian.transcript = gw.guardian.transcript.inner
+    lines = lines_of(tmp_path, session.session_id)
+    assert lines[-2]["envelope"]["method"] == "steps/toolCallRequest", lines[-2:]
+    assert lines[-1]["dir"] == "resp" and lines[-1]["envelope"]["result"]["decision"] == "allow", lines[-2:]
+    assert "cause" not in lines[-1] or lines[-1]["cause"] is None
+    assert "steps/sessionEnd" not in [line["envelope"]["method"] for line in lines if line["dir"] == "req"]
+    assert len(events(audit, "session_ended")) == 1
+
+
 def received(path):
     return path.read_text().split() if path.exists() else []
 

@@ -114,6 +114,9 @@ class StepToken:
         self._sending = False
         # Whether a send ever started, so a step settled without its answer still says the Guardian got it.
         self.sent = False
+        # An answer line with no cause landed and no discards line marks it yet. If the loop abandons the step while
+        # this holds, the transcript ends on an answer the gateway never carried out.
+        self._unmarked = False
 
     def retire(self) -> bool:
         """Retire the step. True when a write or the send had already started, which can still land but nothing new
@@ -153,6 +156,19 @@ class StepToken:
         with self._lock:
             self._writing -= 1
 
+    def answer_landed(self) -> None:
+        with self._lock:
+            self._unmarked = True
+
+    def answer_marked(self) -> None:
+        with self._lock:
+            self._unmarked = False
+
+    @property
+    def unmarked(self) -> bool:
+        with self._lock:
+            return self._unmarked
+
     def claim(self, request_id: str) -> bool:
         with self._lock:
             if self._state == "cancelled" or time.monotonic() >= self.deadline:
@@ -185,8 +201,9 @@ def write_line(token: StepToken | None, write: Callable[[], None]) -> bool:
     return True
 
 
-class _DiscardUnwritten(Exception):
-    """The discards line for a withheld late answer could not be written, so its allow stands unmarked."""
+class DiscardUnwritten(Exception):
+    """The discards line for a withheld answer was not written, whether the write raised or a retired token refused
+    it, so the answer stands unmarked."""
 
 
 class _StepRetired(Exception):
@@ -259,6 +276,8 @@ class Wire:
             self.stopped = True
             return
         self.answer_written = True
+        if self.token is not None and cause is None:
+            self.token.answer_landed()
 
 
 class GuardianClient:
@@ -362,10 +381,13 @@ class GuardianClient:
             posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
         try:
             outcome, request_id = self._send(session.session_id, method, payload, posture, token)
-        except _DiscardUnwritten as e:
+        except DiscardUnwritten as e:
             # repr, since an OSError raised with no arguments has no text at all.
             audit_event("gateway_step_error", session_id=session.session_id, method=method, phase="discard_late",
-                        request_id=e.args[0], error=repr(e.__cause__))
+                        request_id=e.args[0],
+                        error=repr(e.__cause__) if e.__cause__ is not None else "refused: the step was retired")
+            # Recorded here as well as in the result, since a loop that abandoned the step never reads the result.
+            session.record_unmarked_answer()
             return StepResult(method, e.args[0], cause="decision_timeout", failure_class="timeout",
                               retire="discard_unwritten", sent=True)
         # The token saw whether the send started. Without one (sessionStart inside the handshake), only an envelope
@@ -432,13 +454,11 @@ class GuardianClient:
                 if not write_line(token, lambda: self.transcript.append(session_id, "resp", wire.body, cause=cause)):
                     return None, request_id
             return (None if late else outcome), request_id
-        if late:
+        if late or (token is not None and token.retired):
             if wire.answer_written and wire.answer_cause is None:
-                # On time when it arrived, late once its line landed: withheld, and the transcript says so.
-                try:
-                    self.discard_late(session_id, request_id, token)
-                except Exception as e:  # noqa: BLE001
-                    raise _DiscardUnwritten(request_id) from e
+                # Withheld: on time when it arrived and late once its line landed, or landed after the loop abandoned
+                # the step. Either way the transcript must say so, and a retired token refuses that line.
+                self.discard_late(session_id, request_id, token)
             return None, request_id
         return outcome, request_id
 
@@ -451,6 +471,17 @@ class GuardianClient:
         return self.step(session, SESSION_END, {"reason": reason}, token)
 
     def discard_late(self, session_id: str, request_id: str, token: StepToken | None) -> None:
-        """Mark the answer on the line before as withheld for lateness (lab convention, issue #577)."""
-        write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause="decision_timeout",
-                                                         discards=request_id))
+        """Mark the answer on the line before as withheld for lateness (lab convention, issue #577).
+
+        The one place a discards line is written, so the one place its absence is decided. DiscardUnwritten when the
+        line did not land for any reason, a raised write or a retired token's refusal alike.
+        """
+        try:
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None,
+                                                                       cause="decision_timeout", discards=request_id))
+        except Exception as e:  # noqa: BLE001
+            raise DiscardUnwritten(request_id) from e
+        if not written:
+            raise DiscardUnwritten(request_id)
+        if token is not None:
+            token.answer_marked()

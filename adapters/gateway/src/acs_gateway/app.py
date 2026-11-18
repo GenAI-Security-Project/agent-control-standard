@@ -56,6 +56,7 @@ from acs_gateway.guardian import (
     StepToken,
 )
 from acs_gateway.sessions import (
+    DISCARD_UNWRITTEN,
     CachedOutcome,
     Session,
     SessionMap,
@@ -202,48 +203,48 @@ class Gateway:
         timeout = session.posture.timeout_for(SESSION_END) if session.posture else self.config.decision_timeout_s
         return timeout + _STEP_GRACE_S
 
-    def _schedule_end(self, session: Session, reason: str, worker: asyncio.Future | None = None) -> None:
+    def _schedule_end(self, session: Session, reason: str) -> None:
         """Send steps/sessionEnd for a session the gateway just dropped, without waiting for it (rehearsal R9).
 
         The drop itself is already done. A session that never negotiated and started sends nothing, and neither does
-        off mode. worker is an abandoned step's worker that may still be sending or writing. Safe to call from any
-        thread.
+        off mode. Safe to call from any thread.
         """
         if self.guardian is None or self.loop is None or session.ending or not _opened(session.handshake):
             return
         session.ending = True
-        future = asyncio.run_coroutine_threadsafe(self._end_session(session, reason, worker), self.loop)
+        future = asyncio.run_coroutine_threadsafe(self._end_session(session, reason), self.loop)
         self._ending.add(future)
         future.add_done_callback(self._ending.discard)
 
-    async def _end_session(self, session: Session, reason: str, worker: asyncio.Future | None = None) -> None:
+    async def _end_session(self, session: Session, reason: str) -> None:
         """sessionEnd under the session lock, after any request still holding it, each wait bounded. A failure is
         audited as session_ended with its cause, and the transcript records it like any step's.
 
-        A cancelled request releases the lock while its abandoned worker may still be sending. sessionEnd waits for
-        that worker first, so the Guardian never chains the end ahead of a step already on the wire. Past the bound
-        nothing is sent, and session_ended says in_flight.
+        A cancelled request releases the lock while its abandoned worker may still be sending. Under the lock,
+        sessionEnd waits for that worker too, so the Guardian never chains the end ahead of a step already on the
+        wire. Past the bound nothing is sent, and session_ended says in_flight. Then it checks the retire cause, which
+        that worker may have just set, and sends nothing after an answer no discards line marks.
         """
         bound = self._end_bound(session)
-        if worker is not None:
-            # asyncio.wait never raises for the worker's own outcome. Done in any way means it is off the wire.
-            _, pending = await asyncio.wait({worker}, timeout=bound)
-            if pending:
-                _audit("session_ended", session_id=session.session_id, reason=reason, cause="in_flight",
-                       request_id=None)
-                return
         try:
             await asyncio.wait_for(session.lock.acquire(), bound)
         except asyncio.TimeoutError:
             _audit("session_ended", session_id=session.session_id, reason=reason, cause="lock_timeout",
                    request_id=None)
             return
-        if session.retire_cause == "discard_unwritten":
-            # A step that held the lock retired the session on an allow it withheld and couldn't mark, after this end
-            # was scheduled. Nothing can retire it again while the lock is held, so this is the last check.
+        cause = None
+        if session.stray is not None:
+            # asyncio.wait never raises for the worker's own outcome. Done in any way means it is off the wire. The
+            # stray is read under the lock, so a request that abandoned its step while holding it has set it.
+            _, pending = await asyncio.wait({session.stray}, timeout=bound)
+            if pending:
+                cause = "in_flight"
+        if cause is None and session.retire_cause == DISCARD_UNWRITTEN:
+            # Every writer of the session is done, so this is the last check before the write.
+            cause = DISCARD_UNWRITTEN
+        if cause is not None:
             session.lock.release()
-            _audit("session_ended", session_id=session.session_id, reason=reason, cause="discard_unwritten",
-                   request_id=None)
+            _audit("session_ended", session_id=session.session_id, reason=reason, cause=cause, request_id=None)
             return
         try:
             token = StepToken(time.monotonic() + bound - _STEP_GRACE_S)
@@ -1180,8 +1181,8 @@ class Gateway:
             # The step already denies, but the transcript now ends on an allow nothing marks. The session takes no
             # more lines, so a verifier never reads a later decision past it.
             _audit("gateway_step_error", phase="discard_late", session_id=session.session_id, method=method,
-                   request_id=request_id, error=str(e))
-            self._retire(session, method, token, "discard_unwritten")
+                   request_id=request_id, error=repr(e.__cause__ if e.__cause__ is not None else e))
+            self._retire(session, method, token, DISCARD_UNWRITTEN)
 
     async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,
                                 timeout: float) -> None:
@@ -1214,16 +1215,23 @@ class Gateway:
     def _retire(self, session: Session, method: str, token: StepToken, cause: str,
                 worker: asyncio.Future | None = None) -> None:
         in_flight = token.retire()
+        if token.unmarked:
+            # The step's answer line landed and no discards line marks it, and now nothing ever will. A worker that
+            # lands one after this point records it itself, and sessionEnd waits for that worker.
+            session.record_unmarked_answer()
+        if worker is not None:
+            session.stray = worker
         self.sessions.retire(session, cause)
         # in_flight says a line or the send started before retirement and may still land, so a reader expects it.
         _audit("session_retired", session_id=session.session_id, method=method, cause=cause,
                request_id=token.request_id, in_flight=in_flight)
-        if cause == "discard_unwritten":
-            self._withhold_end(session)
+        reason = "cancelled" if cause == "request_cancelled" else "error"
+        if session.retire_cause == DISCARD_UNWRITTEN:
+            self._withhold_end(session, reason)
             return
-        self._schedule_end(session, "cancelled" if cause == "request_cancelled" else "error", worker)
+        self._schedule_end(session, reason)
 
-    def _withhold_end(self, session: Session) -> None:
+    def _withhold_end(self, session: Session, reason: str) -> None:
         """Send no sessionEnd for a session whose transcript ends on an allow it withheld and couldn't mark.
 
         A sessionEnd tail would make a verifier read the session as complete with that allow carried out. Without it
@@ -1233,7 +1241,7 @@ class Gateway:
         if session.ending:
             return
         session.ending = True
-        _audit("session_ended", session_id=session.session_id, reason="error", cause="discard_unwritten",
+        _audit("session_ended", session_id=session.session_id, reason=reason, cause=DISCARD_UNWRITTEN,
                request_id=None)
 
     def _reused(self, session: Session, method: str, name: str, call_id: str, decision: str = "deny",

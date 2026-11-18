@@ -131,6 +131,10 @@ def fingerprint(item: dict[str, Any], canonical_arguments: Any = _UNSET) -> str:
     return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
 
 
+# The retire cause for a session whose transcript holds an answer the gateway withheld and couldn't mark.
+DISCARD_UNWRITTEN = "discard_unwritten"
+
+
 @dataclass
 class Session:
     session_id: str
@@ -158,10 +162,18 @@ class Session:
     ordinal: int = 0
     # Set once the gateway scheduled steps/sessionEnd, so a session is never ended twice.
     ending: bool = False
+    # The worker of a step the loop abandoned, which may still be sending or writing. sessionEnd waits for it, so
+    # the end never chains ahead of it and sees any unmarked answer it lands.
+    stray: Any = None
 
     @property
     def retired(self) -> bool:
         return self.retire_cause is not None
+
+    def record_unmarked_answer(self) -> None:
+        """An answer line reached the transcript and its discards line did not. Safe from any thread, and final: no
+        later retirement replaces it, so no sessionEnd ever follows that answer."""
+        self.retire_cause = DISCARD_UNWRITTEN
 
     @property
     def busy(self) -> bool:
@@ -206,7 +218,8 @@ class SessionMap:
 
     def retire(self, session: Session, cause: str) -> None:
         """Take a session out of the map, so the next request for its conversation opens a fresh one."""
-        session.retire_cause = cause
+        if session.retire_cause != DISCARD_UNWRITTEN:
+            session.retire_cause = cause
         for key in [k for k, s in self._sessions.items() if s is session]:
             del self._sessions[key]
 
