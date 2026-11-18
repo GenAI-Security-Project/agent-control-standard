@@ -54,7 +54,7 @@ constraints = [
 
 [[package]]
 name = "acs-adapters"
-version = "0.2.0"
+version = "0.1.5"
 source = { editable = "../" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },
@@ -84,7 +84,7 @@ test = [
 
 [[package]]
 name = "acs-gateway"
-version = "0.1.0"
+version = "0.1.5"
 source = { editable = "." }
 default-groups = ["test"]
 dependencies = [

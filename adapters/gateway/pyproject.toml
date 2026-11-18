@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "acs-gateway"
-version = "0.1.0"
+version = "0.1.5"
 description = "An OpenAI Responses API gateway that makes an unmodified client an ACS Observed Agent"
 readme = "README.md"
 license = "Apache-2.0"
