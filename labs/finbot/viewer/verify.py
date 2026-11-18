@@ -20,6 +20,7 @@ Lab conventions: the key document format acs-lab-keys/1 (issue #460), the reques
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -74,16 +75,27 @@ def load_keys(env: Mapping[str, str]) -> Keys | None:
     return Keys(document=document, key_id=key_id, fingerprints=(fingerprint,) if fingerprint else ())
 
 
+class KeyDocumentUnavailable(Exception):
+    """The settings name a key document that can't be read or used. The viewer pauses until it can (R6)."""
+
+
+# The cap acs.client puts on a key document. The bytes are read and hashed on every poll, so they stay small.
+MAX_KEY_DOCUMENT_BYTES = 1 << 20
+
+
 class KeySource:
-    """The key document the settings name, read again whenever the file changes (fix round 1, I4).
+    """The key document the settings name, read again whenever its bytes change (fix round 1, I4).
 
     generation grows on every change, so the model knows to judge every session again under the new document.
+    The bytes are hashed on every poll, whatever the file's times say (fix round 2, m-2). A document that can't be
+    read or used raises KeyDocumentUnavailable on every poll until it can, and no poll ever falls back to an older
+    document (fix round 2, R6 and m-1).
     """
 
     def __init__(self, env: Mapping[str, str]) -> None:
         self._env = {name: env.get(name, "") for name in (KEY_DOCUMENT_ENV, KEY_ID_ENV, KEY_FINGERPRINT_ENV)}
         self._path = self._env[KEY_DOCUMENT_ENV].strip()
-        self._stamp: tuple[int, int, int] | None = None
+        self._digest: bytes | None = None
         self._keys: Keys | None = None
         self.generation = 0
 
@@ -92,16 +104,23 @@ class KeySource:
         return bool(self._path)
 
     def current(self) -> Keys | None:
+        """The loaded document, or None when the settings name none. Raises while the named one can't be used."""
         if not self._path:
             return None
         try:
-            info = os.stat(self._path)
-            stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
-        except OSError:
-            stamp = None
-        if stamp != self._stamp or self.generation == 0:
-            self._stamp = stamp
-            self._keys = load_keys(self._env) if stamp is not None else None
+            with open(self._path, "rb") as f:
+                data = f.read(MAX_KEY_DOCUMENT_BYTES + 1)
+        except OSError as e:
+            raise KeyDocumentUnavailable(f"the key document can't be read: {e}") from e
+        if len(data) > MAX_KEY_DOCUMENT_BYTES:
+            raise KeyDocumentUnavailable("the key document is larger than 1 MiB")
+        digest = hashlib.sha256(data).digest()
+        if digest != self._digest:
+            # Nothing is stored until a load succeeds, so a failed load is tried again on the next poll.
+            keys = load_keys(self._env)
+            if keys is None:
+                raise KeyDocumentUnavailable("the key document can't be used")
+            self._keys, self._digest = keys, digest
             self.generation += 1
         return self._keys
 

@@ -122,18 +122,137 @@ def test_a_file_vanishing_during_the_listing_drops_nothing_else(tmp_path, key, k
     assert model.drops() == []
 
 
-def test_an_unreadable_directory_forgets_nothing(tmp_path, key, keys, monkeypatch):
+def test_an_unreadable_directory_pauses_the_viewer(tmp_path, key, keys, monkeypatch):
+    # Fix round 2, R4: a listing that fails keeps the rows, since it says nothing about them, and drops every mark to
+    # not checked with the cause on the red line, until a listing succeeds. Before, the marks stood with no pause.
     logs = LabLogs(tmp_path)
     signed_session(logs, key)
     model = Model(logs.transcript_dir, None, keys)
     model.refresh()
+    real = os.scandir
 
     def denied(path):
-        raise PermissionError(path)
+        raise PermissionError(13, "Permission denied", str(path))
 
     monkeypatch.setattr(model_module.os, "scandir", denied)
+    flip_deny(logs.transcript())
+    for _ in range(2):
+        model.refresh()
+        assert len(model.rows_after(0)) == 2 and model.drops() == []
+        assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+        assert model.paused.startswith("checks paused: PermissionError")
+    monkeypatch.setattr(model_module.os, "scandir", real)
     model.refresh()
-    assert len(model.rows_after(0)) == 2 and model.drops() == []
+    assert model.paused is None
+    assert marks(model) == {"echo": ("allow", "not_checked"), "rm": ("DENY", "failed")}
+
+
+def test_a_missing_directory_pauses_the_viewer(tmp_path, key, keys):
+    # Probe p6 a: the directory is removed. Every mark drops, and the line names the cause.
+    import shutil
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    shutil.rmtree(logs.transcript_dir)
+    model.refresh()
+    assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+    assert model.paused.startswith("checks paused: FileNotFoundError")
+
+
+def test_a_key_document_that_cant_be_loaded_pauses_the_viewer(tmp_path, key):
+    # Fix round 2, R6 and m-1: no poll judges under an older document. A document that can't be loaded pauses the
+    # viewer, every poll tries it again, and a good document resumes judging.
+    import json
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(key.document), encoding="utf-8")
+    os.chmod(live, 0o644)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    source = KeySource({"ACS_GUARDIAN_KEYS": str(live)})
+    model = Model(logs.transcript_dir, None, source)
+    model.refresh()
+    assert {verify for _, verify in marks(model).values()} == {"verified"}
+    good = live.read_text(encoding="utf-8")
+    live.write_text(json.dumps({"format": "acs-lab-keys/1", "keys": []}), encoding="utf-8")
+    for _ in range(2):
+        model.refresh()
+        assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+        assert model.paused.startswith("checks paused: KeyDocumentUnavailable")
+    live.write_text(good, encoding="utf-8")
+    model.refresh()
+    assert model.paused is None and {verify for _, verify in marks(model).values()} == {"verified"}
+
+
+def test_a_key_document_load_error_is_tried_again(tmp_path, key, monkeypatch):
+    # Probe p7: load_keys raised once, and the next poll judged under the old document.
+    import json
+
+    import verify as verify_module
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(key.document), encoding="utf-8")
+    os.chmod(live, 0o644)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    source = KeySource({"ACS_GUARDIAN_KEYS": str(live)})
+    model = Model(logs.transcript_dir, None, source)
+    model.refresh()
+    live.write_text(json.dumps({"format": "acs-lab-keys/1", "keys": []}), encoding="utf-8")
+    real, calls = verify_module.load_keys, []
+
+    def once(env):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("load failed")
+        return real(env)
+
+    monkeypatch.setattr(verify_module, "load_keys", once)
+    model.refresh()
+    assert model.paused.startswith("checks paused: RuntimeError")
+    model.refresh()
+    assert len(calls) == 2
+    assert "verified" not in {verify for _, verify in marks(model).values()}
+
+
+def test_a_key_document_rewritten_with_its_mtime_put_back_is_read_again(tmp_path, key):
+    # Fix round 2, m-2, probe p11: the document's bytes are hashed every poll, whatever its times say.
+    import json
+    other = decision_key(tmp_path / "other")
+    live = tmp_path / "live.json"
+    mine, theirs = json.dumps(key.document), json.dumps(other.document)
+    width = max(len(mine), len(theirs))
+    live.write_text(mine.ljust(width), encoding="utf-8")
+    os.chmod(live, 0o644)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(live)}))
+    model.refresh()
+    before = os.stat(live)
+    with live.open("r+", encoding="utf-8") as f:
+        f.write(theirs.ljust(width))
+    os.utime(live, ns=(before.st_atime_ns, before.st_mtime_ns))
+    model.refresh()
+    assert "verified" not in {verify for _, verify in marks(model).values()}
+
+
+def test_an_audit_restart_clears_what_it_joined_onto_transcript_rows(tmp_path, key, keys):
+    # Fix round 2, R7, probe p12: the applied value and conflict flag came from the old log, so they go with it.
+    logs = LabLogs(tmp_path)
+    a = tool_request("rm")
+    logs.pair(a, key.sign(answer(a, "deny"), a))
+    logs.audit("decision_applied", session_id=SESSION_A, request_id=a["params"]["request_id"], decision="allow",
+               guardian_decision="allow")
+    model = Model(logs.transcript_dir, logs.audit_file, keys)
+    model.refresh()
+    [row] = model.rows_after(0)
+    assert (row.applied, row.conflict) == ("allow", True)
+    empty = logs.audit_file.with_suffix(".new")
+    empty.write_bytes(b"")
+    os.replace(empty, logs.audit_file)
+    model.refresh()
+    [row] = model.rows_after(0)
+    assert (row.decision, row.applied, row.conflict, row.mode) == ("deny", None, False, None)
+    assert "conflict" not in (row.note or "")
 
 
 def test_a_replaced_audit_log_does_not_add_its_rows_twice(tmp_path):

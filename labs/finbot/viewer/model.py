@@ -436,9 +436,12 @@ class Model:
         to not checked and paused says why, until a poll succeeds.
         """
         try:
-            self._refresh()
+            listing_error = self._refresh()
         except Exception as e:  # noqa: BLE001
             self.fail_closed(e)
+            return
+        if listing_error is not None:
+            self.fail_closed(listing_error)
         else:
             self.paused = None
 
@@ -455,16 +458,23 @@ class Model:
             # Judged again in full at the next poll that succeeds.
             session.dirty, session.judged_with = True, -1
 
-    def _refresh(self) -> None:
-        listed = self._transcript_files()
-        names = {path.stem for path in listed} if listed is not None else None
-        for session in [s for s in self._sessions.values() if names is not None and s.session_id not in names]:
+    def _refresh(self) -> OSError | None:
+        """One poll. Returns the listing error when the transcript directory can't be listed or is gone. Then no
+        session is read or judged, since nothing can say what the files hold, and the caller pauses every mark (fix
+        round 2, R4). The audit log and the result files carry no mark, so they are still read."""
+        try:
+            listed = self._transcript_files()
+        except OSError as e:
+            self._read_audit_safely()
+            self._read_results()
+            return e
+        names = {path.stem for path in listed}
+        for session in [s for s in self._sessions.values() if s.session_id not in names]:
             # A file no longer listed, deleted or past the newest MAX_SESSIONS, is no longer stat'ed or judged, so
             # its rows go from the table and the beat history rather than keep marks nothing checks (round 4, I-2a).
-            # A listing that failed as a whole forgets nothing.
             gone = not os.path.lexists(session.tail.path)
             self._forget(session, DROP_LEFT if gone else DROP_UNLISTED)
-        for path in listed or []:
+        for path in listed:
             session = self._sessions.get(path.stem)
             if session is None:
                 session = self._sessions[path.stem] = _Session(path.stem, LogTail(path))
@@ -472,15 +482,20 @@ class Model:
                 self._poll_session(session, path)
             except Exception as e:  # noqa: BLE001
                 self._session_failed(session, e)
-        if self.audit_tail is not None:
-            try:
-                self._read_audit()
-            except Exception as e:  # noqa: BLE001
-                # The audit log fills the applied column and its own rows, never a verify mark, so a failure here
-                # stops only that.
-                sys.stderr.write(f"acs-viewer: reading the audit log failed: {escape_text(type(e).__name__)}\n")
+        self._read_audit_safely()
         self._read_results()
         self._judge()
+        return None
+
+    def _read_audit_safely(self) -> None:
+        if self.audit_tail is None:
+            return
+        try:
+            self._read_audit()
+        except Exception as e:  # noqa: BLE001
+            # The audit log fills the applied column and its own rows, never a verify mark, so a failure here stops
+            # only that.
+            sys.stderr.write(f"acs-viewer: reading the audit log failed: {escape_text(type(e).__name__)}\n")
 
     def _poll_session(self, session: _Session, path: Path) -> None:
         session.failed = False
@@ -525,6 +540,11 @@ class Model:
             if row.source == "audit" and not row.gone:
                 self._gone(row)
                 dropped = True
+            elif not row.gone and (row.applied or row.mode or row.conflict or row.gateway_note):
+                # What the old log joined onto a transcript row goes with it. The new log joins again if it says the
+                # same (fix round 2, R7).
+                row.applied, row.mode, row.conflict, row.gateway_note = None, None, False, None
+                self._touch(row)
         self._epoch_at, self._audit_unreadable = None, None
         self._waiting.clear()
         if dropped:
@@ -621,13 +641,12 @@ class Model:
         row.gone = True
         self._touch(row)
 
-    def _transcript_files(self) -> list[Path] | None:
-        """The newest MAX_SESSIONS transcript files, or None when the directory can't be listed. A file that goes
-        between the listing and its stat is skipped alone, so it never empties the listing (final review M-1)."""
-        try:
-            entries = list(os.scandir(self.transcript_dir))
-        except OSError:
-            return None
+    def _transcript_files(self) -> list[Path]:
+        """The newest MAX_SESSIONS transcript files. A file that goes between the listing and its stat is skipped
+        alone, so it never empties the listing (final review M-1). A directory that can't be listed, or is gone,
+        raises, and the poll fails closed: the rows stay, since the failure says nothing about them, and every mark
+        drops to not checked with the cause on the page until a listing succeeds (fix round 2, R4)."""
+        entries = list(os.scandir(self.transcript_dir))
         found = []
         for entry in entries:
             try:
