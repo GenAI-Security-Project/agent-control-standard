@@ -116,6 +116,19 @@ test_backslash_host_blocked if {
 	v.reason_codes == ["egress_blocked"]
 }
 
+# Only http and https reach a host the allow list names. file and gopher never go through, whatever the host.
+test_non_http_scheme_blocked if {
+	every url in ["gopher://status.example/", "file://status.example/etc/passwd", "ftp://status.example/"] {
+		egress_blocked_for(url)
+	}
+}
+
+egress_blocked_for(url) if {
+	v := finbot.verdict with input as fetch(url) with data.finbot_lab.tools as tools
+		with data.finbot_lab.egress_allow as ["status.example"]
+	v.reason_codes == ["egress_blocked"]
+}
+
 test_uppercase_allowed_host if {
 	v := finbot.verdict with input as fetch("HTTPS://STATUS.EXAMPLE:443/health") with data.finbot_lab.tools as tools
 		with data.finbot_lab.egress_allow as ["status.example"]

@@ -38,7 +38,9 @@
             "test_above_threshold_asks",
             "test_forged_answer_still_asks",
             "test_missing_amount_asks",
-            "test_non_number_amount_asks"
+            "test_missing_threshold_asks",
+            "test_non_number_amount_asks",
+            "test_string_threshold_asks"
           ]
         },
         "solution": {
@@ -77,6 +79,7 @@
           "fails": [
             "test_changed_digest_denies_call",
             "test_changed_digest_denies_result",
+            "test_entry_without_digests_denies",
             "test_missing_version_denies_call",
             "test_missing_version_denies_result",
             "test_non_string_version_denies"
