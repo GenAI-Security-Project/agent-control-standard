@@ -29,7 +29,7 @@ The mark is a word, so its meaning never rests on color:
 
 acs-verify (`acs.testing.verify`) runs over the lines the viewer has read from a session file each time the file grows, so its own rules judge each row: the signature under the key its key_id names, the request binding and hash, the key's validity at the request's own time, a request_id seen twice, a request from another session, a cause on a signed answer, and a discards line away from its answer. <!-- claim:C-04 --> It runs keys only and skips the audit chain, so a deleted or reordered entry still reads verified here. lab verify checks the chain over the finished transcript. <!-- claim:N-04 -->
 
-The viewer adds two rules of its own. A file whose requests name a session other than the file's name fails at its first request, since lines copied from another session each pass on their own. Every judge reads the session's file from disk and compares it with a hash of every byte read before, so a mark comes only from bytes on the disk when it runs. A file replaced, cut shorter or edited in place, even at the same size, loses all its rows, and the viewer reads it again from the start. A deleted file's rows leave the table. When the key document changes on disk, every mark judged under the old one reads not checked until its session is judged again, from disk. Between polls a mark is as old as its last judge. <!-- claim:C-04 -->
+The viewer adds two rules of its own. A file whose requests name a session other than the file's name fails at its first request, since lines copied from another session each pass on their own. Every judge reads the session's file from disk and compares it with a hash of every byte read before, so a mark comes only from bytes on the disk when it runs. A judge runs when the file's inode, size, mtime or ctime changes. A file replaced or cut shorter, or edited in a way that moves one of those, even at the same size, loses all its rows at that judge, and the viewer reads it again from the start. A write that moves neither mtime nor ctime, such as a write through a memory map held open on macOS, is caught only when the file next grows or its session is judged for another reason, such as a key change. A file that leaves the directory, or falls out of the 200 newest, loses its rows, and the page names it and says why. When the key document changes on disk, every mark judged under the old one reads not checked until its session is judged again, from disk. A mark is as old as its session's last judge. A changed file is usually judged at the next poll. While many sessions change at once, it waits one poll for each session judged ahead of it, at most 200 polls, 100 seconds, when every followed file changes together. <!-- claim:C-04 -->
 
 A discards line, the gateway's word that it withheld the answer before it, is a row of its own that reads unsigned, since no signature covers it. It marks the answer just before it withheld. A discards line anywhere else fails at its own row and marks no answer.
 
@@ -59,17 +59,17 @@ The viewer runs as the gateway's user, since the gateway writes its logs with mo
 
 ## Limits
 
-Every store is bounded, so a junk or endless log costs bounded memory and bounded time per poll:
+Every store is bounded, so a junk or endless log costs bounded memory and bounded time per poll. Measured in round 4, a session grown to 512 MiB costs one stat a poll once past the cap, 0.14 ms, and the viewer held 45 MiB:
 
 | Bound | Value |
 |---|---|
 | Bytes read from one log per poll | 256 KiB. The next poll carries on |
-| Longest line | 1 MiB. A longer line is one unreadable row, cut short |
+| Longest line | A line still incomplete past 1 MiB is one unreadable row, cut short. A line that completes within a read is kept whole, so one line holds at most about 1.25 MiB |
 | Rows kept | 5000. The oldest go first |
 | Rows in one answer to the page | 500. The page asks again at once while more wait |
 | Rows on the page | 1000. The oldest go first |
-| Session files followed | 200, the most recently changed |
-| Lines judged per session | 2000 lines or 8 MiB. Past it the session's rows read not checked, and the note names the lab command that checks the whole file |
+| Session files followed | 200, the most recently changed. A file that falls out of them loses its rows |
+| Lines judged per session | 2000 lines or 8 MiB. Past it the session's rows read not checked, the note names the lab command that checks the whole file, and the file is read no further unless it is replaced or cut shorter |
 | Judging per poll | 0.25 seconds across sessions, the longest-waiting first. The rest wait for the next poll. A poll always judges at least one session. One judge at the cap, which reads the file, hashes it and checks every line, measured 0.19 seconds on typical lines and 0.24 seconds on lines filling 7.8 MiB, so the worst poll judges for about 0.5 seconds |
 | Audit lines waiting for their step | 10000 |
 | A silent connection | dropped after 10 seconds |
