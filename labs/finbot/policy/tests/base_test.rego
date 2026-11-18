@@ -129,6 +129,22 @@ egress_blocked_for(url) if {
 	v.reason_codes == ["egress_blocked"]
 }
 
+# Node's URL and Python's urlsplit take the host after the last @ before the path, so the host here is evil.example.
+test_host_after_last_at_blocked if {
+	egress_blocked_for("https://u@status.example:1@evil.example/")
+}
+
+test_host_after_last_at_allowed if {
+	v := finbot.verdict with input as fetch("https://a@b@status.example/health") with data.finbot_lab.tools as tools
+		with data.finbot_lab.egress_allow as ["status.example"]
+	v == {"decision": "allow"}
+}
+
+# RE2 case folding matches U+017F (long s) to s, so a case-insensitive scheme would read this as https.
+test_unicode_scheme_blocked if {
+	egress_blocked_for("http\u017f://status.example/")
+}
+
 test_uppercase_allowed_host if {
 	v := finbot.verdict with input as fetch("HTTPS://STATUS.EXAMPLE:443/health") with data.finbot_lab.tools as tools
 		with data.finbot_lab.egress_allow as ["status.example"]

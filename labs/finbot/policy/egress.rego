@@ -4,10 +4,12 @@
 # shape are a lab convention until issue #531, as base.rego says.
 package finbot
 
-# http or https in any case, then optional userinfo, then the host: a bracketed IPv6 literal or everything up to
-# the next separator. A backslash ends the host and never sits in userinfo, since a WHATWG parser reads it as a slash.
-# http://status.example@evil.example/ therefore reads as host evil.example, as a client would send it.
-url_pattern := `^(?i:https?)://(?:[^/?#@\\]*@)?(\[[^\]]*\]|[^/?#:\\]*)`
+# http or https, spelled in ASCII because RE2's case folding matches U+017F to s. Then optional userinfo up to the
+# last @ before the path, as Node's URL and Python's urlsplit read it, then the host: a bracketed IPv6 literal or
+# everything up to the next separator. A backslash ends the host and never sits in userinfo, since a WHATWG parser
+# reads it as a slash. http://status.example@evil.example/ therefore reads as host evil.example, as a client
+# would send it.
+url_pattern := `^[Hh][Tt][Tt][Pp][Ss]?://(?:[^/?#\\]*@)?(\[[^\]]*\]|[^/?#:\\@]*)`
 
 egress_host := lower(match[0][1]) if {
 	url := arg("url")
