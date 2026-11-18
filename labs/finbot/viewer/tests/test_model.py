@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from lab_lines import SESSION_A, SESSION_B, LabLogs, answer, tool_request
 from model import LogTail, Model, escape_text
@@ -205,6 +206,7 @@ def test_waiting_audit_lines_are_keyed_by_session_and_request(tmp_path):
 
 
 def test_a_run_of_unreadable_lines_is_one_row(tmp_path):
+    import model as model_module
     logs = LabLogs(tmp_path)
     logs.transcript_dir.mkdir(parents=True)
     logs.transcript().write_bytes(b"x\n" * 200_000)
@@ -213,9 +215,11 @@ def test_a_run_of_unreadable_lines_is_one_row(tmp_path):
         model.refresh()
     [row] = model.rows_after(0)
     assert row.method == "unreadable"
-    # 200000 lines is past the lines the viewer holds for acs-verify, so the session also says to run lab verify.
-    assert row.note == ("x (200000 unreadable lines) | this session is too long for the viewer to judge. "
-                        "Run lab verify on it")
+    # 200000 lines is past the lines the viewer judges, so the session says to run lab verify, and from the poll that
+    # passes the cap its file is read no further (fix round 4, I-1). The count stops at the lines read by then.
+    count = int(re.match(r"x \((\d+) unreadable lines\) \| ", row.note).group(1))
+    assert model_module.MAX_SESSION_LINES < count < 200_000
+    assert row.note.endswith("this session is too long for the viewer to judge. Run lab verify on it")
 
 
 def test_rows_kept_are_capped_and_the_oldest_go_first(tmp_path, monkeypatch):

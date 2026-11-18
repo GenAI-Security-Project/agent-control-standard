@@ -47,6 +47,8 @@ const beatEl = document.getElementById("beat");
 const detailEl = document.getElementById("detail");
 const emptyEl = document.getElementById("empty");
 const statusEl = document.getElementById("status");
+const droppedEl = document.getElementById("dropped");
+const WAITING_LABEL = beatEl.textContent;
 
 const groups = new Map();
 const paintedBeat = new Map();
@@ -168,7 +170,12 @@ function apply(data) {
       // so whatever the file still holds comes back as new rows.
       const group = groups.get(row.id);
       if (group) {
-        if (group === lastPainted) lastPainted = null;
+        if (group === lastPainted) {
+          // The big label never names a row that has left the table.
+          lastPainted = null;
+          beatEl.textContent = WAITING_LABEL;
+          detailEl.textContent = "";
+        }
         group.remove();
         groups.delete(row.id);
       }
@@ -193,6 +200,13 @@ function apply(data) {
     paintedBeat.delete(oldestId);
   }
   if (newest) newest.scrollIntoView({ block: "end" });
+  // The latest drop, so rows never leave the table without a word on the page.
+  const drops = Array.isArray(data.dropped) ? data.dropped : [];
+  if (drops.length > 0) {
+    const last = drops[drops.length - 1];
+    droppedEl.textContent = "Rows dropped for session " + last.session_id + ": " + last.why + ". ";
+    droppedEl.hidden = false;
+  }
   next = data.next;
   emptyEl.hidden = !data.no_record;
   emptyEl.textContent = data.no_record ? data.no_record_text : "";

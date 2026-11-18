@@ -87,6 +87,13 @@ JUDGE_BUDGET_S = 0.25
 
 TOO_LONG_NOTE = "this session is too long for the viewer to judge. Run lab verify on it"
 CHANGING_NOTE = "the file changed while it was read. Judging it again"
+# Why a session's rows were dropped, as the page says it (round 4).
+DROP_LEFT = "the file left the transcript directory"
+DROP_UNLISTED = "the file is no longer among the newest followed"
+DROP_REPLACED = "the file was replaced or cut shorter, so it is read again"
+DROP_EDITED = "the file no longer holds the bytes read before, so it is read again"
+# Drops the page can name. The newest win.
+MAX_DROPS = 20
 REJUDGE_NOTE = "judging again under the changed key document"
 WITHHELD_NOTE = "the gateway withheld this answer and denied the step (decision_timeout)"
 CLAIM_NOTE = "the gateway says it withheld the answer above and denied the step (decision_timeout)"
@@ -162,9 +169,15 @@ class LogTail:
         self._hash = hashlib.sha256()
 
     def restart(self) -> None:
-        """Read the file again from its start, as for a replaced file."""
+        """Read the file again from its start, as for a replaced file. The next read takes the file's identity
+        afresh, so it doesn't count the same restart twice."""
         self.restarts += 1
         self._offset, self._partial, self._dropping, self._hash = 0, b"", False, hashlib.sha256()
+        self._identity = None
+
+    def outgrown(self, inode: int, size: int) -> bool:
+        """Whether a stat shows a replaced file or one cut shorter, the check _read makes, without reading."""
+        return self._identity is not None and (inode != self._identity[1] or size < self._offset)
 
     def disk_lines(self) -> list[bytes] | None:
         """The complete lines read so far, as the file holds them now, or None when the file no longer holds the
@@ -187,8 +200,9 @@ class LogTail:
         if len(data) != self._offset or hashlib.sha256(data).digest() != self._hash.digest():
             return None
         complete = data[:self._offset - len(self._partial)]
-        # The same split read_new makes, so line numbers match the rows'. A line read_new cut short is longer here,
-        # and both fail it as one line that isn't JSON.
+        # The same split read_new makes, so line numbers match the rows'. A line read_new cut short is whole here, so
+        # acs-verify, which has no line limit, may pass it while the viewer's row for it reads unreadable and not
+        # checked. That row never reads verified, so no mark overclaims.
         return [line for line in complete.split(b"\n") if line]
 
     def read_new(self) -> list[bytes]:
@@ -340,7 +354,9 @@ class _Session:
     tail: LogTail
     restarts: int = 0
     # The file's (inode, size, mtime, ctime) at the last poll. Any change queues the session for judging, and the
-    # judge reads the file from disk. ctime changes on every write and no caller can set it.
+    # judge reads the file from disk. An ordinary write moves ctime, and no caller can set ctime back. A write through a
+    # memory map held open moves neither mtime nor ctime on macOS until the map closes (round 4 review, probe p9), so
+    # such an edit is caught only when the file next grows or is judged for another reason.
     stamp: tuple[int, ...] | None = None
     line_count: int = 0
     size: int = 0
@@ -395,6 +411,7 @@ class Model:
         self._waiting: collections.OrderedDict[tuple[str, str], Mapping[str, Any]] = collections.OrderedDict()
         self._audit_unreadable: Row | None = None
         self._generation_seen: int | None = None
+        self._drops: collections.deque[dict[str, str]] = collections.deque(maxlen=MAX_DROPS)
 
     # Reading
 
@@ -402,9 +419,10 @@ class Model:
         listed = self._transcript_files()
         names = {path.stem for path in listed}
         for session in [s for s in self._sessions.values() if s.session_id not in names]:
-            if not os.path.lexists(session.tail.path):
-                # The file left the directory, so its rows go from the table and from the beat history (F1).
-                self._forget(session)
+            # A file no longer listed, deleted or past the newest MAX_SESSIONS, is no longer stat'ed or judged, so
+            # its rows go from the table and the beat history rather than keep marks nothing checks (round 4, I-2a).
+            gone = not os.path.lexists(session.tail.path)
+            self._forget(session, DROP_LEFT if gone else DROP_UNLISTED)
         for path in listed:
             session = self._sessions.get(path.stem)
             if session is None:
@@ -416,6 +434,12 @@ class Model:
                 stamp = None
             if stamp != session.stamp:
                 session.stamp, session.dirty = stamp, True
+            if session.too_long:
+                # Past the cap the tail stops and nothing is read or hashed again, so the session costs one stat a
+                # poll however large the file grows (round 4, I-1). A replaced or shortened file starts over.
+                if stamp is None or not session.tail.outgrown(stamp[0], stamp[1]):
+                    continue
+                self._start_over(session, DROP_REPLACED)
             self._read_session(session)
         if self.audit_tail is not None:
             for raw in self.audit_tail.read_new():
@@ -470,21 +494,36 @@ class Model:
         if session.tail.restarts != session.restarts:
             # Replaced or cut shorter, the fast path. A same-size edit is caught when the session is judged.
             session.restarts = session.tail.restarts
-            self._drop_session_rows(session)
+            self._drop_session_rows(session, DROP_REPLACED)
             session.reset()
         for raw in raws:
             self._transcript_line(session, raw)
 
-    def _drop_session_rows(self, session: _Session) -> None:
-        """Drop every row the session holds, from the table and the beat history. The file is read again from the
-        start, so each row it still holds comes back, judged from the bytes on disk."""
+    def _start_over(self, session: _Session, why: str) -> None:
+        """Drop the session's rows and read its file again from the start."""
+        self._drop_session_rows(session, why)
+        session.reset()
+        session.tail.restart()
+        session.restarts = session.tail.restarts
+
+    def _drop_session_rows(self, session: _Session, why: str) -> None:
+        """Drop every row the session holds, from the table and the beat history, and say so on the page. A file
+        read again from the start brings back each row it still holds, judged from the bytes on disk."""
+        dropped = False
         for row in session.rows:
             if row.id in self._rows and not row.gone:
                 self._gone(row)
+                dropped = True
         self._history.forget(session.session_id)
+        if dropped:
+            self._drops.append({"t": receipt_time(), "session_id": session.session_id, "why": why})
 
-    def _forget(self, session: _Session) -> None:
-        self._drop_session_rows(session)
+    def drops(self) -> list[dict[str, str]]:
+        """The latest drops, oldest first, each naming the file's session and why its rows went, escaped once."""
+        return [{key: escape_text(value) for key, value in drop.items()} for drop in self._drops]
+
+    def _forget(self, session: _Session, why: str) -> None:
+        self._drop_session_rows(session, why)
         del self._sessions[session.session_id]
 
     def _gone(self, row: Row) -> None:
@@ -689,31 +728,42 @@ class Model:
     def _judge_session(self, session: _Session, keys: Any | None) -> None:
         from verify import verify_session
 
+        session.rows = [row for row in session.rows if row.id in self._rows and not row.gone]
+        if session.too_long:
+            # Checked before any disk read, so a session past the cap costs nothing more to judge (round 4, I-1). The
+            # file name check needs no disk read, so it still fails a copied file.
+            name = self._name_problem(session)
+            marks = ({row.id: self._mark(row, session, name) for row in session.rows} if name is not None else
+                     {row.id: ("not_checked" if row.answered else "no_answer", TOO_LONG_NOTE) for row in session.rows})
+            self._apply_marks(session, marks)
+            return
         lines = session.tail.disk_lines()
         if lines is None:
             # The file no longer holds the bytes its rows came from. Drop them and read it again from the start, so
             # every mark below comes from bytes on disk now (round 3, F1).
-            self._drop_session_rows(session)
-            session.tail.restart()
+            self._start_over(session, DROP_EDITED)
             self._read_session(session)
-            lines = session.tail.disk_lines()
+            lines = None if session.too_long else session.tail.disk_lines()
         session.rows = [row for row in session.rows if row.id in self._rows and not row.gone]
         name = self._name_problem(session)
-        if lines is None:
+        if lines is None and session.too_long:
+            marks = {row.id: ("not_checked" if row.answered else "no_answer", TOO_LONG_NOTE) for row in session.rows}
+        elif lines is None:
             # Still changing under the reader. Nothing is judged, and the next poll tries again.
             session.dirty = True
             marks = {row.id: (self._unchecked(row), CHANGING_NOTE) for row in session.rows}
         elif name is not None:
             # A file holding another session's requests fails whatever the session's mode (round 3, N1).
             marks = {row.id: self._mark(row, session, name) for row in session.rows}
-        elif session.too_long:
-            marks = {row.id: ("not_checked" if row.answered else "no_answer", TOO_LONG_NOTE) for row in session.rows}
         elif keys is None or (session.first_algorithm not in (None, ML_DSA_65)):
             # No key document, or an HMAC session: nothing here can check it, so no row reads verified (I2).
             marks = {row.id: (self._unchecked(row), None) for row in session.rows}
         else:
             verdict = verify_session(lines, keys)
             marks = {row.id: self._mark(row, session, verdict) for row in session.rows}
+        self._apply_marks(session, marks)
+
+    def _apply_marks(self, session: _Session, marks: dict[int, tuple[str, str | None]]) -> None:
         for row in session.rows:
             mark, note = marks[row.id]
             if (row.verify, row.check_note) != (mark, note):

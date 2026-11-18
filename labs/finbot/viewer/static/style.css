@@ -81,6 +81,12 @@ table {
   font-size: 0.8rem;
 }
 
+.dropped {
+  display: block;
+  font-weight: 700;
+  color: #ffd166;
+}
+
 th {
   text-align: left;
   font-weight: 700;

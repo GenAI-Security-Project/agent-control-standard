@@ -555,3 +555,97 @@ def test_a_key_change_greys_sessions_waiting_to_be_judged_again(tmp_path, key, k
     assert sorted(r.verify for r in got.values()) == ["failed", "not_checked"]
     waiting = next(r for r in got.values() if r.verify == "not_checked")
     assert "judging again" in waiting.note
+
+
+# Fix round 4
+
+
+def test_a_session_past_the_cap_is_never_read_or_hashed_again(tmp_path, key, keys, monkeypatch):
+    # I-1: once a session passes the cap, the tail stops and a judge reads nothing from disk, so a poll costs the
+    # same however large the file grows.
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_SESSION_LINES", 4)
+    logs = LabLogs(tmp_path)
+    for tool in ("a", "b", "c"):
+        req = tool_request(tool)
+        logs.pair(req, key.sign(answer(req, "allow"), req))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    session = model._sessions[SESSION_A]
+    assert session.too_long
+    stopped_at = session.tail._offset
+
+    def no_disk(self):
+        raise AssertionError("a session past the cap was read from disk")
+
+    monkeypatch.setattr(model_module.LogTail, "disk_lines", no_disk)
+    for tool in ("d", "e", "f"):
+        req = tool_request(tool)
+        logs.pair(req, key.sign(answer(req, "allow"), req))
+        model.refresh()
+    assert session.tail._offset == stopped_at
+    assert {r.verify for r in model.rows_after(0)} == {"not_checked"}
+
+
+def test_a_session_past_the_cap_replaced_by_a_short_file_starts_over(tmp_path, key, keys, monkeypatch):
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_SESSION_LINES", 4)
+    logs = LabLogs(tmp_path)
+    for tool in ("a", "b", "c"):
+        req = tool_request(tool)
+        logs.pair(req, key.sign(answer(req, "allow"), req))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    assert model._sessions[SESSION_A].too_long
+    fresh = tool_request("only")
+    replacement = logs.transcript().with_suffix(".new")
+    replacement.write_bytes(b"")
+    os.replace(replacement, logs.transcript())
+    logs.pair(fresh, key.sign(answer(fresh, "allow"), fresh))
+    model.refresh()
+    assert [(r.tool, r.verify) for r in model.rows_after(0)] == [("only", "verified")]
+
+
+def test_a_session_that_leaves_the_newest_listing_is_forgotten(tmp_path, key, keys, monkeypatch):
+    # I-2a, probe p10: a followed file that falls out of the newest MAX_SESSIONS is no longer stat'ed, so its rows
+    # go, as for a deleted file, rather than keep marks nothing checks again.
+    import time as time_module
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_SESSIONS", 3)
+    logs = LabLogs(tmp_path)
+    a, b = tool_request("echo"), tool_request("wire_money")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    logs.pair(b, key.sign(answer(b, "deny"), b))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    assert {r.verify for r in model.rows_after(0)} == {"verified"}
+    for number in range(3):
+        time_module.sleep(0.01)
+        (logs.transcript_dir / f"newer{number}.jsonl").write_bytes(b"")
+    model.refresh()
+    assert [r for r in model.rows_after(0) if r.session_id == SESSION_A] == []
+    assert SESSION_A not in model._sessions
+    assert {"session_id": SESSION_A, "why": "the file is no longer among the newest followed"}.items() <= \
+        model.drops()[-1].items()
+
+
+def test_dropped_rows_are_announced(tmp_path, key, keys):
+    # Round 4 minor: a drop names the file and why, so rows never vanish without a word.
+    logs = LabLogs(tmp_path)
+    a = tool_request("echo")
+    logs.pair(a, key.sign(answer(a, "allow"), a))
+    model = Model(logs.transcript_dir, None, keys)
+    model.refresh()
+    os.unlink(logs.transcript())
+    model.refresh()
+    [drop] = model.drops()
+    assert drop["session_id"] == SESSION_A
+    assert drop["why"] == "the file left the transcript directory"
+    flip = LabLogs(tmp_path / "flip")
+    b = tool_request("wire_money")
+    flip.pair(b, key.sign(answer(b, "deny"), b))
+    model = Model(flip.transcript_dir, None, keys)
+    model.refresh()
+    flip_deny(flip.transcript())
+    model.refresh()
+    assert model.drops()[-1]["why"] == "the file no longer holds the bytes read before, so it is read again"

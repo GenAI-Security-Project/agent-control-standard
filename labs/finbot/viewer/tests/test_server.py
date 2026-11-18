@@ -266,3 +266,15 @@ def test_a_silent_client_is_dropped(start, monkeypatch):
 def test_the_handler_has_a_socket_timeout():
     assert 0 < viewer_server.HANDLER_TIMEOUT_S <= 30
     assert viewer_server.ViewerHandler.timeout == viewer_server.HANDLER_TIMEOUT_S
+
+
+def test_dropped_rows_reach_the_page_escaped(start, logs):
+    port = start()
+    req = tool_request("echo")
+    logs.pair(req, answer(req, "allow"))
+    rows(port)
+    os.unlink(logs.transcript())
+    body = rows(port)
+    [drop] = body["dropped"]
+    assert drop["session_id"] == SESSION_A and drop["why"] == "the file left the transcript directory"
+    assert set(drop) == {"t", "session_id", "why"}

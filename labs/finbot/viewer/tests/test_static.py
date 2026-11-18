@@ -90,3 +90,18 @@ def test_the_page_removes_rows_the_server_says_are_gone():
     # Round 3 F1: rows of a deleted, replaced or edited file come once more as gone, and the page drops them.
     script = read("app.js")
     assert "row.gone" in script and ".remove()" in script
+
+
+def test_the_page_clears_a_beat_whose_row_is_gone_and_names_the_drop():
+    # Round 4 minor: the big label never names a row that left, and a drop is said on the page.
+    script = read("app.js")
+    gone_branch = script.split("if (row.gone) {")[1].split("continue;")[0]
+    assert "beatEl.textContent" in gone_branch and "detailEl.textContent" in gone_branch
+    assert 'id="dropped"' in read("index.html")
+    assert "data.dropped" in script
+
+
+def test_the_legend_names_the_edit_the_viewer_can_miss():
+    # Round 4 I-2b: a write through a memory map moves neither mtime nor ctime on macOS.
+    page = " ".join(read("index.html").split())
+    assert "memory map" in page
