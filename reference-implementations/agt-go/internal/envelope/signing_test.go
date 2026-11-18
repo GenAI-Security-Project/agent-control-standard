@@ -1,12 +1,11 @@
 package envelope
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"os"
 	"testing"
-
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // testdata/vectors.json was computed with Python's json, hmac and hashlib,

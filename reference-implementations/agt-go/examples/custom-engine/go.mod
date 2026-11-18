@@ -2,10 +2,7 @@ module github.com/GenAI-Security-Project/agent-control-standard/reference-implem
 
 go 1.27.4
 
-require (
-	github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go v0.0.0
-	github.com/go-json-experiment/json v1.27.2
-)
+require github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go v0.0.0
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect

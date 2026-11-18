@@ -5,14 +5,13 @@ package agtbridge_test
 import (
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"

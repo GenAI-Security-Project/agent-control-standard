@@ -2,18 +2,17 @@
 // ACS hashes and signs: the §8.2 chain digest, the §10 signed input and
 // ContextEntry.request_hash.
 //
-// The canonicalizer is the one in the upstream of Go's encoding/json/v2,
-// which implements RFC 8785 directly. Go's encoding/json v1 is not used for
-// canonical bytes: it escapes <, > and & and U+2028 and U+2029, and it
-// formats numbers its own way.
+// The canonicalizer is jsontext.Value.Canonicalize from Go's
+// encoding/json/jsontext, which implements RFC 8785 directly. Go's
+// encoding/json v1 is not used for canonical bytes: it escapes <, > and &
+// and U+2028 and U+2029, and it formats numbers its own way.
 package jcs
 
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/jsontext"
 	"fmt"
-
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 // Canonicalize returns the RFC 8785 canonical form of the JSON text b.

@@ -17,6 +17,7 @@ package agtbridge
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -24,8 +25,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"

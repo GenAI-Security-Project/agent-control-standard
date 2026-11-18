@@ -1,13 +1,12 @@
 package chain
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 )
