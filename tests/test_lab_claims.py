@@ -260,7 +260,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-07", "C-08", "C-11", "C-12")
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -598,7 +598,6 @@ CAUGHT = [
     ("fence_marker.md", "```\nThe lab is ACS-Core conformant. <!-- claim:N-06 -->\n```\n"),
     ("fence_indented4.md", "Intro.\n\n    ```\nACS guarantees every attack is stopped.\n\n    ```\n"),
     ("fence_shorter_close.md", "````\n```\n````\nACS guarantees safety.\n"),
-    ("fence_in_quote.md", "> ```\n> ACS guarantees safety.\n> ```\n"),
     ("quote_list.md", "> - Keys are verified. <!-- claim:C-03 -->\n> - ACS guarantees safety.\n"),
     ("html_list.md", "<ul>\n<li>Keys are verified. <!-- claim:C-03 --></li>\n<li>ACS guarantees safety.</li>\n</ul>\n"),
     ("quote_table.md", "> | a | b |\n> |---|---|\n> | ok <!-- claim:C-03 --> | x |\n> | ACS guarantees safety | y |\n"),
@@ -953,12 +952,6 @@ def test_ledger_sign_gate_names_every_placeholder():
     assert not missing, f"the sign-gate line doesn't name {missing}"
 
 
-def test_viewer_evidence_on_c04_and_c08():
-    rows = {r[0]: r for r in _rows(_section("Claims"))}
-    assert "labs/finbot/viewer" in rows["C-04"][2]
-    assert "labs/finbot/viewer" in rows["C-08"][2]
-    unconfirmed = rows["C-08"][2].split("Unconfirmed:", 1)[-1]
-    assert "viewer" not in unconfirmed and "LAB-13" not in unconfirmed
 
 
 # ---------------------------------------------------------------- Fix round 6: the container-by-placement matrix
@@ -972,32 +965,43 @@ MATRIX_PHRASES = {
     "banned": ("We compared the lab with the ", "Agent|Governance Toolkit", "."),
     "trigger": ("The gateway can ", "|forge", " an allow."),
 }
-# The sibling's marker excuses the banned phrase (N-10) or covers the trigger (C-02) if it reached the target unit.
-MATRIX_SIBLINGS = {
-    "banned": "The lab doesn't compare ACS with that toolkit. <!-- claim:N-10 -->",
-    "trigger": "Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->",
+# The reverse direction: the same phrases said honestly, each carrying its own row's marker at the end.
+HONEST_PHRASES = {
+    "banned": ("The lab isn't benchmarked against the ", "Agent|Governance Toolkit", ". <!-- claim:N-10 -->"),
+    "trigger": ("Anyone holding the HMAC key can ", "|forge", " an allow. <!-- claim:C-04 -->"),
 }
+# The sibling's marker excuses the banned phrase (N-10) or covers the trigger (C-02) if it reached the target unit.
+# It sits after its sentence or, as an author may write it, before it.
+MATRIX_SIBLINGS = {
+    "banned": {"sibling": "The lab doesn't compare ACS with that toolkit. <!-- claim:N-10 -->",
+               "sibling_first": "<!-- claim:N-10 --> The lab doesn't compare ACS with that toolkit."},
+    "trigger": {"sibling": "Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->",
+                "sibling_first": "<!-- claim:C-02 --> Decisions are signed with ML-DSA-65."},
+}
+HONEST_SIBLINGS = {"none": None, "plain": "Read this first.",
+                   "marked": "Decisions are signed with ML-DSA-65. <!-- claim:C-02 -->"}
 MATRIX_EXPECT = {"banned": "banned", "trigger": "unledgered"}
+CLAIM_COMMENT = re.compile(r"\s*<!-- claim:[A-Z]-\d+ -->")
 
 
-def _md_placement(kind: str, placement: str) -> str:
-    """The target sentence in Markdown. A hard wrap is a newline, and containers indent it."""
-    pre, phrase, post = MATRIX_PHRASES[kind]
+def _place(parts: tuple[str, str, str], placement: str, html: bool) -> str:
+    """The target sentence. A hard wrap is a newline, and containers indent it."""
+    pre, phrase, post = parts
     whole = phrase.replace("|", " ").strip()
     if placement == "wrap":
         return pre.rstrip() + ("\n" if phrase.startswith("|") else " ") + phrase.replace("|", "\n").lstrip("\n") + post
-    wrapped = {"alone": whole, "emphasis": f"**{whole}**", "code": f"`{whole}`",
-               "link": f"[{whole}](https://example.com)"}[placement]
-    return pre + wrapped + post
-
-
-def _html_placement(kind: str, placement: str) -> str:
-    pre, phrase, post = MATRIX_PHRASES[kind]
-    whole = phrase.replace("|", " ").strip()
-    if placement == "wrap":
-        return pre.rstrip() + ("\n" if phrase.startswith("|") else " ") + phrase.replace("|", "\n").lstrip("\n") + post
-    wrapped = {"alone": whole, "emphasis": f"<strong>{whole}</strong>", "code": f"<code>{whole}</code>",
-               "link": f'<a href="https://example.com">{whole}</a>'}[placement]
+    if placement == "fence":
+        # A command in a fenced block carries no marker, since a marker in code doesn't count.
+        return "```\n" + pre + whole + CLAIM_COMMENT.sub("", post) + "\n```"
+    if placement == "marker_first":
+        marker = CLAIM_COMMENT.search(post).group().strip()
+        return f"{marker} {pre}{whole}{CLAIM_COMMENT.sub('', post)}"
+    if html:
+        wrapped = {"alone": whole, "emphasis": f"<strong>{whole}</strong>", "code": f"<code>{whole}</code>",
+                   "link": f'<a href="https://example.com">{whole}</a>'}[placement]
+    else:
+        wrapped = {"alone": whole, "emphasis": f"**{whole}**", "code": f"`{whole}`",
+                   "link": f"[{whole}](https://example.com)"}[placement]
     return pre + wrapped + post
 
 
@@ -1026,6 +1030,12 @@ def _nested_after_para(indent):
         para = s or "Read this first."
         return f"{outer}- Start the stack.\n\n{pad}{para}\n{pad}- {_indent(t, pad + '  ')}\n"
     return build
+
+
+def _deep(t, s):
+    # A marker four or more columns past its item's content is paragraph text on GitHub (I-1).
+    sib = f"    {s}\n\n" if s else ""
+    return f"- Start.\n\n{sib}    Read this.\n            - {_indent(t, ' ' * 14)}\n"
 
 
 def _nested(t, s):
@@ -1109,6 +1119,7 @@ MD_CONTAINERS = {
     "list_after_para_3": _list_after_para(3),
     "list_after_para_4": _nested_after_para(4),
     "list_after_para_6": _nested_after_para(6),
+    "list_deep": _deep,
     "nested_list": _nested,
     "blockquote": _quote,
     "blockquote_list": _quote_list,
@@ -1122,47 +1133,198 @@ MD_CONTAINERS = {
 HTML_TAGS = ("details", "summary", "div", "section", "p", "td", "th", "li")
 MD_CONTAINERS.update({f"html_{tag}": _md_html(tag) for tag in HTML_TAGS})
 HTML_CONTAINERS = {f"html_{tag}": _html_file(tag) for tag in HTML_TAGS}
-MATRIX_PLACEMENTS = ("alone", "wrap", "emphasis", "code", "link")
+MATRIX_PLACEMENTS = ("alone", "wrap", "emphasis", "code", "link", "fence")
+HONEST_PLACEMENTS = MATRIX_PLACEMENTS + ("marker_first",)
 # A GFM table row ends at the newline, so a hard wrap can't sit inside a Markdown table cell.
 MATRIX_IMPOSSIBLE = {("table_cell", "wrap")}
+# A fenced block is code on GitHub only where GitHub reads the fence: in Markdown containers it renders, and inside
+# raw HTML after a blank line. GitHub doesn't render admonitions, collapsibles or definition lists, so a fence there is
+# paragraph text, and a fence can't sit in a table cell, a footnote line, a summary, an over-indented line, after a
+# task box or in a page.
+FENCE_CONTAINERS = {"paragraph", "list_after_para_0", "list_after_para_2", "list_after_para_3", "list_after_para_4",
+                    "list_after_para_6", "nested_list", "blockquote", "blockquote_list", "html_details",
+                    "html_div", "html_section", "html_p", "html_td", "html_th", "html_li"}
+# Triggers are exempt in code by design, so a fence catches only a banned phrase, and an honest fence holds a trigger.
+FENCE_KIND = {"catch": "banned", "honest": "trigger"}
 
 
-def _matrix() -> list[tuple[str, str, str]]:
+def _applies(direction: str, suffix: str, cname: str, placement: str, kind: str) -> bool:
+    if (cname, placement) in MATRIX_IMPOSSIBLE:
+        return False
+    if placement == "fence":
+        return suffix in (".md", ".markdown") and cname in FENCE_CONTAINERS and kind == FENCE_KIND[direction]
+    return True
+
+
+def _matrix(direction: str) -> list[tuple[str, str, str]]:
+    phrases = MATRIX_PHRASES if direction == "catch" else HONEST_PHRASES
+    placements = MATRIX_PLACEMENTS if direction == "catch" else HONEST_PLACEMENTS
     cases = []
-    for suffixes, containers, place in (((".md", ".markdown"), MD_CONTAINERS, _md_placement),
-                                        ((".html", ".htm"), HTML_CONTAINERS, _html_placement)):
+    for suffixes, containers, html in (((".md", ".markdown"), MD_CONTAINERS, False),
+                                       ((".html", ".htm"), HTML_CONTAINERS, True)):
         for suffix in suffixes:
             for cname, build in containers.items():
-                for placement in MATRIX_PLACEMENTS:
-                    if (cname, placement) in MATRIX_IMPOSSIBLE:
-                        continue
-                    for kind in MATRIX_PHRASES:
-                        for sibling in (False, True):
-                            body = build(place(kind, placement), MATRIX_SIBLINGS[kind] if sibling else None)
-                            name = f"{cname}-{placement}-{kind}-{'sibling' if sibling else 'alone'}{suffix}"
-                            cases.append((name, body, MATRIX_EXPECT[kind]))
+                for placement in placements:
+                    for kind, parts in phrases.items():
+                        if not _applies(direction, suffix, cname, placement, kind):
+                            continue
+                        siblings = ({"alone": None, **MATRIX_SIBLINGS[kind]} if direction == "catch"
+                                    else HONEST_SIBLINGS)
+                        for sname, sibling in siblings.items():
+                            body = build(_place(parts, placement, html), sibling)
+                            cases.append((f"{cname}-{placement}-{kind}-{sname}{suffix}", body, MATRIX_EXPECT[kind]))
     return cases
 
 
-MATRIX = _matrix()
+MATRIX = _matrix("catch")
+HONEST_MATRIX = _matrix("honest")
 MATRIX_LEDGER = lab_claims.load_ledger(LEDGER)
 
 
 def test_matrix_size():
-    expected = ((len(MD_CONTAINERS) * 2 + len(HTML_CONTAINERS) * 2) * len(MATRIX_PLACEMENTS)
-                - len(MATRIX_IMPOSSIBLE) * 2) * len(MATRIX_PHRASES) * 2
-    print(f"container-by-placement matrix: {len(MATRIX)} cases")
-    assert len(MATRIX) == expected == len({c[0] for c in MATRIX})
+    print(f"container-by-placement matrix: {len(MATRIX)} catch cases, {len(HONEST_MATRIX)} honest cases")
+    # Pinned, so a change that drops a container or a placement shows here.
+    assert (len(MATRIX), len(HONEST_MATRIX)) == (2004, 2388)
+    assert len({c[0] for c in MATRIX}) == len(MATRIX) and len({c[0] for c in HONEST_MATRIX}) == len(HONEST_MATRIX)
 
 
 @pytest.mark.parametrize("name,body,kind", MATRIX, ids=[c[0] for c in MATRIX])
 def test_matrix_phrase_is_caught(tmp_path, name, body, kind):
     (tmp_path / name).write_text(body, encoding="utf-8")
     findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
-    assert kind in _kinds(findings), f"{name} passed the check:\n{body}"
+    target = lab_claims._key(MATRIX_PHRASES["banned" if kind == "banned" else "trigger"][1].replace("|", " "))
+    # The finding must be the target's own unit, so a stray finding on the sibling can't stand in for a miss.
+    hits = [f for f in findings if f.kind == kind and target in lab_claims._key(f.text)]
+    assert hits, f"{name} passed the check:\n{body}\n{findings}"
+
+
+@pytest.mark.parametrize("name,body,kind", HONEST_MATRIX, ids=[c[0] for c in HONEST_MATRIX])
+def test_matrix_honest_text_passes(tmp_path, name, body, kind):
+    (tmp_path / name).write_text(body, encoding="utf-8")
+    findings = lab_claims.scan(tmp_path, MATRIX_LEDGER)
+    assert findings == [], f"{name} failed the check:\n{body}"
 
 
 def test_ledger_names_the_reader_for_each_suffix():
     text = " ".join(_section("What the tests enforce and what only a reader catches").split())
     assert "`.md` and `.markdown` render as Markdown" in text
     assert "`.html` and `.htm` parse as HTML" in text
+
+
+# ---------------------------------------------------------------- Fix round 7: GitHub's list, fence and marker rules
+
+C4 = "<!-- claim:C-04 -->"
+N10 = "<!-- claim:N-10 -->"
+
+R7_CAUGHT = [
+    # I-1: a marker four or more columns past its item's content is paragraph text on GitHub, not a nested list.
+    ("deep_trigger.md", "- Start.\n\n    Read this.\n            - The gateway can forge an allow.\n", "unledgered"),
+    ("deep_banned.md", "- Start.\n\n    Read this.\n            - The lab is ACS-Core conformant.\n", "banned"),
+    # I-1: a bullet does interrupt paragraph text, so on GitHub the marker sits in a nested item of its own.
+    ("item_para_dash.md", f"- Item.\n\n  Decisions are signed with ML-DSA-65 -\n  - the spec says so. {C2}\n", "unledgered"),
+    ("item_para_star.md", f"- Item.\n\n    Decisions are signed with ML-DSA-65\n    * as specified. {C2}\n", "unledgered"),
+    # I-2: a banned phrase stays banned inside a fence in a list.
+    ("fence_banned.md", "1. Note:\n\n   ```\n   AGT\n   ```\n", "banned"),
+    # I-3: a leading marker binds to its own sentence, so it can't reach a sibling paragraph.
+    ("marker_first_sibling.md", f"{C2} Decisions are signed with ML-DSA-65.\n\nThe gateway can forge an allow.\n",
+     "unledgered"),
+]
+
+
+@pytest.mark.parametrize("name,body,kind", R7_CAUGHT, ids=[c[0] for c in R7_CAUGHT])
+def test_round_7_github_reading_is_caught(tree, name, body, kind):
+    assert kind in _kinds(_scan(tree, {name: body}))
+
+
+R7_PASSES = [
+    # I-1: only a bullet or 1. starts a list after paragraph text, and an ordered marker past 1 stays text.
+    ("nested_year.md", f"- Start the stack.\n\n    Decisions were signed with ML-DSA-65 in December\n    2026. {C2}\n"),
+    ("nested_year_ol.md", f"1. Start the stack.\n\n    Decisions were signed with ML-DSA-65 in December\n    2026. {C2}\n"),
+    ("item2_year.md", f"- Decisions were signed with ML-DSA-65 in December\n  2026. {C2}\n"),
+    ("nested_item_year.md", f"- Outer.\n    - Decisions were signed with ML-DSA-65 in December\n      2026. {C2}\n"),
+    ("nested_para_paren.md", f"- Start.\n\n    Decisions are signed with ML-DSA-65, see step\n    2) for the key. {C2}\n"),
+    ("year_banned_marked.md", f"- Start.\n\n    We compared the lab with the Agent Governance Toolkit in\n    2026. {N10}\n"),
+    # I-2: a fence inside a list item or a block quote is code, where triggers are exempt.
+    ("ol_fence.md", "1. Check the run:\n\n   ```bash\n   ./lab.sh verify\n   ```\n"),
+    ("ul_fence.md", "- Check the run:\n\n  ```\n  lab verify --all\n  ```\n"),
+    ("ul_fence_tight.md", "- Check the run:\n  ```\n  lab verify --all\n  ```\n"),
+    ("quote_fence.md", "> ```\n> lab verify\n> ```\n"),
+    ("nested_fence.md", "1. Outer.\n    - Inner:\n\n      ```\n      lab verify\n      ```\n"),
+    ("fence_list_lines.md", "1. Check:\n\n   ```\n   - verify it\n   2026. verify\n   ```\n"),
+    # I-3: a marker before its sentence on the same line binds to it.
+    ("marker_first.md", f"{C2} Decisions are signed with ML-DSA-65.\n"),
+    ("marker_first_wrap.md", f"{C2} Decisions are signed\nwith ML-DSA-65.\n"),
+    ("quote_marker_first.md", f"> {C2} Decisions are signed with ML-DSA-65.\n"),
+    ("item_marker_first.md", f"- {C2} Decisions are signed with ML-DSA-65.\n"),
+    # m-3: raw HTML with no blank line renders no Markdown on GitHub, so its text is one unit.
+    ("div_marker_line.md", f'<div align="center">\n{C2}\nDecisions are signed with ML-DSA-65.\n</div>\n'),
+    ("p_multiline.md", f"<p>\nDecisions are signed\nwith ML-DSA-65. {C2}\n</p>\n"),
+    # m-2: a raw HTML row with no blank lines is one unit, as a GFM row is.
+    ("td_marker_other_cell.md", f"<table>\n<tr>\n<td>Decisions are signed with ML-DSA-65.</td>\n<td>{C2}</td>\n"
+                                "</tr>\n</table>\n"),
+    # m-1: an intraword underscore isn't emphasis, so window_size doesn't read as Windows.
+    ("snake_window.md", "Set `window_size` to 8.\n"),
+    ("snake_window.txt", "Set window_size to 8.\n"),
+    ("snake_window.html", "<p>Set <code>window_size</code> to 8.</p>\n"),
+    ("snake_window_raw.md", "<details><summary>Set window_size to 8</summary>\n\nBody.\n\n</details>\n"),
+]
+
+
+@pytest.mark.parametrize("name,body", R7_PASSES, ids=[c[0] for c in R7_PASSES])
+def test_round_7_honest_text_passes(tree, name, body):
+    assert [f for f in _scan(tree, {name: body}) if f.path == name] == []
+
+
+def test_unledgered_finding_says_where_a_marker_goes(tree, capsys):
+    root, ledger = tree
+    (root / "a.md").write_text("The gateway can forge an allow.\n", encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 1
+    out = capsys.readouterr().out
+    assert "before or after the sentence on the same line" in out
+
+
+def test_ledger_says_where_a_marker_goes():
+    head = LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0]
+    assert "before or after the sentence on the same line" in " ".join(head.split())
+
+
+def test_scan_refuses_without_superfences(tree, monkeypatch):
+    root, ledger = tree
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    monkeypatch.setattr(lab_claims, "superfences", None)
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_every_cited_evidence_path_exists():
+    ledger = lab_claims.load_ledger(LEDGER)
+    assert ledger.evidence, "the ledger cites no evidence path"
+    missing = [(row, p) for row, p in ledger.evidence if not (ROOT / p).exists()]
+    assert not missing, f"evidence paths missing from the tree: {missing}"
+
+
+def test_evidence_paths_skip_text_after_unconfirmed():
+    ledger = lab_claims.load_ledger(LEDGER)
+    assert ("C-11", "version.txt") not in ledger.evidence
+    assert ("C-02", "adapters/src/acs/core/_mldsa.py") in ledger.evidence
+    assert not any(p in ("acs-lab-keys/1", "acs.lab.replay_miss") for _, p in ledger.evidence)
+
+
+def test_sign_gate_refuses_a_missing_evidence_path(tree, capsys):
+    root, _ = tree
+    ledger = _evidence_ledger(tree, "`adapters/src/acs/core/_nothing_here.py` (gone).")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "missing_evidence C-15 adapters/src/acs/core/_nothing_here.py" in capsys.readouterr().out
+
+
+def test_viewer_evidence_is_pending_until_lab_13_lands():
+    rows = {r[0]: r for r in _rows(_section("Claims"))}
+    for row in ("C-04", "C-08"):
+        pending = rows[row][2].split("Unconfirmed", 1)
+        assert len(pending) == 2 and "LAB-13" in pending[1] and "viewer" in pending[1], row
+    # m-6: the viewer checks each answer's signature and leaves the chain to lab verify.
+    assert "keys only" in rows["C-04"][2] and "lab verify" in rows["C-04"][2]
+
+
+def test_reader_only_list_names_admonitions_with_a_blank_line():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    assert "admonition" in text and "blank line" in text and "code block on GitHub" in text

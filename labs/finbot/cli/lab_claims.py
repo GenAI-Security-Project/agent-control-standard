@@ -1,10 +1,11 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.2.0. Owner: ACS lab maintainers.
+Version 1.3.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
-with Python-Markdown, which the root environment already carries through mkdocs. Without it the check refuses.
+with Python-Markdown and pymdown-extensions' superfences, which the root environment already carries through mkdocs.
+Without either one the check refuses.
 """
 
 from __future__ import annotations
@@ -37,6 +38,13 @@ BLOCK_OPEN = re.compile(r"^ {0,3}(?:`{3,}|~{3,})\s*(claims-[a-z-]+)\s*$", re.M)
 PLACEHOLDER_LEAD = ("tbd", "tba", "tbc", "todo", "pending", "not yet", "to be confirmed", "to be determined")
 # An evidence cell that is only one of these says nothing was checked.
 PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
+# A backticked token in an Evidence cell that names a file or directory in the repository: a relative path ending in
+# a slash or a known file suffix. Tokens like acs-lab-keys/1 or ACS_RESPONSE_SIGNING name no path.
+EVIDENCE_TOKEN = re.compile(r"`([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/?)`")
+PATH_SUFFIXES = frozenset({".py", ".md", ".json", ".txt", ".toml", ".yml", ".yaml", ".lock", ".rego", ".sh", ".js",
+                           ".html", ".css"})
+# Evidence paths resolve against the repository holding this file (labs/finbot/cli/lab_claims.py).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,8 @@ class Ledger:
     stale: bool = False
     # (Not claimed id, the banned phrases that row excuses), from the claims-not-claimed block.
     excuses: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # (claim id, repository path) for each path a claim row's evidence cites before any Unconfirmed note.
+    evidence: tuple[tuple[str, str], ...] = ()
 
 
 def _cells(line: str) -> list[str]:
@@ -146,6 +156,29 @@ def _unconfirmed(text: str) -> tuple[str, ...]:
     return tuple(rows)
 
 
+def _evidence(text: str) -> tuple[tuple[str, str], ...]:
+    """The repository paths each claim row's evidence cites.
+
+    Text after Unconfirmed names what this tree can't show yet, so its paths aren't required to exist. Once the row
+    is confirmed, every path it cites must.
+    """
+    paths = []
+    for line in text.splitlines():
+        cells = _cells(line) if re.match(r" {0,3}\|", line) else []
+        if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
+            cited = re.split(r"unconfirmed", cells[2], maxsplit=1, flags=re.I)[0]
+            for token in EVIDENCE_TOKEN.findall(cited):
+                if token.endswith("/") and "/" in token[:-1] or Path(token).suffix in PATH_SUFFIXES:
+                    paths.append((cells[0], token))
+    return tuple(paths)
+
+
+def missing_evidence(ledger: Ledger, root: Path = REPO_ROOT) -> list[tuple[str, str]]:
+    """Cited evidence paths that don't exist under root. A path that climbs out of root counts as missing."""
+    return [(row, path) for row, path in ledger.evidence
+            if ".." in Path(path).parts or not (root / path).exists()]
+
+
 def _signed(text: str) -> tuple[bool, bool]:
     """Return (signed, stale). Signed needs a full row whose digest matches the ledger text above it."""
     lines = text.splitlines()
@@ -190,6 +223,7 @@ def load_ledger(path: Path) -> Ledger:
         unconfirmed=_unconfirmed(above),
         stale=stale,
         excuses=_excuses(above, ids, banned),
+        evidence=_evidence(above),
     )
 
 
@@ -198,7 +232,7 @@ class Finding:
     path: str
     line: int
     # "banned", "unledgered", "unknown_id", "unreadable", or at the sign gate
-    # "unsigned", "unconfirmed" and "no_claims".
+    # "unsigned", "unconfirmed", "missing_evidence" and "no_claims".
     kind: str
     text: str
 
@@ -215,6 +249,11 @@ MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
 LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 SNIFF_BYTES = 8192
+RENDERER_MISSING = ("Python-Markdown and pymdown-extensions must both be installed, or Markdown files can't be "
+                    "checked")
+# Printed once under any unledgered finding, so an author knows where a marker counts.
+MARKER_HINT = ("A claim marker such as <!-- claim:C-03 --> goes in the same paragraph, list item, table row or "
+               "heading as the claim, before or after the sentence on the same line.")
 SNIPPET_CHARS = 100
 DASHES = dict.fromkeys(list(range(0x2010, 0x2016)) + [0x2212], "-")
 QUOTES = {0x2018: "'", 0x2019: "'", 0x201A: "'", 0x201B: "'", 0x02BC: "'", 0x2032: "'",
@@ -222,7 +261,9 @@ QUOTES = {0x2018: "'", 0x2019: "'", 0x201A: "'", 0x201B: "'", 0x02BC: "'", 0x203
 # Underscores read as spaces, so words joined by one in an identifier still meet a phrase. Tildes go, because GitHub
 # draws ~~text~~ as struck text and Python-Markdown leaves the marks in place.
 JOINERS = {ord("_"): " ", ord("~"): None}
-MARKUP = dict.fromkeys(map(ord, "*_`~"))
+# Emphasis and code marks. An underscore isn't here: JOINERS reads it as a space, because an intraword underscore
+# isn't emphasis in CommonMark and deleting it would join window_size into one word.
+MARKUP = dict.fromkeys(map(ord, "*`~"))
 # Unicode Default_Ignorable_Code_Point (DerivedCoreProperties.txt, Unicode 15.1), which unicodedata doesn't expose.
 # These draw nothing or nothing visible, so they are dropped before matching.
 IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
@@ -231,18 +272,21 @@ IGNORABLE = ((0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x11
              (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF))
 # The Braille blank draws as a space but isn't default-ignorable, so it is listed on its own.
 BLANKS = frozenset({0x2800})
-# The Markdown extensions mkdocs.yml enables that ship with Python-Markdown and change what a reader sees.
+# The Markdown extensions that change what a reader sees. Python-Markdown ships all but superfences, which comes from
+# pymdown-extensions, the package mkdocs.yml already uses. superfences reads a fence inside a list item or a block
+# quote as code, as GitHub does, where Python-Markdown's own fenced_code reads it as prose.
 # md_in_html renders Markdown inside a raw HTML block that carries a markdown attribute, which _prepare adds.
-# footnotes ships with Python-Markdown too. GitHub shows each footnote as its own item, so each is its own unit.
-MARKDOWN_EXTENSIONS = ("tables", "fenced_code", "admonition", "attr_list", "md_in_html", "footnotes")
-# Fence lines, so the pre-render steps never touch code. A block-quote prefix may lead them.
+# GitHub shows each footnote as its own item, so footnotes makes each its own unit.
+MARKDOWN_EXTENSIONS = ("tables", "pymdownx.superfences", "admonition", "attr_list", "md_in_html", "footnotes")
+# A block-quote prefix may lead any line.
 QUOTE_PREFIX = re.compile(r"^((?: {0,3}> ?)*)")
-FENCE_OPEN = re.compile(r" {0,3}(`{3,}|~{3,})")
-# A line GitHub reads as a list item. Only a bullet or an ordered list starting at 1 may interrupt a paragraph.
-LIST_MARKER = re.compile(r" {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
-INTERRUPTS = re.compile(r" {0,3}(?:[-*+]|1[.)])[ \t]+\S")
-# A list marker at any indent. Inside a list item, a nested list may follow a paragraph line at any depth.
-ANY_MARKER = re.compile(r"[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
+# A fence opener at any indent. _prepare decides from the enclosing list item whether the indent makes it a fence.
+FENCE_OPEN = re.compile(r"( *)(`{3,}|~{3,})")
+# A list marker with text after it, at any indent. _prepare applies CommonMark's rules on top: indent, interruption.
+LIST_ITEM = re.compile(r"( *)([-*+]|(\d{1,9})[.)])([ \t]+)\S")
+# A claim marker comment that opens a line, after any list marker, with text following it on the same line.
+LEADING_MARKER = re.compile(r"^( *(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?)(<!--(?:(?!-->).)*?claim:(?:(?!-->).)*?-->)"
+                            r"[ \t]*([^\s<].*)$")
 # Block-level HTML whose content GitHub renders as Markdown after a blank line.
 MD_HTML_BLOCKS = ("address|article|aside|blockquote|center|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|"
                   "footer|form|header|hgroup|li|main|nav|ol|p|section|summary|table|tbody|td|th|thead|tr|ul")
@@ -274,6 +318,10 @@ try:
     from markdown.inlinepatterns import HtmlInlineProcessor
 except ImportError:  # The lab wrapper may run outside the root environment. main() refuses rather than skip files.
     markdown = None
+try:
+    import pymdownx.superfences as superfences
+except ImportError:  # Without it a fence inside a list reads as prose. main() refuses rather than misread.
+    superfences = None
 
 
 def escape_text(text: str) -> str:
@@ -445,61 +493,121 @@ def _walk(html_text: str) -> list[Unit]:
     return walker.units
 
 
-def _prepare(source: str) -> str:
-    """Pre-render steps where Python-Markdown reads less than GitHub shows. Fenced code is left alone.
+def _renders_markdown(lines: list[str], i: int, tag: str) -> bool:
+    """True when GitHub renders Markdown inside the raw HTML block that opens on line i.
 
-    A list item right after a paragraph line starts a list on GitHub, at the top level and at any depth inside a
-    list item, while Python-Markdown folds it into the paragraph, so a blank line goes before it. Markdown inside a
-    raw HTML block renders on GitHub, while Python-Markdown keeps it as raw text, so each block-level opening tag on
-    a line that opens one gets markdown="block" for md_in_html.
+    GitHub's HTML block runs to the first blank line, and only text after a blank line renders as Markdown. With no
+    blank line before the element closes, the whole element is raw HTML, so its text stays one unit.
     """
+    close = re.compile(rf"</{tag}\s*>", re.I)
+    if close.search(lines[i]):
+        return False
+    for line in lines[i + 1:]:
+        if not line[len(QUOTE_PREFIX.match(line).group(1)):].strip():
+            return True
+        if close.search(line):
+            return False
+    return False
+
+
+def _prepare(source: str) -> str:
+    """Pre-render steps where Python-Markdown reads differently from GitHub. Fenced code is left alone.
+
+    Lists follow CommonMark. A marker is a list item only when it sits less than four columns past the content of the
+    item that holds it. Right after paragraph text, only a bullet or 1. starts a new list, and Python-Markdown needs
+    a blank line before it. Any other marker there is paragraph text, so its punctuation is escaped to keep
+    Python-Markdown from starting a list. A claim marker that opens a line moves to the end of that line, so it binds
+    to the sentence it is written beside. Markdown inside a raw HTML block renders on GitHub only after a blank line,
+    so only then does each block-level opening tag get markdown="block" for md_in_html.
+    """
+    lines = source.splitlines()
     out: list[str] = []
     fence: str | None = None
-    previous = ""
-    in_list = False
-    # True from a list item until a line back at the left margin after a blank line, which ends the list.
-    in_item = False
-    for line in source.splitlines():
+    # (marker column, content column) for each open list item, outermost first.
+    items: list[tuple[int, int]] = []
+    # What the previous line was: blank, para (paragraph text, which a list item's own text is), or other.
+    previous = "blank"
+    quote = ""
+    for i, line in enumerate(lines):
         prefix = QUOTE_PREFIX.match(line).group(1)
         body = line[len(prefix):]
-        opener = FENCE_OPEN.match(body)
         if fence is not None:
-            if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence):
+            closer = FENCE_OPEN.match(body)
+            if closer and closer.group(2)[0] == fence[0] and len(closer.group(2)) >= len(fence) \
+                    and not body[closer.end():].strip():
                 fence = None
             out.append(line)
-            previous = line
             continue
-        if opener:
-            fence = opener.group(1)
-        elif not body.strip():
-            in_list = False
-        elif in_item and ANY_MARKER.match(body) and not LIST_MARKER.match(body):
-            # A nested list right after a paragraph line inside an item is its own list on GitHub. Python-Markdown
-            # folds it into the paragraph without the blank line.
-            prev_body = previous[len(QUOTE_PREFIX.match(previous).group(1)):]
-            if prev_body.strip() and not ANY_MARKER.match(prev_body) and not re.match(r"\s*(?:#|\||<)", prev_body):
-                out.append(prefix.rstrip())
-            in_list = True
-        elif LIST_MARKER.match(body):
-            prev_body = previous[len(QUOTE_PREFIX.match(previous).group(1)):]
-            if (not in_list and INTERRUPTS.match(body) and prev_body.strip() and not prev_body.startswith("    ")
-                    and not re.match(r" {0,3}(?:#|\||<)", prev_body)):
-                out.append(prefix.rstrip())
-            in_list = in_item = True
-        elif HTML_OPEN.match(body):
-            # "block" rather than "1": md_in_html reads p, summary and td as inline by default, which would join two
-            # paragraphs GitHub shows apart into one unit.
-            line = prefix + HTML_BLOCK_TAG.sub(r'<\1 markdown="block"\2>', body)
-        if body.strip() and not body[0].isspace() and not previous.strip() and not LIST_MARKER.match(body):
-            in_item = False
-        out.append(line)
-        previous = line
+        if prefix.strip() != quote:
+            # A different quote depth is a different container, so open list items don't carry into it.
+            quote, items = prefix.strip(), []
+        if not body.strip():
+            previous = "blank"
+            out.append(line)
+            continue
+        indent = len(body) - len(body.lstrip(" "))
+        if previous == "blank":
+            # A line after a blank line ends every item it isn't indented into.
+            items = [it for it in items if it[1] <= indent]
+        holders = [it for it in items if it[1] <= indent]
+        base = holders[-1][1] if holders else 0
+        opener = FENCE_OPEN.match(body)
+        # A backtick fence's info string holds no backtick, or the line is inline code, as in CommonMark.
+        if opener and indent - base < 4 and not (opener.group(2)[0] == "`" and "`" in body[opener.end():]):
+            fence = opener.group(2)
+            out.append(line)
+            previous = "other"
+            continue
+        moved = LEADING_MARKER.match(body)
+        if moved:
+            body = f"{moved.group(1)}{moved.group(3)} {moved.group(2)}"
+        marker = LIST_ITEM.match(body)
+        if marker and indent - base < 4:
+            # A sibling continues a list already open at this level. Anything else starts a new list.
+            sibling = any(col <= indent < content for col, content in items if (col, content) not in holders)
+            first = marker.group(3)
+            if not sibling and previous == "para" and first is not None and first.lstrip("0") != "1":
+                # An ordered list past 1 can't interrupt a paragraph, so this line is text, such as a wrapped year.
+                body = body[:marker.end(2) - 1] + "\\" + body[marker.end(2) - 1:]
+                previous = "para"
+            else:
+                if not sibling and previous == "para":
+                    out.append(prefix.rstrip())
+                spaces = len(marker.group(4))
+                width = marker.end(2) - marker.start(2) + (spaces if spaces <= 4 else 1)
+                items = [it for it in items if it[1] <= indent] + [(indent, indent + width)]
+                previous = "para"
+                item_fence = FENCE_OPEN.match(body[marker.end(4):])
+                if item_fence and not item_fence.group(1):
+                    # GitHub opens a code block when an item starts with a fence. superfences only sees a fence on a
+                    # line of its own, so the fence moves to the next line under an empty comment, which shows nothing.
+                    out.append(prefix + body[:marker.end(4)] + "<!-- -->")
+                    body = " " * (indent + width) + body[marker.end(4):]
+                    fence = item_fence.group(2)
+                    previous = "other"
+        elif marker and previous == "para":
+            # Four or more columns past the item's content, after paragraph text, a marker is that paragraph's text.
+            body = body[:marker.end(2) - 1] + "\\" + body[marker.end(2) - 1:]
+        elif previous == "blank" and indent - base >= 4:
+            previous = "other"
+        else:
+            tag = HTML_OPEN.match(body)
+            if tag:
+                name = re.match(r" *<([A-Za-z]+)", body).group(1)
+                if _renders_markdown(lines, i, name):
+                    # "block" rather than "1": md_in_html reads p, summary and td as inline by default, which would
+                    # join two paragraphs GitHub shows apart into one unit.
+                    body = HTML_BLOCK_TAG.sub(r'<\1 markdown="block"\2>', body)
+                previous = "other"
+            else:
+                previous = "other" if re.match(r" *(?:#|\||<)", body) else "para"
+        out.append(prefix + body)
     return "\n".join(out) + "\n"
 
 
 def _render(source: str) -> str:
-    if markdown is None:
-        raise RuntimeError("Python-Markdown isn't installed, so Markdown files can't be checked")
+    if markdown is None or superfences is None:
+        raise RuntimeError(RENDERER_MISSING)
     md = markdown.Markdown(extensions=list(MARKDOWN_EXTENSIONS))
     # CommonMark, which GitHub renders, lets a backslash escape any ASCII punctuation. Python-Markdown escapes
     # fewer, and would keep a real comment after a backslash-escaped angle bracket.
@@ -550,7 +658,7 @@ def _seen(text: str, suffix: str) -> str:
     """The matching copy of a unit, by the reader its suffix names.
 
     Rendered Markdown can still hold emphasis and code marks as text, where Python-Markdown leaves raw HTML content
-    unrendered and GitHub renders it, so those marks are dropped too.
+    unrendered and GitHub renders it, so those marks are dropped too. Underscores read as spaces in every reader.
     """
     if suffix in MARKDOWN_SUFFIXES:
         return _fold(text.translate(MARKUP))
@@ -627,7 +735,8 @@ def main(argv: list[str] | None = None) -> int:
     """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read.
 
     --require-signed also fails on a sign-off row that is empty or stale, on each claim row still marked
-    Unconfirmed or holding empty or placeholder evidence, and on a ledger with no claim rows.
+    Unconfirmed or holding empty or placeholder evidence, on each cited evidence path the repository lacks, and on a
+    ledger with no claim rows.
     """
     parser = argparse.ArgumentParser(prog="lab_claims", description="Hold lab text to the claims ledger.")
     parser.add_argument("path", nargs="?", help="directory to scan, default the directory holding the ledger")
@@ -649,8 +758,8 @@ def main(argv: list[str] | None = None) -> int:
     if not root.is_dir():
         print(f"ERROR: {escape_text(str(root))} isn't a readable directory", file=sys.stderr)
         return 2
-    if markdown is None:
-        print("ERROR: Python-Markdown isn't installed, so Markdown files can't be checked", file=sys.stderr)
+    if markdown is None or superfences is None:
+        print(f"ERROR: {RENDERER_MISSING}", file=sys.stderr)
         return 2
     findings, scanned = _scan(root, ledger, ledger_path)
     if args.require_signed:
@@ -661,9 +770,14 @@ def main(argv: list[str] | None = None) -> int:
             findings.append(Finding(ledger_path.name, 0, "no_claims", "the ledger holds no claim rows"))
         # Signing a ledger that says a row can't be confirmed would sign a claim nobody checked.
         findings += [Finding(ledger_path.name, 0, "unconfirmed", row) for row in ledger.unconfirmed]
+        # Evidence that names a file the tree doesn't hold checks nothing.
+        findings += [Finding(ledger_path.name, 0, "missing_evidence", f"{row} {path}")
+                     for row, path in missing_evidence(ledger)]
     if findings:
         for f in findings:
             print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")
+        if any(f.kind == "unledgered" for f in findings):
+            print(MARKER_HINT)
         return 1
     print(f"DONE: lab text holds to the ledger ({scanned} files)")
     return 0
