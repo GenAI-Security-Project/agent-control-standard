@@ -8,7 +8,10 @@ scans a tree. It is stdlib only so the root test suite and the lab wrapper can b
 
 from __future__ import annotations
 
+import argparse
+import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,3 +66,167 @@ def load_ledger(path: Path) -> Ledger:
         exclude=_block(text, "claims-exclude"),
         signed=_signed(text),
     )
+
+
+@dataclass(frozen=True)
+class Finding:
+    path: str
+    line: int
+    kind: str  # "banned", "unledgered", "unknown_id", "unsigned" or "unreadable"
+    text: str
+
+
+SCANNED = frozenset({".md", ".txt", ".html", ".js", ".css", ".py", ".rego", ".yaml", ".yml", ".json", ".sh", ".ps1"})
+MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
+FENCE = re.compile(r"^\s*(```|~~~)")
+SNIFF_BYTES = 8192
+SNIPPET_CHARS = 100
+
+
+def escape_text(text: str) -> str:
+    """Make scanned text safe to print: control and format characters (bidi overrides, escape codes) become \\uXXXX.
+
+    Lab text under scan can be pull-request-written, and a finding is printed to a terminal.
+    """
+    out = []
+    for ch in text:
+        out.append(ch if ch.isprintable() else f"\\u{ord(ch):04x}")
+    return "".join(out)
+
+
+def _glob_regex(glob: str) -> re.Pattern[str]:
+    """Translate a path glob: ** crosses directories (and **/ may match nothing), * stays inside one."""
+    out, i = [], 0
+    while i < len(glob):
+        if glob.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif glob.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif glob[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif glob[i] == "?":
+            out.append("[^/]")
+            i += 1
+        else:
+            out.append(re.escape(glob[i]))
+            i += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def _phrase_regex(phrases: tuple[str, ...], *, whole_word: bool) -> re.Pattern[str]:
+    """One alternation, case-insensitive, left boundary always. Banned phrases also stop at a word end."""
+    parts = [re.escape(p).replace(r"\ ", r"\s+") for p in phrases]
+    tail = r"(?!\w)" if whole_word else ""
+    return re.compile(r"(?<!\w)(?:" + "|".join(parts) + ")" + tail, re.I)
+
+
+def _units(text: str, markdown: bool):
+    """Yield (first line number, text, in_fence). Markdown paragraphs join wrapped lines with single spaces."""
+    lines = text.splitlines()
+    if not markdown:
+        for n, line in enumerate(lines, 1):
+            yield n, line, False
+        return
+    para: list[str] = []
+    start = 0
+    in_fence = False
+    for n, line in enumerate(lines, 1):
+        if FENCE.match(line):
+            if para:
+                yield start, " ".join(para), False
+                para = []
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            yield n, line, True
+        elif line.strip():
+            if not para:
+                start = n
+            para.append(line.strip())
+        elif para:
+            yield start, " ".join(para), False
+            para = []
+    if para:
+        yield start, " ".join(para), False
+
+
+def _check(unit: str, in_fence: bool, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str]) -> list[tuple[str, str]]:
+    markers = MARKER.findall(unit)
+    valid = [m for m in markers if m in ledger.ids]
+    found = [("unknown_id", f"claim:{m}") for m in markers if m not in ledger.ids]
+    # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the defect.
+    if banned.search(unit) and not any(m.startswith("N-") for m in valid):
+        found.append(("banned", unit))
+    elif not in_fence and triggers.search(unit) and not valid:
+        found.append(("unledgered", unit))
+    return found
+
+
+def scan(root: Path, ledger: Ledger, ledger_path: Path | None = None) -> list[Finding]:
+    """Scan every text file under root. Symlinks are not followed and the ledger is never scanned."""
+    root = Path(root)
+    excluded = [_glob_regex(g) for g in ledger.exclude]
+    skip = ledger_path.resolve() if ledger_path else None
+    banned = _phrase_regex(ledger.banned, whole_word=True)
+    triggers = _phrase_regex(ledger.triggers, whole_word=False)
+    findings: list[Finding] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            rel = path.relative_to(root).as_posix()
+            if path.is_symlink() or path.suffix.lower() not in SCANNED:
+                continue
+            if any(rx.match(rel) for rx in excluded) or (skip and path.resolve() == skip):
+                continue
+            try:
+                raw = path.read_bytes()
+            except OSError as e:
+                findings.append(Finding(rel, 0, "unreadable", escape_text(str(e))))
+                continue
+            if b"\x00" in raw[:SNIFF_BYTES]:
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            for line, unit, in_fence in _units(text, path.suffix.lower() == ".md"):
+                for kind, shown in _check(unit, in_fence, ledger, banned, triggers):
+                    findings.append(Finding(rel, line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
+    return findings
+
+
+def _count_files(root: Path) -> int:
+    return sum(1 for _, _, names in os.walk(root, followlinks=False) for n in names)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read."""
+    parser = argparse.ArgumentParser(prog="lab_claims", description="Hold lab text to the claims ledger.")
+    parser.add_argument("path", nargs="?", help="directory to scan, default the directory holding the ledger")
+    parser.add_argument("--ledger", help="ledger file, default CLAIMS.md beside the cli directory")
+    parser.add_argument("--require-signed", action="store_true", help="fail while the sign-off row is empty")
+    args = parser.parse_args(argv)
+    ledger_path = Path(args.ledger) if args.ledger else Path(__file__).resolve().parents[1] / "CLAIMS.md"
+    try:
+        ledger = load_ledger(ledger_path)
+    except (OSError, ValueError) as e:
+        print(f"ERROR: can't use the ledger {ledger_path}: {escape_text(str(e))}", file=sys.stderr)
+        return 2
+    root = Path(args.path) if args.path else ledger_path.parent
+    if not root.is_dir():
+        print(f"ERROR: {escape_text(str(root))} isn't a readable directory", file=sys.stderr)
+        return 2
+    findings = scan(root, ledger, ledger_path)
+    if args.require_signed and not ledger.signed:
+        findings.append(Finding(ledger_path.name, 0, "unsigned", "the sign-off row is empty"))
+    if findings:
+        for f in findings:
+            print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")
+        return 1
+    print(f"DONE: lab text holds to the ledger ({_count_files(root)} files)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
