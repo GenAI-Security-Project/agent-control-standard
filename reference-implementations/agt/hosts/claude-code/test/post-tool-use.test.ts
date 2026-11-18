@@ -166,7 +166,11 @@ async function answering<T>(decision: Record<string, unknown>, body: (url: strin
   const stub = Bun.serve({
     port: 0,
     async fetch(req) {
-      const rpc = (await req.json()) as { id: string | number; method: string };
+      const rpc = (await req.json()) as {
+        id: string | number;
+        method: string;
+        params: { request_id: string };
+      };
       if (rpc.method === "handshake/hello") {
         return Response.json({
           jsonrpc: "2.0",
@@ -180,7 +184,16 @@ async function answering<T>(decision: Record<string, unknown>, body: (url: strin
           },
         });
       }
-      return Response.json({ jsonrpc: "2.0", id: rpc.id, result: decision });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: rpc.id,
+        result: {
+          type: "final",
+          acs_version: "0.1.0",
+          request_id: rpc.params.request_id,
+          ...decision,
+        },
+      });
     },
   });
   try {
@@ -357,7 +370,11 @@ describe("the result gate, end to end through the real shim and a real Guardian"
       {
         decision: "ask",
         reasoning: "a human should see this output first",
-        ask_details: { approver: "security-team", question: "release this output?", timeout_seconds: 300 },
+        ask_details: {
+          approver: { type: "human", id: "security-team" },
+          question: "release this output?",
+          timeout_seconds: 300,
+        },
       },
       (url) => runHook(postToolUsePayload("TOKEN=ghp_ABCDEF123456"), url),
     );
@@ -401,8 +418,8 @@ describe("the result gate, end to end through the real shim and a real Guardian"
         decision: "defer",
         reasoning: "waiting on an out-of-band approval",
         defer_details: {
-          reason: "awaiting change ticket",
-          resolution_method: "external",
+          reason: "pending_dependency",
+          resolution_method: "human_approval",
           resolution_timeout_ms: 300_000,
         },
       },

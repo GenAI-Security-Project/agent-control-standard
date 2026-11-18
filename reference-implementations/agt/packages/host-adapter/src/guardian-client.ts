@@ -47,6 +47,11 @@
  */
 import type { AcsRequestEnvelope } from "./build-envelope.ts";
 import type { AcsDecision } from "./decision-message.ts";
+import {
+  GuardianDecisionResponseError,
+  validateGuardianDecisionResult,
+  validateGuardianResponse,
+} from "./validate-response.ts";
 
 /**
  * The minimal JSON-RPC 2.0 request shape this client sends -- the transport
@@ -141,7 +146,8 @@ export type PostOptions = {
  * discriminated by the only question that matters at this seam: did a decision
  * arrive?
  *
- *   - `decisionArrived: true` -- one did. What the Guardian sent, unvalidated.
+ *   - `decisionArrived: true` -- one did, after the response envelope and its
+ *     method-specific AcsResult passed the canonical schema.
  *   - `decisionArrived: false` -- none did, and `failure` is whatever stands
  *     in its place: the throw from the wire, the JSON-RPC `error` object the
  *     Guardian answered with, or (for a response carrying neither) an Error
@@ -262,6 +268,16 @@ export function createGuardianClient(url: string): GuardianClient {
       let response: JsonRpcResponse;
       try {
         response = await post(envelope, options);
+        // `post` also serves handshake/hello, whose result is not a decision.
+        // Validate here, at the one boundary that turns a Guardian result into
+        // an AcsDecision, so every decision disposition and its conditional
+        // fields come from response-envelope.json rather than a hand-written
+        // subset. A schema failure travels as a no-decision failure and is
+        // classified fail closed by applyFailurePosture.
+        validateGuardianResponse(response);
+        if (response.result !== undefined) {
+          validateGuardianDecisionResult(response.result);
+        }
       } catch (failure) {
         // A timeout, a dead transport, an uncorrelated response, a body that is
         // not JSON.
@@ -272,14 +288,22 @@ export function createGuardianClient(url: string): GuardianClient {
         return { decisionArrived: false, failure };
       }
 
-      // An arriving decision is checked for FIRST. A JSON-RPC response
-      // carrying both `error` and `result` is malformed per JSON-RPC, but if
-      // the `result` names a decision then a decision did arrive, and an
-      // arriving `deny` must be honoured -- answering it with a failure
-      // instead would let a delivery-failure rule overrule a policy decision.
+      // Schema validation above guarantees that exactly one of `result` and
+      // `error` is present, and that every decision result carries the fields
+      // its disposition requires. This check narrows the validated response;
+      // it no longer decides validity by itself.
       const arrived = response.result as AcsDecision | undefined;
-      if (typeof arrived?.decision === "string") {
+      if (arrived?.type === "final" && typeof arrived.decision === "string") {
         return { decisionArrived: true, decision: arrived };
+      }
+
+      // Defensive fallback: method-aware validation above already requires a
+      // defined result to satisfy the complete AcsResult schema.
+      if (response.result !== undefined) {
+        return {
+          decisionArrived: false,
+          failure: new GuardianDecisionResponseError("/", "result carried no string decision"),
+        };
       }
 
       // Anything with no decision in it is a failure of this exchange, and the
