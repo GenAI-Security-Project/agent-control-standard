@@ -35,6 +35,13 @@ AUDIT_PREFIX = b"ACS_AUDIT "
 LATE_CAUSE = "decision_timeout"
 # Events that report on a step the transcript already holds, joined to its row by request_id.
 STEP_EVENTS = ("decision_applied", "shadow_decision")
+# Events that are rows of their own: an ASK held for the approver and its outcome (LAB-08), and a replay miss, which
+# names no session or request (LAB-06).
+ASK_EVENTS = ("ask_pending", "ask_resolved")
+REPLAY_MISS = "replay_miss"
+REPLAY_MISS_NOTE = "replay miss: recorded neutral reply"
+# The epoch moves on lab mode, lab sign and a policy reload. Rows from before it are not the current run's record.
+EPOCH_BUMPED = "epoch_bumped"
 # A read takes at most this much of a log, so one poll stays short however far behind the viewer is. The next poll
 # carries on from the offset.
 MAX_READ_BYTES = 4 * 1024 * 1024
@@ -84,6 +91,14 @@ def escape_bytes(raw: bytes) -> str:
 
 def _clip(text: str) -> str:
     return text if len(text) <= MAX_TEXT_CHARS else text[:MAX_TEXT_CHARS] + "..."
+
+
+def _moment(value: str) -> datetime.datetime | None:
+    try:
+        moment = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else None
 
 
 def receipt_time() -> str:
@@ -246,7 +261,16 @@ class _Session:
 class Model:
     """Every row read so far. refresh() reads what the logs gained, and rows_after() hands out what changed."""
 
-    def __init__(self, transcript_dir: Path, audit_file: Path | None, verifier: Verifier | None) -> None:
+    def __init__(self, transcript_dir: Path, audit_file: Path | None, verifier: Verifier | None, *,
+                 verify_dir: Path | None = None) -> None:
+        # Imported here: beats builds on Row, defined above.
+        import beats
+
+        self._beats = beats
+        self._history = beats.BeatHistory()
+        self.verify_dir = Path(verify_dir) if verify_dir else None
+        self._results: dict[str, tuple[tuple[int, int], Row]] = {}
+        self._epoch_at: datetime.datetime | None = None
         self.transcript_dir = Path(transcript_dir)
         self.audit_tail = LogTail(Path(audit_file)) if audit_file else None
         self.verifier: Verifier = verifier or unchecked
@@ -269,6 +293,7 @@ class Model:
         if self.audit_tail is not None:
             for raw in self.audit_tail.read_new():
                 self._audit_line(raw)
+        self._read_results()
 
     def rows_after(self, seq: int) -> list[Row]:
         """Every row new or changed after seq, oldest change first, with every string escaped."""
@@ -277,6 +302,22 @@ class Model:
     @property
     def last_seq(self) -> int:
         return self._seq
+
+    @property
+    def no_record(self) -> bool:
+        """True while no ACS row has come since the viewer started or since the last epoch bump. With ACS off the
+        gateway writes no transcript, so the page shows "no ACS record", the module 1 and module 2 beat (A.12)."""
+        return not any(self._is_record(row) for row in self._rows.values())
+
+    def _is_record(self, row: Row) -> bool:
+        governed = (row.source == "transcript" and row.method != "unreadable") or row.method in ASK_EVENTS
+        if not governed:
+            return False
+        if self._epoch_at is None:
+            return True
+        moment = _moment(row.t)
+        # A time that can't be read counts as current, so a row is never hidden for its timestamp.
+        return moment is None or moment > self._epoch_at
 
     def _transcript_files(self) -> list[Path]:
         try:
@@ -298,6 +339,7 @@ class Model:
     def _touch(self, row: Row) -> None:
         self._seq += 1
         row.seq = self._seq
+        row.beat = self._beats.classify(row, self._history)
 
     def _unreadable(self, raw: bytes, session_id: str, source: str, why: str | None = None) -> None:
         self._add(Row(0, 0, receipt_time(), session_id, "unreadable", note=why or _clip(escape_bytes(raw)),
@@ -395,7 +437,26 @@ class Model:
             self._unreadable(raw, "", "audit")
             return
         name = event.get("acs_audit_event")
-        if name in STEP_EVENTS:
+        session_id = _text(event.get("session_id")) or ""
+        when = _text(event.get("timestamp")) or receipt_time()
+        if name == EPOCH_BUMPED:
+            self._epoch_at = _moment(when) or datetime.datetime.now(datetime.timezone.utc)
+        elif name == REPLAY_MISS:
+            cause = _text(event.get("cause"))
+            self._add(Row(0, 0, when, session_id, "model call", note=REPLAY_MISS_NOTE,
+                          reason_codes=[cause] if cause else [], source="audit"))
+        elif name == "ask_pending":
+            approver = _text(event.get("approver"))
+            self._add(Row(0, 0, when, session_id, name, tool=_text(event.get("tool")), decision="ask",
+                          note=f"held for {approver}" if approver else "held for the approver", source="audit",
+                          request_id=_text(event.get("request_id"))))
+        elif name == "ask_resolved":
+            cause = _text(event.get("cause"))
+            self._add(Row(0, 0, when, session_id, name, tool=_text(event.get("tool")),
+                          decision=_text(event.get("decision")), note=f"ask {_text(event.get('outcome')) or ''}".strip(),
+                          reason_codes=[cause] if cause else [], source="audit",
+                          request_id=_text(event.get("ask_request_id"))))
+        elif name in STEP_EVENTS:
             request_id = _text(event.get("request_id"))
             session = self._sessions.get(_text(event.get("session_id")) or "")
             row = session.by_request.get(request_id) if session and request_id else None
@@ -405,6 +466,23 @@ class Model:
                 self._waiting[request_id] = event
                 while len(self._waiting) > MAX_WAITING_AUDIT:
                     self._waiting.popitem(last=False)
+
+    # The module 7 result files
+
+    def _read_results(self) -> None:
+        for name, key, record in self._beats.result_files(self.verify_dir):
+            known = self._results.get(name)
+            if known is not None and known[0] == key:
+                continue
+            fresh = self._beats.result_row(record, key[0])
+            if known is None:
+                self._results[name] = (key, self._add(fresh))
+                continue
+            row = known[1]
+            for field in ("t", "decision", "algorithm", "note", "kind"):
+                setattr(row, field, getattr(fresh, field))
+            self._results[name] = (key, row)
+            self._touch(row)
 
     def _join(self, row: Row, event: Mapping[str, Any]) -> None:
         applied = _text(event.get("decision"))
