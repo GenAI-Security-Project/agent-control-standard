@@ -21,7 +21,6 @@ from acs.core import (
     guardian_error_cause,
     is_guardian_refusal,
     modify_composition_violation,
-    normalize_decision,
     response_matches_request,
     schemas_dir,
 )
@@ -31,8 +30,9 @@ class RequestTooLargeError(Exception):
     """The envelope exceeds the Guardian's body cap; checked before sending, since a 413 can arrive as a connection reset."""
 
 
-# Statuses that refuse the request when the body carries no JSON-RPC envelope.
-HTTP_REFUSAL_STATUSES = frozenset({400, 413})
+def http_decision_failure(status: int) -> bool:
+    """§6.4: an HTTP 408 or 5xx with no JSON-RPC body is a decision failure, and any other non-2xx status refuses whatever its body."""
+    return status == 408 or 500 <= status <= 599
 
 
 class GuardianHTTPError(Exception):
@@ -44,6 +44,10 @@ class GuardianHTTPError(Exception):
         super().__init__(f"HTTP {status}")
 
 
+class MalformedResponseError(Exception):
+    """An answer that is not an HTTP response with a JSON body, which refuses the step (§6.4)."""
+
+
 def is_jsonrpc_response(body: Any) -> bool:
     """True for a JSON-RPC 2.0 response: "jsonrpc": "2.0", and a result or error, each present one an object."""
     if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
@@ -53,7 +57,7 @@ def is_jsonrpc_response(body: Any) -> bool:
 
 
 def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
-    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
+    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or an unparseable answer."""
     body = json.dumps(request).encode("utf-8")
     if len(body) > MAX_REQUEST_BODY_BYTES:
         raise RequestTooLargeError(len(body))
@@ -78,6 +82,9 @@ def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any
     worker.start()
     if not done.wait(timeout_s):
         aborter.abort()
+        if aborter.status is not None and not http_decision_failure(aborter.status):
+            # The status line already refused the step (§6.4); a body still arriving changes nothing.
+            raise GuardianHTTPError(aborter.status, None)
         raise TimeoutError(f"no complete response within {timeout_s:g}s")
     if "error" in box:
         raise box["error"]
@@ -91,6 +98,8 @@ class _Aborter:
         self._lock = threading.Lock()
         self._sockets: list[socket.socket] = []
         self.aborted = threading.Event()
+        # The non-2xx status, once its headers arrive.
+        self.status: int | None = None
 
     def add(self, sock: socket.socket) -> None:
         with self._lock:
@@ -169,25 +178,40 @@ def _fetch(req: urllib.request.Request, timeout_s: float, aborter: _Aborter) -> 
         with _open(req, timeout=timeout_s) as resp:
             raw = _read(resp, cancelled)
     except urllib.error.HTTPError as e:
+        aborter.status = e.code
         try:
             parsed = json.loads(_read(e, cancelled).decode("utf-8"))
         except Exception:  # noqa: BLE001
             parsed = None
         raise GuardianHTTPError(e.code, parsed) from e
-    return json.loads(raw.decode("utf-8"))
+    except http.client.HTTPException as e:
+        if isinstance(e, ConnectionError):
+            raise
+        raise MalformedResponseError(f"not an HTTP response: {e!r}") from e
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception as e:  # noqa: BLE001
+        # A RecursionError or an integer past the digit limit is as unparseable as bad JSON.
+        raise MalformedResponseError(f"not JSON: {e}") from e
 
 
 def _read(resp: Any, cancelled: threading.Event) -> bytes:
-    """Read the body one socket read at a time until the deadline."""
+    """Read the body one socket read at a time until the deadline; a body the connection cut short is a transport failure."""
     read1 = getattr(resp, "read1", None)
     if read1 is None:
         return resp.read()
     chunks = []
-    while not cancelled.is_set():
-        chunk = read1(65536)
-        if not chunk:
-            break
-        chunks.append(chunk)
+    try:
+        while not cancelled.is_set():
+            chunk = read1(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except http.client.IncompleteRead as e:
+        raise ConnectionError("connection closed before the end of a chunked body") from e
+    remaining = getattr(resp, "length", None)
+    if isinstance(remaining, int) and remaining > 0 and not cancelled.is_set():
+        raise ConnectionError(f"connection closed {remaining} bytes before the end of the body")
     return b"".join(chunks)
 
 
@@ -268,20 +292,16 @@ def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPostu
         return outcome
     params = request.get("params") or {}
     fields = {"method": request.get("method"), "request_id": params.get("request_id"), "problem": problem}
-    message = f"Guardian response fails response-envelope.json: {problem}"
-    if normalize_decision(result).disposition == "allow":
-        return posture.resolve(Undecided("malformed_response", fields, message))
-    # A restrictive or unreadable verdict is never carried out as an allow.
-    return posture.resolve(Refused("malformed_response", fields, message))
+    return posture.resolve(Refused("malformed_response", fields,
+                                   f"Guardian response fails response-envelope.json: {problem}"))
 
 
-_RESULT_VALIDATOR: Any = None
+_VALIDATORS: dict[str, Any] = {}
 
 
-def _result_validator() -> Any:
-    """A validator for response-envelope.json's AcsResult, resolving its references against the bundled schemas."""
-    global _RESULT_VALIDATOR
-    if _RESULT_VALIDATOR is None:
+def _validator(ref: str) -> Any:
+    """A validator for a bundled schema reference, such as "handshake.json#/$defs/ServerHello", resolving its references against the bundled schemas."""
+    if ref not in _VALIDATORS:
         from jsonschema import Draft202012Validator
         from referencing import Registry, Resource
 
@@ -292,16 +312,42 @@ def _result_validator() -> Any:
                 resources.append((schema["$id"], Resource.from_contents(schema)))
         registry = Registry().with_resources(resources)
         envelope = json.loads((schemas_dir() / "response-envelope.json").read_text(encoding="utf-8"))
-        _RESULT_VALIDATOR = Draft202012Validator({"$ref": f"{envelope['$id']}#/$defs/AcsResult"}, registry=registry,
-                                                 format_checker=Draft202012Validator.FORMAT_CHECKER)
-    return _RESULT_VALIDATOR
+        base = envelope["$id"].rsplit("/", 1)[0]
+        _VALIDATORS[ref] = Draft202012Validator({"$ref": f"{base}/{ref}"}, registry=registry,
+                                                format_checker=Draft202012Validator.FORMAT_CHECKER)
+    return _VALIDATORS[ref]
+
+
+def _problem(errors: list[Any]) -> str:
+    from jsonschema.exceptions import best_match
+
+    error = best_match(errors)
+    where = "/".join(str(p) for p in error.absolute_path)
+    return f"{where}: {error.message}" if where else error.message
+
+
+def envelope_problem(response: Any) -> str | None:
+    """Why a response fails response-envelope.json, or None; result_problem and server_hello_schema_problem report a result that matches neither branch."""
+    errors = [e for e in _validator("response-envelope.json#").iter_errors(response)
+              if list(e.absolute_path)[:1] != ["result"]]
+    if errors:
+        return _problem(errors)
+    result = response.get("result") if isinstance(response, dict) else None
+    if (result is not None and _validator("response-envelope.json#/$defs/AcsResult").is_valid(result)
+            and _validator("handshake.json#/$defs/ServerHello").is_valid(result)):
+        return "result: matches both AcsResult and ServerHello, and its oneOf allows exactly one"
+    return None
+
+
+def server_hello_schema_problem(server_hello: Any) -> str | None:
+    """Why a ServerHello fails handshake.json, or None."""
+    errors = list(_validator("handshake.json#/$defs/ServerHello").iter_errors(server_hello))
+    return _problem(errors) if errors else None
 
 
 def result_problem(result: Any) -> str | None:
     """Why a decision result fails response-envelope.json's AcsResult, or None."""
-    from jsonschema.exceptions import best_match
-
-    errors = list(_result_validator().iter_errors(result))
+    errors = list(_validator("response-envelope.json#/$defs/AcsResult").iter_errors(result))
     if not errors:
         return None
     if (isinstance(result, dict) and result.get("decision") == "modify"
@@ -309,9 +355,7 @@ def result_problem(result: Any) -> str | None:
             and modify_composition_violation(result.get("modifications"))):
         # §6.3 makes this a DENY the adapter applies, which trace/otel-mapping.json does not count as a decision failure.
         return None
-    error = best_match(errors)
-    where = "/".join(str(p) for p in error.absolute_path)
-    return f"{where}: {error.message}" if where else error.message
+    return _problem(errors)
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
@@ -333,10 +377,9 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     except GuardianHTTPError as e:
         if not is_jsonrpc_response(e.body):
             fields = {"http_status": e.status, "method": method}
-            if e.status in HTTP_REFUSAL_STATUSES:
-                return Refused(f"http_{e.status}_refusal", fields, f"Guardian refused at HTTP layer ({e.status})")
-            return Undecided(f"http_{e.status}_error", fields, f"Guardian returned HTTP {e.status}")
-        # A JSON-RPC envelope gets the same binding and signature checks under any status.
+            if http_decision_failure(e.status):
+                return Undecided(f"http_{e.status}_error", fields, f"Guardian returned HTTP {e.status}")
+            return Refused(f"http_{e.status}_refusal", fields, f"Guardian refused at HTTP layer ({e.status})")
         response, http_status = e.body, e.status
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
@@ -344,9 +387,9 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
         if timed_out:
             return Undecided("decision_timeout", fields, f"decision timed out after {timeout_s:g}s: {e}")
         return Undecided("transport_failure", fields, f"Guardian unreachable: {e}")
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        return Undecided("malformed_response", {"request_id": request_id, "method": method, "error": str(e)},
-                         f"Guardian response is not JSON: {e}")
+    except MalformedResponseError as e:
+        return Refused("malformed_response", {"request_id": request_id, "method": method, "error": str(e)},
+                       f"Guardian response could not be parsed: {e}")
     except Exception as e:  # noqa: BLE001
         return Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
     try:
@@ -354,7 +397,13 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     except Exception as e:  # noqa: BLE001
         outcome = Refused("response_unverifiable", {"request_id": request_id, "method": method, "error": str(e)},
                           f"Guardian response could not be verified: {e}")
-    if http_status is None or isinstance(outcome, Decided):
+    if http_status is None:
+        return outcome
+    if not http_decision_failure(http_status) and not isinstance(outcome, Refused):
+        # The status refuses the step, so a signed allow or -32603 under it changes nothing; a refusal in the body keeps its cause.
+        return Refused(f"http_{http_status}_refusal", {"http_status": http_status, "method": method},
+                       f"Guardian refused at HTTP layer ({http_status})")
+    if isinstance(outcome, Decided):
         return outcome
     return replace(outcome, fields={**outcome.fields, "http_status": http_status})
 
@@ -365,12 +414,12 @@ def key_id_rejected(error: Any) -> bool:
 
 
 def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
-    """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
+    """Classify a decoded Guardian answer: a signed -32603 is undecided, and anything else but a verified decision is refused (§6.4)."""
     params = request.get("params") or {}
     method, request_id = request.get("method"), params.get("request_id")
     if not is_jsonrpc_response(response):
-        return Undecided("malformed_response", {"request_id": request_id, "method": method},
-                         "Guardian response is not a JSON-RPC 2.0 response with an object result or error")
+        return Refused("malformed_response", {"request_id": request_id, "method": method},
+                       "Guardian response is not a JSON-RPC 2.0 response with an object result or error")
     if not response_matches_request(request, response):
         claimed = response["error"].get("code") if "error" in response else None
         return Refused("response_binding_mismatch",
@@ -388,6 +437,9 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
             return Refused("error_signature_invalid",
                            {"claimed_error_code": code, "claimed_cause": guardian_error_cause(code)},
                            "error response signature invalid")
+        malformed = _malformed_envelope(response, request_id, method)
+        if malformed is not None:
+            return malformed
         cause = guardian_error_cause(code)
         fields = {"error_code": code, "error_message": err.get("message"),
                   "request_id": request_id, "method": method}
@@ -397,4 +449,13 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         return Undecided(cause, fields, message)
     if not verify_signature(response, session_id=session_id):
         return Refused("response_signature_invalid", {}, "response signature invalid")
-    return Decided(response)
+    malformed = _malformed_envelope(response, request_id, method)
+    return Decided(response) if malformed is None else malformed
+
+
+def _malformed_envelope(response: Any, request_id: Any, method: Any) -> Refused | None:
+    problem = envelope_problem(response)
+    if problem is None:
+        return None
+    return Refused("malformed_response", {"request_id": request_id, "method": method, "problem": problem},
+                   f"Guardian response fails response-envelope.json: {problem}")

@@ -12,7 +12,7 @@ from unittest import mock
 
 from acs.client import Decided, FailPosture, Refused, Undecided, exchange
 from acs.client import _exchange
-from acs.core import MAX_REQUEST_BODY_BYTES, derive_session_key, sign_with_key
+from acs.core import GUARDIAN_ERROR_CAUSE, MAX_REQUEST_BODY_BYTES, derive_session_key, sign_with_key
 
 SECRET = "exchange-test-secret-padded-to-32-bytes"
 SESSION = "session-exchange"
@@ -102,7 +102,9 @@ CASES = [
     ("bare http 503", _http(503), Undecided, "http_503_error", {"http_status": 503}),
     ("http 502 with a non-JSON-RPC body", _http(502, {"detail": "bad gateway"}),
      Undecided, "http_502_error", {"http_status": 502}),
-    ("bare http 404", _http(404), Undecided, "http_404_error", {"http_status": 404}),
+    ("bare http 404", _http(404), Refused, "http_404_refusal", {"http_status": 404}),
+    ("bare http 429", _http(429), Refused, "http_429_refusal", {"http_status": 429}),
+    ("bare http 408", _http(408), Undecided, "http_408_error", {"http_status": 408}),
     ("socket timeout", _raises(TimeoutError("timed out")),
      Undecided, "decision_timeout", {"request_id": "req-1", "method": "steps/toolCallRequest"}),
     ("urlopen timeout", _raises(urllib.error.URLError(TimeoutError("timed out"))),
@@ -112,17 +114,20 @@ CASES = [
     ("connection reset", _raises(ConnectionResetError(54, "reset")),
      Undecided, "transport_failure", {"request_id": "req-1"}),
     ("body is not JSON", _replies(b"<html>bad gateway</html>"),
-     Undecided, "malformed_response", {"request_id": "req-1"}),
-    ("body is not UTF-8", _replies(b"\xff\xfe"), Undecided, "malformed_response", {}),
+     Refused, "malformed_response", {"request_id": "req-1"}),
+    ("body is not UTF-8", _replies(b"\xff\xfe"), Refused, "malformed_response", {}),
+    ("JSON nested past the parser's depth", _replies(b"[" * 100000 + b"]" * 100000), Refused, "malformed_response", {}),
+    ("integer past Python's digit limit", _replies(b'{"jsonrpc": "2.0", "id": "rpc-1", "result": {"n": ' + b"1" * 5000 + b"}}"),
+     Refused, "malformed_response", {}),
     ("unexpected exception", _raises(RuntimeError("boom")),
      Undecided, "adapter_exception", {"error": "boom"}),
-    ("JSON array", _json([1, 2]), Undecided, "malformed_response", {}),
+    ("JSON array", _json([1, 2]), Refused, "malformed_response", {}),
     ("result is not an object", _json({"jsonrpc": "2.0", "id": "rpc-1", "result": "allow"}),
-     Undecided, "malformed_response", {}),
+     Refused, "malformed_response", {}),
     ("error is not an object", _json({"jsonrpc": "2.0", "id": "rpc-1", "error": "nope"}),
-     Undecided, "malformed_response", {}),
+     Refused, "malformed_response", {}),
     ("neither result nor error", _json({"jsonrpc": "2.0", "id": "rpc-1"}),
-     Undecided, "malformed_response", {}),
+     Refused, "malformed_response", {}),
     ("JSON-RPC id of another request", _json(_signed({**_result(), "id": "rpc-2"})),
      Refused, "response_binding_mismatch", {}),
     ("result for another request_id", _json(_signed(_result(request_id="req-2"))),
@@ -133,10 +138,18 @@ CASES = [
      Refused, "session_refused_response", {"error_code": -32000}),
     ("signed non-refusal error", _json(_signed(_error(-32603))),
      Undecided, "internal_error_response", {"error_code": -32603}),
+    ("signed internal error with a float code", _json(_signed(_error(-32603.0))),
+     Undecided, "internal_error_response", {"error_code": -32603.0}),
     ("signed error with an unregistered code", _json(_signed(_error(-32050))),
-     Undecided, "guardian_error_response", {"error_code": -32050}),
-    ("signed error with a non-integer code", _json(_signed(_error([-32004]))),
-     Undecided, "guardian_error_response", {"error_code": [-32004]}),
+     Refused, "guardian_error_response", {"error_code": -32050}),
+    ("signed error with a non-integer code", _json(_signed(_error([-32603]))),
+     Refused, "malformed_response", {}),
+    ("signed internal error without a message", _json(_signed({"jsonrpc": "2.0", "id": "rpc-1", "error": {"code": -32603}})),
+     Refused, "malformed_response", {}),
+    ("signed internal error next to a result", _json(_signed({**_result(), "error": {"code": -32603, "message": "x"}})),
+     Refused, "malformed_response", {}),
+    ("signed result with a member the envelope does not define", _json(_signed({**_result(), "extension": True})),
+     Refused, "malformed_response", {}),
     ("unsigned error", _json(_error(-32603)),
      Refused, "error_signature_invalid", {"claimed_error_code": -32603}),
     ("error with a forged signature", _json(_forged_error(-32603)),
@@ -169,6 +182,28 @@ class ExchangeCauses(unittest.TestCase):
                 for key, value in fields.items():
                     self.assertEqual(outcome.fields.get(key), value, key)
                 self.assertTrue(outcome.message, "every failure carries a message for the block reason")
+
+    def test_every_signed_error_but_internal_error_is_a_refusal(self) -> None:
+        """§6.4: a signed -32603 follows the posture; every other signed error, §17.1's and any added later, blocks."""
+        for code in sorted(GUARDIAN_ERROR_CAUSE) + [-32099, -1, 0, 1]:
+            with self.subTest(code=code):
+                outcome, _ = self._exchange(_json(_signed(_error(code))))
+                self.assertIsInstance(outcome, Undecided if code == -32603 else Refused)
+                self.assertEqual(PROCEED.resolve(outcome).proceed, code == -32603)
+
+    def test_a_result_that_is_also_a_server_hello_is_refused(self) -> None:
+        """response-envelope.json's result is oneOf AcsResult and ServerHello, so a result matching both fails it."""
+        rid = "11111111-1111-4111-8111-111111111111"
+        request = _request()
+        request["params"]["request_id"] = rid
+        result = _result(request_id=rid, type="final", acs_version="0.1.0")
+        hello = {"negotiated_version": "0.1.0", "methods_evaluated": [], "selected_transport": "http",
+                 "timeout_config": {"default_ms": 5000}}
+        decided, _ = self._exchange(_json(_signed(result)), request=request)
+        self.assertIsInstance(decided, Decided)
+        both, _ = self._exchange(_json(_signed({**result, "result": {**result["result"], **hello}})), request=request)
+        self.assertIsInstance(both, Refused)
+        self.assertEqual(both.cause, "malformed_response")
 
     def test_a_signed_bound_result_is_decided(self) -> None:
         response = _signed(_result())
@@ -359,8 +394,8 @@ class OverallDeadline(unittest.TestCase):
                 requests.clear()
                 outcome = exchange(_request(), guardian_url=f"http://127.0.0.1:{server.server_address[1]}/acs",
                                    timeout_s=2.0, session_id=SESSION)
-                self.assertIsInstance(outcome, Undecided)
-                self.assertEqual(outcome.cause, f"http_{code}_error")
+                self.assertIsInstance(outcome, Refused)
+                self.assertEqual(outcome.cause, f"http_{code}_refusal")
                 self.assertEqual(requests, ["POST /acs"], "a redirect must not send another request")
 
     def test_a_slowly_delivered_server_hello_is_no_answer(self) -> None:
@@ -376,6 +411,126 @@ class OverallDeadline(unittest.TestCase):
                                     timeout=0.15)
         self.assertIsInstance(decision, NoAnswer)
         self.assertEqual(decision.cause, "handshake_timeout")
+
+
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": ""})
+class CutShortBody(unittest.TestCase):
+    """§6.4: a connection that fails mid-body is a decision failure, and a complete body that is not JSON-RPC is a refusal."""
+
+    def _serve(self, head: bytes, body: bytes, *, raw: bytes | None = None) -> str:
+        import socket
+        import socketserver
+        import threading
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self) -> None:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += self.request.recv(65536)
+                headers, _, received = data.partition(b"\r\n\r\n")
+                length = int([h.split(b":")[1] for h in headers.split(b"\r\n")
+                              if h.lower().startswith(b"content-length")][0])
+                while len(received) < length:
+                    received += self.request.recv(65536)
+                if raw is None:
+                    raw_answer = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + head + b"\r\n" + body
+                else:
+                    raw_answer = raw
+                self.request.sendall(raw_answer)
+                self.request.shutdown(socket.SHUT_WR)
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/acs"
+
+    def _answer(self, head: bytes, body: bytes):
+        return exchange(_request(), guardian_url=self._serve(head, body), timeout_s=2.0, session_id=SESSION)
+
+    def test_a_body_shorter_than_its_content_length_follows_the_posture(self) -> None:
+        answer = json.dumps(_signed(_result(decision="deny", reasoning="no"))).encode()
+        outcome = self._answer(b"Content-Length: %d\r\nConnection: close\r\n" % len(answer), answer[:20])
+        self.assertIsInstance(outcome, Undecided)
+        self.assertEqual(outcome.cause, "transport_failure")
+
+    def test_a_chunked_body_cut_off_follows_the_posture(self) -> None:
+        outcome = self._answer(b"Transfer-Encoding: chunked\r\nConnection: close\r\n", b"40\r\n{\"jsonrpc\": \"2.0\"")
+        self.assertIsInstance(outcome, Undecided)
+        self.assertEqual(outcome.cause, "transport_failure")
+
+    def test_an_answer_that_is_not_http_is_refused(self) -> None:
+        url = self._serve(b"", b"", raw=b"SSH-2.0-OpenSSH_9.6\r\n")
+        outcome = exchange(_request(), guardian_url=url, timeout_s=2.0, session_id=SESSION)
+        self.assertIsInstance(outcome, Refused)
+        self.assertEqual(outcome.cause, "malformed_response")
+
+    def test_a_connection_closed_before_any_answer_follows_the_posture(self) -> None:
+        url = self._serve(b"", b"", raw=b"")
+        outcome = exchange(_request(), guardian_url=url, timeout_s=2.0, session_id=SESSION)
+        self.assertIsInstance(outcome, Undecided)
+        self.assertEqual(outcome.cause, "transport_failure")
+
+    def test_a_complete_body_that_is_not_json_is_refused(self) -> None:
+        body = b"<html>ok</html>"
+        outcome = self._answer(b"Content-Length: %d\r\nConnection: close\r\n" % len(body), body)
+        self.assertIsInstance(outcome, Refused)
+        self.assertEqual(outcome.cause, "malformed_response")
+        self.assertFalse(PROCEED.resolve(outcome).proceed)
+
+
+@mock.patch.dict(os.environ, {"ACS_HMAC_SECRET": SECRET, "ACS_HMAC_KEY_ID": "test-key", "ACS_HMAC_SECRET_FILE": ""})
+class StatusThenStalledBody(unittest.TestCase):
+    """§6.4: a refusing status refuses the step even when its body never finishes arriving."""
+
+    def _serve(self, status: bytes) -> str:
+        import socketserver
+        import threading
+        import time
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self) -> None:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += self.request.recv(65536)
+                try:
+                    self.request.sendall(b"HTTP/1.1 " + status + b"\r\nContent-Type: application/json\r\n"
+                                         b"Content-Length: 200\r\n\r\n{\"jsonrpc\"")
+                    time.sleep(2)
+                except OSError:
+                    pass
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/acs"
+
+    def test_a_refusing_status_survives_the_deadline(self) -> None:
+        import time
+        for status, kind, cause in ((b"429 Too Many Requests", Refused, "http_429_refusal"),
+                                    (b"404 Not Found", Refused, "http_404_refusal"),
+                                    (b"503 Service Unavailable", Undecided, "decision_timeout"),
+                                    (b"200 OK", Undecided, "decision_timeout")):
+            with self.subTest(status=status):
+                started = time.monotonic()
+                outcome = exchange(_request(), guardian_url=self._serve(status), timeout_s=0.3, session_id=SESSION)
+                self.assertIsInstance(outcome, kind)
+                self.assertEqual(outcome.cause, cause)
+                self.assertLess(time.monotonic() - started, 1.0)
+        _exchange_workers_end(self, within_s=2.5)
+
+    def test_a_refusing_status_at_the_handshake_refuses_the_session(self) -> None:
+        import tempfile
+        from acs.client import Config, SessionRefused, open_session
+        from acs.client import _handshake
+        url = self._serve(b"429 Too Many Requests")
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(_handshake, "_HANDSHAKE_CACHE_DIR", Path(d)):
+            decision = open_session(config=Config.from_env({"ACS_GUARDIAN_URL": url}), session_id=SESSION,
+                                    agent_id="t", platform="t", methods_implemented=[], timeout=0.3)
+        self.assertEqual(decision, SessionRefused("http_429_refusal", {"http_status": 429}))
 
 
 def _exchange_workers_end(test: unittest.TestCase, within_s: float = 0.5) -> None:
@@ -485,8 +640,9 @@ class TlsDeadline(unittest.TestCase):
         _exchange_workers_end(self)
 
 
-# Each JSON-RPC envelope is checked the same way whatever HTTP status carries it.
-STATUSES = (200, 400, 413, 500, 503)
+# A JSON-RPC envelope under 2xx, 408 or 5xx is checked like any answer; any other status refuses whatever the body says (§6.4).
+STATUSES = (200, 400, 404, 408, 413, 429, 500, 503)
+REFUSING_STATUSES = (400, 404, 413, 429)
 MATRIX = [
     ("unsigned non-refusal error", lambda: _error(-32603), Refused, "error_signature_invalid"),
     ("unsigned refusal error", lambda: _error(-32005), Refused, "error_signature_invalid"),
@@ -519,6 +675,8 @@ class HttpStatusMatrix(unittest.TestCase):
     def test_every_envelope_under_every_status(self) -> None:
         for status in STATUSES:
             for name, body, kind, cause in MATRIX:
+                if status in REFUSING_STATUSES and kind is not Refused:
+                    kind, cause = Refused, f"http_{status}_refusal"
                 with self.subTest(status=status, body=name):
                     urlopen = _json(body()) if status == 200 else _http(status, body())
                     with mock.patch.object(_exchange, "_open", side_effect=urlopen):
@@ -533,8 +691,10 @@ class HttpStatusMatrix(unittest.TestCase):
                             "an answer that fails its checks blocks even under fail-open")
 
     def test_bodies_that_are_not_jsonrpc_are_classified_by_status(self) -> None:
-        expected = {200: (Undecided, "malformed_response"),
-                    400: (Refused, "http_400_refusal"), 413: (Refused, "http_413_refusal"),
+        expected = {200: (Refused, "malformed_response"),
+                    400: (Refused, "http_400_refusal"), 404: (Refused, "http_404_refusal"),
+                    408: (Undecided, "http_408_error"), 413: (Refused, "http_413_refusal"),
+                    429: (Refused, "http_429_refusal"),
                     500: (Undecided, "http_500_error"), 503: (Undecided, "http_503_error")}
         for status in STATUSES:
             kind, cause = expected[status]

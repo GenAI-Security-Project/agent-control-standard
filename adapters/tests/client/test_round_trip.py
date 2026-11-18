@@ -96,18 +96,18 @@ class RoundTrip(unittest.TestCase):
                 self.assertEqual(sent, [], "a signed view that drops one value never goes on the wire")
                 self.assertEqual((result.proceed, result.cause), (proceed, "envelope_not_signable"))
 
-    def test_an_allow_with_an_invalid_optional_field_is_a_malformed_response(self) -> None:
+    def test_an_allow_that_fails_the_response_schema_is_refused_under_either_posture(self) -> None:
         def answer(body: dict):
             response = sign_with_key({"jsonrpc": "2.0", "id": body["id"], "result": {
                 "type": "final", "acs_version": "0.1.0", "request_id": body["params"]["request_id"],
                 "decision": "allow", "chain_hash": {"x": 1}}}, derive_session_key(SECRET.encode(), SESSION),
                 key_id="test-key")
             return io.BytesIO(json.dumps(response).encode())
-        for posture, proceed in ((PROCEED, True), (DENY, False)):
+        for posture in (PROCEED, DENY):
             with self.subTest(deny=posture.deny_on_failure):
                 result, _ = self._send(_request(), answer, posture)
-                self.assertEqual((result.proceed, result.cause, result.fields["failure_class"]),
-                                 (proceed, "malformed_response", "malformed_response"))
+                self.assertEqual((result.proceed, result.audit_type, result.cause, result.fields["failure_class"]),
+                                 (False, "guardian_refusal_fail_closed", "malformed_response", "malformed_response"))
 
     def test_a_request_that_still_cannot_be_signed_fails_closed_at_an_enforced_step(self) -> None:
         for gate, proceed in ((False, True), (True, False)):

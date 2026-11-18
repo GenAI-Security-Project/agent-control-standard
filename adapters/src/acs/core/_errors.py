@@ -34,28 +34,6 @@ def guardian_error_cause(code: object) -> str:
     return "guardian_error_response" if value is None else GUARDIAN_ERROR_CAUSE.get(value, "guardian_error_response")
 
 
-# Stricter than §6.4 as written (issue #32): each refusal is attacker-reachable, so it fails closed under either posture.
-GUARDIAN_REFUSAL_CODES = frozenset({
-    -32000,  # SESSION_REFUSED
-    -32004,  # SIGNATURE_INVALID
-    -32005,  # REPLAY_DETECTED
-    -32006,  # TIMESTAMP_OUT_OF_WINDOW
-    -32600,  # Invalid Request
-    -32700,  # Parse error
-})
-
-
-SESSION_REFUSAL_CODES = frozenset({
-    -32000,  # SESSION_REFUSED
-    -32001,  # UNSUPPORTED_VERSION
-    -32002,  # PROVENANCE_REQUIRED
-})
-
-
-def is_session_refusal(code: object) -> bool:
-    """True when a handshake error code refuses the session (§4.1)."""
-    return _code(code) in SESSION_REFUSAL_CODES
-
-
 def is_guardian_refusal(code: object) -> bool:
-    return _code(code) in GUARDIAN_REFUSAL_CODES
+    """Every signed error but -32603 refuses the step (§6.4), a code added later or one that is not an integer included."""
+    return _code(code) != -32603

@@ -16,7 +16,7 @@ from unittest import mock
 
 from acs import client
 from acs import core
-from acs.client import Config, Negotiated, NoAnswer, SessionRefused
+from acs.client import Config, Negotiated, SessionRefused
 from acs.client import _exchange
 from acs.client import _handshake as client_handshake
 from acs.testing.harness import (
@@ -173,7 +173,7 @@ class ServerHelloContract(unittest.TestCase):
             session = self._run()
         self.assertEqual(session, SessionRefused("response_binding_mismatch"))
 
-    def test_signed_legacy_result_wrapper_is_no_answer(self):
+    def test_signed_legacy_result_wrapper_refuses_the_session(self):
         self.hello = {
             "type": "final", "acs_version": "0.1.0",
             "request_id": str(uuid.uuid4()), "decision": "allow",
@@ -181,8 +181,8 @@ class ServerHelloContract(unittest.TestCase):
         }
         with mock.patch.object(_exchange, "_open", side_effect=self._respond):
             session = self._run()
-        self.assertEqual(session, NoAnswer("invalid_server_hello"))
-        self._assert_audit("session_without_negotiated_guardian", "invalid_server_hello")
+        self.assertEqual(session, SessionRefused("invalid_server_hello"))
+        self._assert_audit("session_refused", "invalid_server_hello")
 
     def test_an_earlier_adapter_cache_refuses_the_session(self):
         # The earlier cache held the signed JSON-RPC envelope, bound to no Guardian URL.
@@ -205,10 +205,10 @@ class ServerHelloContract(unittest.TestCase):
         self.assertEqual(session.server_hello["payload"], {"future_extension": True})
         self.assertEqual(session.server_hello["another_extension"], "preserve")
 
-    def test_empty_result_is_no_answer(self):
+    def test_empty_result_refuses_the_session(self):
         self.hello = {}
         with mock.patch.object(_exchange, "_open", side_effect=self._respond):
-            self.assertEqual(self._run(), NoAnswer("invalid_server_hello"))
+            self.assertEqual(self._run(), SessionRefused("invalid_server_hello"))
 
     def test_fixture_emits_the_handshake_specific_schema(self):
         guardian = ProgrammableGuardian()

@@ -17,7 +17,16 @@ from typing import Any
 
 from acs.client._audit import audit_event
 from acs.client._config import Config, Resolution
-from acs.client._exchange import GuardianHTTPError, is_jsonrpc_response, key_id_rejected, post
+from acs.client._exchange import (
+    GuardianHTTPError,
+    MalformedResponseError,
+    envelope_problem,
+    http_decision_failure,
+    is_jsonrpc_response,
+    key_id_rejected,
+    post,
+    server_hello_schema_problem,
+)
 from acs.client._outcome import Decided, Handshake, Negotiated, NoAnswer, SessionRefused, Undecided
 from acs.client._secrets import SigningMaterialMissing, load_signing_material
 from acs.client._signing import sign_envelope, verify_signature
@@ -29,7 +38,6 @@ from acs.core import (
     derive_session_key,
     guardian_error_cause,
     is_guardian_refusal,
-    is_session_refusal,
     iso8601_now,
     jcs_canonicalize,
     normalize_decision,
@@ -273,29 +281,35 @@ def _hello(*, guardian_url: str, session_id: str, agent_id: str, platform: str,
     except Exception as e:  # noqa: BLE001
         return NoAnswer("guardian_url_rejected" if isinstance(e, ValueError) else "adapter_exception",
                         {"error": str(e)})
+    http_status = None
     try:
         response = post(client_hello, guardian_url=guardian_url, timeout_s=timeout)
     except GuardianHTTPError as e:
         if not is_jsonrpc_response(e.body):
-            return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
-        response = e.body
+            if http_decision_failure(e.status):
+                return NoAnswer(f"http_{e.status}_error", {"http_status": e.status})
+            return SessionRefused(f"http_{e.status}_refusal", {"http_status": e.status})
+        response, http_status = e.body, e.status
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
         return NoAnswer("handshake_timeout" if timed_out else "transport_failure", {"error": str(e)})
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        return NoAnswer("malformed_response", {"error": str(e)})
+    except MalformedResponseError as e:
+        return SessionRefused("malformed_response", {"error": str(e)})
     except Exception as e:  # noqa: BLE001
         return NoAnswer("adapter_exception", {"error": str(e)})
     try:
-        return _classify_hello(client_hello, response, session_id)
+        decision = _classify_hello(client_hello, response, session_id)
     except Exception as e:  # noqa: BLE001
         return SessionRefused("response_unverifiable", {"error": str(e)})
+    if http_status is not None and not http_decision_failure(http_status) and not isinstance(decision, SessionRefused):
+        return SessionRefused(f"http_{http_status}_refusal", {"http_status": http_status})
+    return decision
 
 
 def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: str) -> Handshake:
-    """An answer that fails its checks refuses the session; a verified error that is not a refusal, or a ServerHello that does not answer the ClientHello, is no answer (§4.1)."""
+    """A signed -32603 is no answer, and anything else but a ServerHello that answers the ClientHello refuses the session (§4.1, §6.4)."""
     if not is_jsonrpc_response(response):
-        return NoAnswer("malformed_response")
+        return SessionRefused("malformed_response")
     error = response.get("error")
     code = error.get("code") if error is not None else None
     if response.get("id") != client_hello["id"]:
@@ -308,19 +322,25 @@ def _classify_hello(client_hello: Mapping[str, Any], response: Any, session_id: 
                 return SessionRefused("key_id_rejected", {"claimed_error_code": code})
             return SessionRefused("error_signature_invalid",
                                   {"claimed_error_code": code, "claimed_cause": guardian_error_cause(code)})
+        problem = envelope_problem(response)
+        if problem is not None:
+            return SessionRefused("malformed_response", {"problem": problem})
         fields = {"error_code": code, "error_message": error.get("message")}
-        # §4.1 names three session refusals; the step-level refusal codes are refused too.
-        if is_session_refusal(code) or is_guardian_refusal(code):
+        if is_guardian_refusal(code):
             return SessionRefused(guardian_error_cause(code), fields)
         return NoAnswer(guardian_error_cause(code), fields)
     if not verified:
         return SessionRefused("server_hello_signature_invalid")
+    problem = envelope_problem(response)
+    if problem is not None:
+        return SessionRefused("malformed_response", {"problem": problem})
     server_hello = response["result"]
     if "negotiated_version" not in server_hello:
-        return NoAnswer("invalid_server_hello")
-    problem = server_hello_problem(server_hello, client_hello["params"]["payload"])
+        return SessionRefused("invalid_server_hello")
+    problem = (server_hello_problem(server_hello, client_hello["params"]["payload"])
+               or server_hello_schema_problem(server_hello))
     if problem is not None:
-        return NoAnswer("invalid_server_hello", {"problem": problem})
+        return SessionRefused("invalid_server_hello", {"problem": problem})
     return Negotiated(server_hello)
 
 
