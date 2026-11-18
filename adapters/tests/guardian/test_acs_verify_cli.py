@@ -202,3 +202,50 @@ def test_a_signed_server_hello_the_client_would_refuse_fails(hmac_run, change, e
     report = verify_transcript(lines, key_document=None, hmac_secret=hmac_run.hmac_secret)
     assert (report.failure.line, report.failure.code) == (number, "server_hello_invalid"), report.to_text()
     assert expected in report.failure.reason
+
+
+def test_lines_after_the_session_end_are_not_called_a_missing_session_end(tmp_path, hmac_run, secret_file, capsys):
+    from acs_verify_helpers import transcript_line
+    from acs.core import iso8601_now
+    ping = {"jsonrpc": "2.0", "id": "ping-1", "method": "system/ping",
+            "params": {"acs_version": "0.1.0", "request_id": "ping-1", "timestamp": iso8601_now(),
+                       "payload": {"echo": "x"}}}
+    pong = {"jsonrpc": "2.0", "id": "ping-1", "result": {"type": "final", "acs_version": "0.1.0",
+                                                         "request_id": "ping-1", "decision": "allow"}}
+    lines = record_session(hmac_run) + [transcript_line("req", ping), transcript_line("resp", pong)]
+    path = write(tmp_path, lines)
+    assert main([str(path), "--hmac-secret", str(secret_file)]) == EXIT_PASS
+    out = capsys.readouterr().out
+    assert "tail unverified: no steps/sessionEnd" not in out
+    assert "follow the session's end" in out
+
+
+FORGED = "\x1b[2K\x1b[1A\x1b[32macs-verify: PASS\x1b[0m\x9b31m\x07\r"
+
+
+def control_characters(text):
+    return [c for c in text.replace("\n", "") if ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F]
+
+
+def test_a_recorded_cause_with_escape_sequences_prints_no_control_character(tmp_path, hmac_run, secret_file,
+                                                                            capsys):
+    from acs_verify_helpers import transcript_line
+    from acs.core import iso8601_now
+    ping = {"jsonrpc": "2.0", "id": "ping-1", "method": "system/ping",
+            "params": {"acs_version": "0.1.0", "request_id": "ping-1", "timestamp": iso8601_now(),
+                       "payload": {"echo": "x"}}}
+    lines = record_session(hmac_run) + [transcript_line("req", ping), transcript_line("resp", None, FORGED)]
+    path = write(tmp_path, lines)
+    main([str(path), "--hmac-secret", str(secret_file)])
+    out = capsys.readouterr().out
+    assert "recorded failures" in out
+    assert control_characters(out) == []
+
+
+def test_every_report_field_that_carries_transcript_text_is_escaped():
+    from acs.testing.verify import Failure, Report
+    report = Report(session_id=FORGED, failure=Failure(3, "line_invalid", FORGED),
+                    warnings=[FORGED], notes=[FORGED])
+    assert control_characters(report.to_text()) == []
+    clean = Report(ok=True, session_id=FORGED, recorded_failures=[{"line": 2, "cause": FORGED}])
+    assert control_characters(clean.to_text()) == []

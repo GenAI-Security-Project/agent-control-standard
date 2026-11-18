@@ -80,7 +80,8 @@ HMAC_SHA256 = "HMAC-SHA256"
 SESSION_END = "steps/sessionEnd"
 # A request whose answer carries no chain_hash may or may not have advanced the chain (PREMORTEM P6). The next
 # checkpoint settles it by trying each such request in and out, 2**n candidates, so n is bounded. 20 keeps a lab
-# segment with the Guardian down from failing a genuine transcript as tampered, at about a second of hashing.
+# segment with the Guardian down from failing a genuine transcript as tampered. The worst case measured at 20
+# entries is 5.4 seconds of hashing.
 MAX_UNSETTLED = 20
 # Causes acs.client gives only when a request failed before post(), so it never left the client: a Guardian URL it
 # refused, an envelope it couldn't sign, a request that can't bind an answer, and a body over the cap. Such a
@@ -220,7 +221,8 @@ class Report:
                            "request's key, so it decided nothing (specification section 10).")
         out.extend(f"  warning: {warning}" for warning in self.warnings)
         out.extend(f"  note: {note}" for note in self.notes)
-        return "\n".join(out)
+        # Every line goes through one escape at the point text is built, so a field added later can't skip it.
+        return "\n".join(_printable(line) for line in out)
 
     def _chain_line(self) -> str:
         if not self.chain_checked:
@@ -241,9 +243,23 @@ class Report:
         tail = _ranges(self.unverified_lines)
         lines = "Line" if len(self.unverified_lines) == 1 else "Lines"
         verb = "is" if len(self.unverified_lines) == 1 else "are"
+        if self.checkpoint_method == SESSION_END:
+            # The session did end. What is unverified came after it, such as a ping, so no sessionEnd is missing.
+            return (f"  chain: {through}. {lines} {tail} {'follows' if verb == 'is' else 'follow'} the session's end "
+                    f"and {verb} not covered by any signed chain_hash.")
         tail_text = f" {lines} {tail} {verb} not covered by any signed chain_hash." if tail else ""
         return (f"  chain: {through}. tail unverified: no {SESSION_END}.{tail_text} Entries cut from the end "
                 "of the transcript can't be detected.")
+
+
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _printable(text: str) -> str:
+    # A forged transcript can carry ANSI sequences in session_id, a cause, or a reason built from them. Printed raw
+    # they can repaint a FAIL as a PASS on the terminal, so each control character becomes a visible escape.
+    return _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}" if ord(m.group()) < 0x100 else f"\\u{ord(m.group()):04x}",
+                        text)
 
 
 def _noun(items: Sequence[Any]) -> str:
@@ -879,7 +895,7 @@ def _error(message: str, as_json: bool) -> int:
     if as_json:
         sys.stdout.write(json.dumps({"result": "error", "error": message}) + "\n")
     else:
-        sys.stderr.write(f"acs-verify: {message}\n")
+        sys.stderr.write(f"acs-verify: {_printable(message)}\n")
     return EXIT_USAGE
 
 
