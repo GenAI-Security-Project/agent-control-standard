@@ -507,3 +507,10 @@ def test_run_acs_is_a_tmpfs_wherever_it_is_used():
     for name in users:
         assert "/run/acs" in _services()[name]["tmpfs"], name
 
+
+def test_base_compose_never_shares_the_model_key():
+    # LAB-06 ruling R4b: the opt-in belongs in compose.openai.yaml alone. In the base file it would stay set after an
+    # attendee pointed the gateway at a key some other way.
+    for name, service in _services().items():
+        assert "ACS_UPSTREAM_KEY_SHARED" not in service.get("environment", {}), name
+
