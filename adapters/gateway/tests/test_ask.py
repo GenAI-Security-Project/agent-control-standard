@@ -103,6 +103,48 @@ def test_an_approved_resend_of_a_declared_tool_carries_its_declaration_digest(ga
     assert {k: v for k, v in resent["payload"].items() if k != ANSWER_FIELD} == first["payload"]
 
 
+PINNED = {"type": "function", "name": "pinned_tool", "description": "Send an email to a recipient",
+          "parameters": {"type": "object", "properties": {"to": {"type": "string"}}, "required": ["to"]},
+          "strict": True}
+PINNED_DIGEST = "sha256:a6a1d60a57a24d1a6dbd9dc93e8f0cae4487ee001d3671b490dac9f046a6feb4"
+POISONED_DIGEST = "sha256:578a3f442eb772a505cfb1ba0a969f74abb91bbb7864747eb8192503493ab281"
+PINNED_CALL = call_item("pinned_tool", {"to": "ops@ns1.finbot"}, "call_1")
+
+
+def pinned_ask_request(declaration: dict[str, Any]) -> dict[str, Any]:
+    return {**finbot_request(), "tools": [declaration]}
+
+
+def test_an_approved_pinned_call_with_its_declaration_unchanged_is_delivered(gateway, harness_guardian, upstream,
+                                                                             audit, tmp_path):
+    """The pin holds through an ASK: the first ask and the approval resend both carry the pinned digest, and the
+    Guardian allows the resend."""
+    upstream.reply(response_body(PINNED_CALL))
+    client = enforce(gateway, harness_guardian, tmp_path, HARNESS_PINNED_VERSION=PINNED_DIGEST, HARNESS_PINNED_ASK="1")
+    thread = approver(client, "approve")
+    response = client.post("/v1/responses", json=pinned_ask_request(PINNED))
+    thread.join()
+    assert response.json()["output"] == [PINNED_CALL]
+    assert [r["payload"]["tool"] for r in tool_requests(tmp_path)] == [
+        {"name": "pinned_tool", "version": PINNED_DIGEST}] * 2
+    assert [(r["outcome"], r["decision"]) for r in events(audit, "ask_resolved")] == [("approved", "allow")]
+
+
+def test_a_pinned_call_under_a_changed_declaration_is_denied_before_any_ask(gateway, harness_guardian, upstream,
+                                                                           audit, tmp_path):
+    """A redefined pinned tool never reaches the approver: the pin denies the first ask, so nothing is held."""
+    poisoned = {**PINNED, "description": PINNED["description"] + "."}
+    upstream.reply(response_body(PINNED_CALL))
+    client = enforce(gateway, harness_guardian, tmp_path, HARNESS_PINNED_VERSION=PINNED_DIGEST, HARNESS_PINNED_ASK="1")
+    response = client.post("/v1/responses", json=pinned_ask_request(poisoned))
+    assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
+    assert [r["payload"]["tool"] for r in tool_requests(tmp_path)] == [
+        {"name": "pinned_tool", "version": POISONED_DIGEST}]
+    assert events(audit, "ask_pending") == []
+    assert [(a["decision"], a["reason_codes"]) for a in events(audit, "decision_applied")] == [
+        ("deny", ["tool_content_hash_mismatch"])]
+
+
 def test_a_rejected_ask_blocks_the_call(gateway, harness_guardian, upstream, audit, tmp_path):
     upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
     client = enforce(gateway, harness_guardian, tmp_path)

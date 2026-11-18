@@ -31,6 +31,17 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
         if not version or not pin or version != pin:
             return {**base, "decision": "deny", "reasoning": f"tool.version {version}",
                     "reason_codes": ["tool_content_hash_mismatch"]}
+        if method == "steps/toolCallRequest" and os.environ.get("HARNESS_PINNED_ASK"):
+            # A pinned call that passed the pin then needs a person, so a test sees the pin checked on the first ask
+            # and again on the approval resend. Off unless a test sets the flag.
+            answer = (params.get("payload") or {}).get("x_acs_lab_ask_answer")
+            if isinstance(answer, dict):
+                if answer.get("answer") == "approve":
+                    return {**base, "decision": "allow", "reasoning": "approved", "reason_codes": ["approver_approved"]}
+                return {**base, "decision": "deny", "reasoning": "not approved", "reason_codes": ["approver_rejected"]}
+            return {**base, "decision": "ask", "reasoning": "needs approval", "reason_codes": ["payment_over_threshold"],
+                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve?",
+                                    "timeout_seconds": int(os.environ.get("HARNESS_ASK_TIMEOUT_S", "60"))}}
     if method == "steps/toolCallRequest":
         if tool == "slow_tool":
             time.sleep(float(os.environ.get("HARNESS_SLOW_S", "1.5")))
