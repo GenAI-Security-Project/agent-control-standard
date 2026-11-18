@@ -212,11 +212,13 @@ flowchart LR
     A["before Append"] --> B{"Intent differs from<br/>the one set earlier?"}
     B -->|no| C{"chain_hash differs from<br/>the session head?"}
     C -->|no| D{"skillLoad without an<br/>approved skillRegister?"}
-    D -->|no| E["Append, then Decide"]
+    D -->|no| M{"wrapped tools/call: a request under an open id,<br/>a response to no open call, or a request<br/>that would grow the record past its limit?"}
+    M -->|no| E["Append, then Decide"]
     B -->|yes| X["DENY intent_mismatch"]
     C -->|yes| Y["DENY chain_mismatch"]
     D -->|yes| Z["DENY skill_unverifiable"]
-    X & Y & Z --> F["Append, no Decide"]
+    M -->|yes| W["DENY mcp_call_pending,<br/>mcp_call_not_open or<br/>policy_state_too_large"]
+    X & Y & Z & W --> F["Append, no Decide"]
 ```
 
 Three more steps get their own handling: `steps/sessionEnd` closes the session, a

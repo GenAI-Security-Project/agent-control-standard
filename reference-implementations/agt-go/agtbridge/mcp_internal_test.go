@@ -20,33 +20,29 @@ func mcpRequest(t *testing.T, message map[string]any) acs.Request {
 	return acs.Request{Method: "protocols/MCP/tools/call", Params: acs.Params{Payload: payload}}
 }
 
-// A call the decision stops is not remembered, so no response can be
-// answered as though it ran.
-func TestProjectionRemembersOnlyWhatRuns(t *testing.T) {
-	var state policyState
-	call := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": map[string]any{"name": "Bash", "arguments": map[string]any{"command": "ls"}}})
-	p, err := project(call, &state)
+// A response names only its id; the Guardian's record of open calls gives
+// its tool, and a response to no open call is refused.
+func TestProjectionFindsTheToolOfAResponse(t *testing.T) {
+	response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 7, "result": map[string]any{"content": []any{}}})
+	if _, err := project(response, nil); err == nil {
+		t.Fatal("a response to no open call was projected")
+	}
+	p, err := project(response, map[string]string{"7": "Bash"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.settle(&state, acs.Deny)
-	if len(state.MCPCalls) != 0 {
-		t.Fatalf("a denied call is pending: %v", state.MCPCalls)
+	var result acs.ToolCallResultPayload
+	if err := jsonv2.Unmarshal(p.req.Params.Payload, &result); err != nil {
+		t.Fatal(err)
 	}
-	response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 7, "result": map[string]any{"content": []any{}}})
-	if _, err := project(response, &state); err == nil {
-		t.Fatal("a response to a denied call was projected")
-	}
-	p.settle(&state, acs.Modify)
-	if state.MCPCalls["7"] != "Bash" {
-		t.Fatalf("a call let through is not pending: %v", state.MCPCalls)
+	if p.req.Method != acs.StepToolCallResult || result.Tool.Name != "Bash" {
+		t.Fatalf("projected as %s %s", p.req.Method, p.req.Params.Payload)
 	}
 }
 
 func TestProjectionReaddress(t *testing.T) {
-	var state policyState
 	call := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": "Bash", "arguments": map[string]any{"command": "ls"}}})
-	p, err := project(call, &state)
+	p, err := project(call, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +61,8 @@ func TestProjectionReaddress(t *testing.T) {
 			t.Errorf("%s: applied to a wrapped MCP request", name)
 		}
 	}
-	p.settle(&state, acs.Allow)
 	response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "a"}}}})
-	r, err := project(response, &state)
+	r, err := project(response, map[string]string{"1": "Bash"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +76,6 @@ func TestProjectionReaddress(t *testing.T) {
 }
 
 func TestProjectionKeepsEveryMCPResultShape(t *testing.T) {
-	state := policyState{MCPCalls: map[string]string{"1": "Read"}}
 	response := mcpRequest(t, map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -95,7 +89,7 @@ func TestProjectionKeepsEveryMCPResultShape(t *testing.T) {
 			"_meta":             map[string]any{"trace": "private"},
 		},
 	})
-	p, err := project(response, &state)
+	p, err := project(response, map[string]string{"1": "Read"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +120,7 @@ func TestProjectionKeepsEveryMCPResultShape(t *testing.T) {
 }
 
 // The policy cannot check a response whose result does not decode, so
-// project refuses it. The response still answers its call.
+// project refuses it.
 func TestProjectionRefusesAnUndecodableResponse(t *testing.T) {
 	for name, result := range map[string]map[string]any{
 		"content_not_a_list":    {"content": "token ghp_abcdef123456"},
@@ -144,24 +138,19 @@ func TestProjectionRefusesAnUndecodableResponse(t *testing.T) {
 		"request_state_and_bad": {"resultType": "input_required", "requestState": "s", "inputRequests": "x"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			state := policyState{MCPCalls: map[string]string{"1": "Read"}}
 			response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "result": result})
-			if p, err := project(response, &state); !errors.Is(err, errMCPResultUnreadable) {
+			if p, err := project(response, map[string]string{"1": "Read"}); !errors.Is(err, errMCPResultUnreadable) {
 				t.Fatalf("got %v, projected as %s", err, p.req.Params.Payload)
-			}
-			if len(state.MCPCalls) != 0 {
-				t.Fatalf("the answered call is still pending: %v", state.MCPCalls)
 			}
 		})
 	}
 }
 
 // An MCP error response has no result. Its message and data reach the policy
-// as outputs of a failed call, and the response answers its call.
+// as outputs of a failed call.
 func TestProjectionKeepsAnMCPError(t *testing.T) {
-	state := policyState{MCPCalls: map[string]string{"1": "Read"}}
 	response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "error": map[string]any{"code": -32000, "message": "denied", "data": map[string]any{"path": "/etc"}}})
-	p, err := project(response, &state)
+	p, err := project(response, map[string]string{"1": "Read"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,60 +164,21 @@ func TestProjectionKeepsAnMCPError(t *testing.T) {
 	if !slices.Equal(p.outputs, []string{"/error/message", "/error/data"}) {
 		t.Fatalf("output paths %v", p.outputs)
 	}
-	if len(state.MCPCalls) != 0 {
-		t.Fatalf("the answered call is still pending: %v", state.MCPCalls)
-	}
 }
 
-// Two calls in flight under one MCP id would make their results
-// indistinguishable, so the second is refused until the first is answered.
-func TestProjectionRefusesAPendingID(t *testing.T) {
-	var state policyState
-	call := func(tool string) acs.Request {
-		return mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": map[string]any{}}})
-	}
-	p, err := project(call("Bash"), &state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.settle(&state, acs.Allow)
-	if _, err := project(call("WebFetch"), &state); !errors.Is(err, errMCPCallPending) {
-		t.Fatalf("a second call under a pending id: %v", err)
-	}
-	if _, err := project(mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": []any{}}}), &state); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := project(call("WebFetch"), &state); err != nil {
-		t.Fatalf("the id once answered: %v", err)
-	}
-}
-
+// A response's id finds its call by canonical JSON value, as the Guardian
+// records it, not by spelling.
 func TestProjectionCanonicalizesMCPIDs(t *testing.T) {
 	for _, tt := range []struct {
-		name, first, equivalent string
+		name, recorded, response string
 	}{
 		{"escaped_string", `"a"`, `"\u0061"`},
 		{"equivalent_number", `1`, `1.0`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			request := func(id, tool string) acs.Request {
-				payload := json.RawMessage(`{"jsonrpc":"2.0","id":` + id + `,"method":"tools/call","params":{"name":"` + tool + `","arguments":{}}}`)
-				return acs.Request{Method: "protocols/MCP/tools/call", Params: acs.Params{Payload: payload}}
-			}
-			response := func(id string) acs.Request {
-				payload := json.RawMessage(`{"jsonrpc":"2.0","id":` + id + `,"result":{"content":[]}}`)
-				return acs.Request{Method: "protocols/MCP/tools/call", Params: acs.Params{Payload: payload}}
-			}
-			var state policyState
-			pending, err := project(request(tt.first, "Bash"), &state)
-			if err != nil {
-				t.Fatal(err)
-			}
-			pending.settle(&state, acs.Allow)
-			if _, err := project(request(tt.equivalent, "WebFetch"), &state); !errors.Is(err, errMCPCallPending) {
-				t.Fatalf("equivalent pending id: %v", err)
-			}
-			if _, err := project(response(tt.equivalent), &state); err != nil {
+			payload := json.RawMessage(`{"jsonrpc":"2.0","id":` + tt.response + `,"result":{"content":[]}}`)
+			response := acs.Request{Method: "protocols/MCP/tools/call", Params: acs.Params{Payload: payload}}
+			if _, err := project(response, map[string]string{tt.recorded: "Bash"}); err != nil {
 				t.Fatalf("equivalent response id: %v", err)
 			}
 		})
@@ -250,8 +200,7 @@ func TestProjectionKeepsAnInputRequiredResult(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			response := mcpRequest(t, map[string]any{"jsonrpc": "2.0", "id": 1, "result": tt.result})
-			state := policyState{MCPCalls: map[string]string{"1": "Read"}}
-			p, err := project(response, &state)
+			p, err := project(response, map[string]string{"1": "Read"})
 			if err != nil {
 				t.Fatal(err)
 			}

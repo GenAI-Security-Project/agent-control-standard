@@ -16,7 +16,21 @@ Declared in [`policy_engine.go`](../guardian/policy_engine.go).
   - its payload as raw JSON that passed the method's schema, or its wrapped protocol's
     handler;
   - the SessionContext after this step's ContextEntry was appended, as its own copy, which
-    the engine must not change.
+    the engine must not change;
+  - `SessionContext.MCPCalls`: the tool of each open wrapped `tools/call`, by canonical
+    MCP id. An MCP response names only the id, so the engine finds the tool here. The
+    Guardian opens a call when its final decision lets the request through. It closes the
+    call when `Conclude` of the response's step succeeds, whatever the decision on the
+    response. A response whose step does not reach `Conclude`, or whose `Conclude` fails,
+    leaves the call open: one the MCP reader refuses as malformed, or one the store does
+    not record.
+- **The Guardian answers before `Decide`**
+  - DENY `mcp_call_pending` to a `tools/call` under an MCP id whose call is still open;
+  - DENY `mcp_call_not_open` to an MCP response whose id has no open call. An ASK or a DEFER on
+    a wrapped `tools/call` opens no call, so the response to a call an approver later lets
+    through is DENY `mcp_call_not_open`;
+  - DENY `policy_state_too_large` to a `tools/call` that grows the record past
+    `MaxPolicyStateBytes`.
 - **Timing**
   - `Decide` runs under the negotiated decision timeout.
   - `ctx` ends when that timeout or the Guardian's shutdown grace expires. The Guardian
@@ -31,13 +45,14 @@ Declared in [`policy_engine.go`](../guardian/policy_engine.go).
 | a decision missing a field its disposition requires, or a MODIFY breaking §6.3 | DENY `evaluation_failed` |
 | `DelegateToAgent` | DENY `agent_layer_unavailable`; this Guardian has no agent layer |
 | a disposition the hook does not permit | DENY, or ALLOW where the hook permits no DENY, with reason code `disposition_not_permitted` |
+| a MODIFY of a wrapped `tools/call` request that redacts its `id`, `method` or `params.name`, or replaces the message with one that does not read as a `tools/call` request with the same id and tool | DENY `evaluation_failed`; the Guardian records an open call by its id and tool |
 | `Client.CannotApplyModify` with a MODIFY | DENY `modify_unsupported`, or ALLOW at postCompact (§6.5) |
 | `Config.AskSubstitution` set to `deny` or `defer` with an ASK | the configured §9.2 substitute for this endpoint |
 | `Client.CannotResolveAsk` with an ASK | `Client.AskSubstitute`, DEFER or DENY (§9.2) |
 | a DEFER past the session's bound | DENY `deferral_bound_exceeded`, keeping a §9.2 substitute's reason code and reasoning |
 | a `Grant` for a step the session was not answered ASK for | DENY `grant_invalid`, keeping a §6.5 or §9.2 substitute's reason code and reasoning |
 | a `Grant` scoped to the session | an `intent_extension` ContextEntry recording the approver, the capabilities and the extension's provenance, and the Intent grown by the capabilities (§9.1) |
-| valid JSON in `State` | kept with the session and given back as `SessionContext.PolicyState` on its later steps; invalid JSON is DENY `evaluation_failed`; larger than `MaxPolicyStateBytes` is DENY `policy_state_too_large` |
+| valid JSON in `State` | The Guardian keeps it with the session and gives it back as `SessionContext.PolicyState` on later steps. When the Guardian answers with another disposition than the engine's, or refuses its `Grant`, it discards the engine's new state with its decision and keeps the state the session had. Invalid JSON is DENY `evaluation_failed`. State larger than `MaxPolicyStateBytes` is DENY `policy_state_too_large`. |
 
 - **The engine must**
   - **know the Observed Agent's capability itself.** ACS puts neither MODIFY nor ASK capability on
@@ -105,8 +120,11 @@ who may write them.
   - `Reserve` consumes a `request_id` for a step answered without an entry, a step after
     sessionEnd.
 - **`Conclude`** is one operation.
-  - It checks the head, then records the ASK step, the deferral, the engine's state and,
-    for an allowed skillRegister, the skill approval, all or nothing.
+  - It checks the head, then records the ASK step, the deferral, the new list of open
+    wrapped MCP calls, the engine's state and, for an allowed skillRegister, the skill
+    approval, all or nothing. The list and the engine's state replace the stored ones
+    whole; the Guardian builds them. A nil `MCPCalls` keeps the stored list, and an
+    empty one clears it. Keep a copy, not the caller's map.
   - The approval spans sessions: a skill registered in one loads in a later one
     (`skill-load.json`). Key it by `skill_id` and digest.
 - **Bounds**

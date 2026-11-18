@@ -36,6 +36,8 @@ const (
 	ReasonShuttingDown            = "shutting_down"
 	ReasonEngineSaturated         = "engine_saturated"
 	ReasonPolicyStateTooLarge     = "policy_state_too_large"
+	ReasonMCPCallPending          = "mcp_call_pending"
+	ReasonMCPCallNotOpen          = "mcp_call_not_open"
 	ReasonKeyNotBound             = "key_not_bound"
 	ReasonAgentIDNotBound         = "agent_id_not_bound"
 )

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/chain"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/handshake"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/mcp"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/method"
 )
 
@@ -217,6 +219,26 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	if err != nil {
 		return g.storeFailed(ctx, in, "store skill lookup", err)
 	}
+	mcpCall, err := wrappedToolCall(req)
+	if pre == nil && err != nil {
+		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "wrapped tools/call", err)
+		d := denial(disposition.ReasonEvaluationFailed, "the wrapped tools/call cannot be read")
+		pre = &d
+	}
+	if pre == nil && mcpCall != nil {
+		_, open := sess.MCPCalls[mcpCall.ID]
+		switch {
+		case mcpCall.Response && !open:
+			d := denial(disposition.ReasonMCPCallNotOpen, "no tools/call with this MCP id is open, so this result belongs to no call the Guardian let through")
+			pre = &d
+		case !mcpCall.Response && open:
+			d := denial(disposition.ReasonMCPCallPending, "another tools/call with this MCP id is still awaiting its response, so their results could not be told apart")
+			pre = &d
+		case !mcpCall.Response && mcpCallsBytes(sess.MCPCalls)+len(mcpCall.ID)+len(mcpCall.Tool) > g.cfg.MaxPolicyStateBytes:
+			d := denial(disposition.ReasonPolicyStateTooLarge, "the session's open MCP calls outgrew what this Guardian keeps")
+			pre = &d
+		}
+	}
 	entry, err := g.appendEntry(ctx, in, req, sess, established)
 	switch {
 	case errors.Is(err, ErrReplayDetected):
@@ -245,6 +267,10 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 	} else {
 		pd = g.decide(ctx, in, req, sess)
 	}
+	if mcpCall != nil && !mcpCall.Response && pd.Disposition == acs.Modify && changesMCPCall(pd.Modifications, *mcpCall) {
+		g.failure(ctx, req.Method, in.SessionID, in.RequestID, "policy engine decision", errors.New("a MODIFY changes the id, the method or the tool of a wrapped tools/call"))
+		pd = PolicyDecision{Decision: denial(disposition.ReasonEvaluationFailed, "the policy engine's MODIFY changes the MCP id, method or tool of the call")}
+	}
 	// The decision is made; recording it must not fail for the deadline the
 	// decision ran under, so it runs to a deadline of its own.
 	ctx, cancelAnswer := context.WithDeadline(lockCtx, recorded)
@@ -270,6 +296,9 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 		head, err := g.grant(ctx, in, req, sess, *pd.Grant)
 		switch {
 		case errors.Is(err, errGrantInvalid):
+			// At postCompact the denial stands as ALLOW (§6.5), so the
+			// disposition alone does not show the engine's decision was
+			// discarded.
 			pd = PolicyDecision{}
 			d = replacing(denial(disposition.ReasonGrantInvalid, err.Error()))
 		case err != nil:
@@ -279,7 +308,13 @@ func (g *Guardian) step(ctx context.Context, in *call, req acs.Request) (r reply
 			chainHash = head
 		}
 	}
-	switch err := g.conclude(ctx, in, req, pd, d, sess.Head); {
+	// The engine's state assumes the engine's own decision. When the Guardian
+	// answers with another disposition, the engine's decision is discarded and
+	// so is its new state: the session keeps the state it had.
+	if d.Disposition != pd.Disposition {
+		pd = PolicyDecision{}
+	}
+	switch err := g.conclude(ctx, in, req, pd, d, sess, mcpCall); {
 	case errors.Is(err, ErrHeadMoved):
 		return g.answerStep(ctx, in, replacing(denial(disposition.ReasonSessionContended, "another writer extended the session while this step held its lock")), sess.Head)
 	case errors.Is(err, ErrStoreFull):
@@ -549,6 +584,7 @@ func (g *Guardian) decide(ctx context.Context, in *call, req acs.Request, sess S
 		Entries:     sess.Entries,
 		Intent:      sess.Intent,
 		Handshake:   sess.Handshake,
+		MCPCalls:    sess.MCPCalls,
 		PolicyState: sess.PolicyState,
 	}})
 	if sess.PolicyState == nil {
@@ -668,10 +704,27 @@ func (g *Guardian) auditUnavailable(ctx context.Context, in *call, req acs.Reque
 }
 
 // conclude records what the final decision leaves in the session: an ASK
-// step an approver may answer, a deferral, the engine's state, and an
-// approved skill registration.
-func (g *Guardian) conclude(ctx context.Context, in *call, req acs.Request, pd PolicyDecision, d acs.Decision, head string) error {
-	c := Conclusion{ExpectedHead: head, Deferred: d.Disposition == acs.Defer, PolicyState: pd.State}
+// step an approver may answer, a deferral, a wrapped tools/call let through
+// or answered, the engine's state, and an approved skill registration.
+func (g *Guardian) conclude(ctx context.Context, in *call, req acs.Request, pd PolicyDecision, d acs.Decision, sess Session, mcpCall *mcp.ToolCall) error {
+	c := Conclusion{ExpectedHead: sess.Head, Deferred: d.Disposition == acs.Defer, PolicyState: pd.State}
+	if mcpCall != nil {
+		calls := maps.Clone(sess.MCPCalls)
+		if calls == nil {
+			calls = map[string]string{}
+		}
+		switch {
+		case mcpCall.Response:
+			// A response ends its call whatever the decision on it.
+			if _, open := calls[mcpCall.ID]; open {
+				delete(calls, mcpCall.ID)
+				c.MCPCalls = calls
+			}
+		case d.Disposition == acs.Allow || d.Disposition == acs.Modify:
+			calls[mcpCall.ID] = mcpCall.Tool
+			c.MCPCalls = calls
+		}
+	}
 	if d.Disposition == acs.Ask {
 		c.AskStepID = req.Params.RequestID
 	}
@@ -683,10 +736,55 @@ func (g *Guardian) conclude(ctx context.Context, in *call, req acs.Request, pd P
 		approval := skillApproval(p.SkillID, p.Definition.Digest)
 		c.ApproveSkill = &approval
 	}
-	if !c.Deferred && c.AskStepID == "" && c.PolicyState == nil && c.ApproveSkill == nil {
+	if !c.Deferred && c.AskStepID == "" && c.MCPCalls == nil && c.PolicyState == nil && c.ApproveSkill == nil {
 		return nil
 	}
 	return g.cfg.Store.Conclude(ctx, in.SessionID, c)
+}
+
+// wrappedToolCall reads req as a wrapped MCP tools/call with an id, which
+// the Guardian tracks from request to response, and is nil for anything
+// else.
+func wrappedToolCall(req acs.Request) (*mcp.ToolCall, error) {
+	protocol, _, m, ok := method.SplitWrapped(req.Method)
+	if !ok || !strings.EqualFold(protocol, mcp.Protocol) || m != mcp.ToolsCall {
+		return nil, nil
+	}
+	call, err := mcp.ReadToolCall(req.Params.Payload)
+	if err != nil || call.ID == "" {
+		return nil, err
+	}
+	return &call, nil
+}
+
+// changesMCPCall reports whether m can change the id, the method or the
+// tool name of the wrapped tools/call request call. The Guardian records
+// only a tools/call, by its id and tool name, so a MODIFY must leave these
+// three members unchanged. A replacement must itself read as a tools/call
+// request with the same id and tool.
+func changesMCPCall(m *acs.Modifications, call mcp.ToolCall) bool {
+	if m.ModifiedContent != nil {
+		replaced, err := mcp.ReadToolCall(json.RawMessage(*m.ModifiedContent))
+		return err != nil || replaced.Response || replaced.ID != call.ID || replaced.Tool != call.Tool
+	}
+	for _, r := range m.Redactions {
+		for _, kept := range []string{"/id", "/method", "/params/name"} {
+			if r.Path == kept || strings.HasPrefix(kept, r.Path+"/") || strings.HasPrefix(r.Path, kept+"/") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mcpCallsBytes is the size of a session's open MCP calls.
+// MaxPolicyStateBytes bounds it apart from the engine's state.
+func mcpCallsBytes(calls map[string]string) int {
+	n := 0
+	for id, tool := range calls {
+		n += len(id) + len(tool)
+	}
+	return n
 }
 
 var errEngineSaturated = errors.New("every engine call place is taken")
