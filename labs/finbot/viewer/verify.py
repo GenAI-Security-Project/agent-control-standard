@@ -1,4 +1,4 @@
-"""The viewer's verify mark: acs-verify's verdict on each session's whole transcript (issue #586).
+"""The viewer's verify mark: acs-verify's verdict on every line the viewer has read from each session (issue #586).
 
 Owner: Rock Lambros. Lab code for the FinBot lab (BUILD_PLAN A.12).
 
