@@ -53,28 +53,6 @@ class SessionVerdict:
     warnings: tuple[str, ...] = ()
 
 
-def load_keys(env: Mapping[str, str]) -> Keys | None:
-    """The key document ACS_GUARDIAN_KEYS names, or None when it is unset or can't be used.
-
-    None makes every row read not checked, never verified. The document goes through acs-verify's own reader, with
-    the rule acs.client applies to it: no symlink, no FIFO, no group or other write.
-    """
-    path = env.get(KEY_DOCUMENT_ENV, "").strip()
-    if not path:
-        return None
-    from acs.testing import verify as acs_verify
-    key_id = env.get(KEY_ID_ENV, "").strip() or None
-    fingerprint = env.get(KEY_FINGERPRINT_ENV, "").strip()
-    try:
-        document = acs_verify._read_key_document(path)
-        # An empty transcript runs every check on the document itself and stops before any line, so a document
-        # acs-verify can't use is refused here once instead of failing every row later.
-        acs_verify.verify_transcript([], key_document=document, hmac_secret=None, key_id=key_id, keys_only=True)
-    except (acs_verify.UsageError, ImportError, OSError, ValueError):
-        return None
-    return Keys(document=document, key_id=key_id, fingerprints=(fingerprint,) if fingerprint else ())
-
-
 class KeyDocumentUnavailable(Exception):
     """The settings name a key document that can't be read or used. The viewer pauses until it can (R6)."""
 
@@ -83,13 +61,58 @@ class KeyDocumentUnavailable(Exception):
 MAX_KEY_DOCUMENT_BYTES = 1 << 20
 
 
+def _read_document_bytes(path: str) -> bytes:
+    """The key document's bytes, read once through acs.client's one reader for trusted files, with the rule
+    acs-verify applies to a key document. It opens with O_NOFOLLOW and O_NONBLOCK, so neither a symlink nor a FIFO
+    can redirect or hang it, refuses anything but a regular file and any group or other write, and reads at most
+    MAX_KEY_DOCUMENT_BYTES (final review R9). Every refusal raises KeyDocumentUnavailable."""
+    from acs.client import not_writable_by_others, read_trusted_file
+    try:
+        return read_trusted_file(path, setting=KEY_DOCUMENT_ENV, max_bytes=MAX_KEY_DOCUMENT_BYTES,
+                                 mode_rule=not_writable_by_others, refused=KeyDocumentUnavailable,
+                                 require_owner=False)
+    except KeyDocumentUnavailable:
+        raise
+    except (OSError, RuntimeError) as e:
+        raise KeyDocumentUnavailable(f"the key document can't be read: {e}") from e
+
+
+def _keys_from_bytes(data: bytes, env: Mapping[str, str]) -> Keys:
+    """The keys in these exact bytes, checked by acs-verify. Raises KeyDocumentUnavailable when they can't be used."""
+    from acs.testing import verify as acs_verify
+    key_id = env.get(KEY_ID_ENV, "").strip() or None
+    fingerprint = env.get(KEY_FINGERPRINT_ENV, "").strip()
+    try:
+        # acs-verify's own strict JSON reader: a repeated key or a NaN is refused, as it refuses them on the file.
+        document = acs_verify._strict_loads(data.decode("utf-8"))
+        if not isinstance(document, Mapping):
+            raise ValueError("the key document is not a JSON object")
+        # An empty transcript runs every check on the document itself and stops before any line, so a document
+        # acs-verify can't use is refused here once instead of failing every row later.
+        acs_verify.verify_transcript([], key_document=document, hmac_secret=None, key_id=key_id, keys_only=True)
+    except (acs_verify.UsageError, ImportError, UnicodeDecodeError, ValueError, RecursionError) as e:
+        raise KeyDocumentUnavailable(f"the key document can't be used: {e}") from e
+    return Keys(document=document, key_id=key_id, fingerprints=(fingerprint,) if fingerprint else ())
+
+
+def load_keys(env: Mapping[str, str]) -> Keys | None:
+    """The key document ACS_GUARDIAN_KEYS names, or None when it is unset or can't be used. One read, one parse."""
+    path = env.get(KEY_DOCUMENT_ENV, "").strip()
+    if not path:
+        return None
+    try:
+        return _keys_from_bytes(_read_document_bytes(path), env)
+    except KeyDocumentUnavailable:
+        return None
+
+
 class KeySource:
     """The key document the settings name, read again whenever its bytes change (fix round 1, I4).
 
     generation grows on every change, so the model knows to judge every session again under the new document.
-    The bytes are hashed on every poll, whatever the file's times say (fix round 2, m-2). A document that can't be
-    read or used raises KeyDocumentUnavailable on every poll until it can, and no poll ever falls back to an older
-    document (fix round 2, R6 and m-1).
+    Each poll reads the document once, without blocking, and the same bytes give both the hash and the keys, so the
+    keys in use always come from the bytes hashed (final review R9). A document that can't be read or used raises
+    KeyDocumentUnavailable on every poll until it can, and no poll ever falls back to an older document (R6).
     """
 
     def __init__(self, env: Mapping[str, str]) -> None:
@@ -107,20 +130,11 @@ class KeySource:
         """The loaded document, or None when the settings name none. Raises while the named one can't be used."""
         if not self._path:
             return None
-        try:
-            with open(self._path, "rb") as f:
-                data = f.read(MAX_KEY_DOCUMENT_BYTES + 1)
-        except OSError as e:
-            raise KeyDocumentUnavailable(f"the key document can't be read: {e}") from e
-        if len(data) > MAX_KEY_DOCUMENT_BYTES:
-            raise KeyDocumentUnavailable("the key document is larger than 1 MiB")
+        data = _read_document_bytes(self._path)
         digest = hashlib.sha256(data).digest()
         if digest != self._digest:
-            # Nothing is stored until a load succeeds, so a failed load is tried again on the next poll.
-            keys = load_keys(self._env)
-            if keys is None:
-                raise KeyDocumentUnavailable("the key document can't be used")
-            self._keys, self._digest = keys, digest
+            # Nothing is stored until these bytes parse, so a failed load is tried again on the next poll.
+            self._keys, self._digest = _keys_from_bytes(data, self._env), digest
             self.generation += 1
         return self._keys
 

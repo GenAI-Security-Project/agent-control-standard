@@ -138,3 +138,13 @@ def test_acs_verify_functions_the_viewer_calls():
     assert {"key_document", "hmac_secret", "expect_fingerprints", "key_id", "keys_only"} <= set(parameters)
     assert callable(acs_verify._read_key_document) and issubclass(acs_verify.UsageError, Exception)
     assert {"ok", "failure"} <= set(acs_verify.Report.__dataclass_fields__)
+
+
+def test_the_key_document_reader_and_parser_the_viewer_calls():
+    # Final review R9: one read through acs.client's trusted-file reader, parsed by acs-verify's strict JSON reader.
+    from acs.client import not_writable_by_others, read_trusted_file
+    from acs.testing import verify as acs_verify
+    assert callable(read_trusted_file) and callable(not_writable_by_others)
+    assert {"setting", "max_bytes", "mode_rule", "refused", "require_owner"} <= set(
+        inspect.signature(read_trusted_file).parameters)
+    assert callable(acs_verify._strict_loads)

@@ -198,15 +198,16 @@ def test_a_key_document_load_error_is_tried_again(tmp_path, key, monkeypatch):
     model = Model(logs.transcript_dir, None, source)
     model.refresh()
     live.write_text(json.dumps({"format": "acs-lab-keys/1", "keys": []}), encoding="utf-8")
-    real, calls = verify_module.load_keys, []
+    # Since fix round 3 the parse of the bytes read is the step that can raise something unexpected.
+    real, calls = verify_module._keys_from_bytes, []
 
-    def once(env):
+    def once(data, env):
         calls.append(1)
         if len(calls) == 1:
             raise RuntimeError("load failed")
-        return real(env)
+        return real(data, env)
 
-    monkeypatch.setattr(verify_module, "load_keys", once)
+    monkeypatch.setattr(verify_module, "_keys_from_bytes", once)
     model.refresh()
     assert model.paused.startswith("checks paused: RuntimeError")
     model.refresh()
@@ -300,3 +301,75 @@ def test_any_other_listing_error_pauses_even_with_no_rows(tmp_path, monkeypatch)
     monkeypatch.setattr(model_module.os, "scandir", denied)
     model.refresh()
     assert model.paused.startswith("checks paused: PermissionError")
+
+
+# Final-review fix round 3, R9: the key document is read once per poll, without blocking, and the same bytes give
+# both the hash and the keys.
+
+
+def _live_document(tmp_path, key):
+    import json
+    live = tmp_path / "live.json"
+    live.write_text(json.dumps(key.document), encoding="utf-8")
+    os.chmod(live, 0o644)
+    return live
+
+
+def test_a_fifo_at_the_key_path_pauses_within_one_poll(tmp_path, key):
+    # Probe p15 a: a plain open() of a FIFO with no writer blocked inside the server lock for good.
+    import threading
+    live = _live_document(tmp_path, key)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(live)}))
+    model.refresh()
+    assert {verify for _, verify in marks(model).values()} == {"verified"}
+    os.unlink(live)
+    os.mkfifo(live)
+    done = threading.Event()
+
+    def poll():
+        model.refresh()
+        done.set()
+
+    threading.Thread(target=poll, daemon=True).start()
+    assert done.wait(5), "a poll blocked on the FIFO at the key path"
+    assert model.paused.startswith("checks paused: KeyDocumentUnavailable")
+    assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+
+
+def test_a_symlink_at_the_key_path_pauses(tmp_path, key):
+    live = _live_document(tmp_path, key)
+    link = tmp_path / "link.json"
+    link.symlink_to(live)
+    logs = LabLogs(tmp_path)
+    signed_session(logs, key)
+    model = Model(logs.transcript_dir, None, KeySource({"ACS_GUARDIAN_KEYS": str(link)}))
+    model.refresh()
+    assert model.paused.startswith("checks paused: KeyDocumentUnavailable")
+    assert {verify for _, verify in marks(model).values()} == {"not_checked"}
+
+
+def test_the_hash_and_the_keys_come_from_one_read(tmp_path, key, monkeypatch):
+    # Probe p15 b, m-1: the file changed between the hash read and the parse read and then changed back, leaving
+    # B's keys stored under A's hash. With one read, the keys always match the bytes hashed.
+    import hashlib
+    import json
+
+    import verify as verify_module
+    other = decision_key(tmp_path / "other")
+    a_bytes, b_bytes = json.dumps(key.document).encode(), json.dumps(other.document).encode()
+    live = _live_document(tmp_path, key)
+    source = KeySource({"ACS_GUARDIAN_KEYS": str(live)})
+    served, reads = [b_bytes, a_bytes], []
+
+    def read_once(path):
+        reads.append(path)
+        return served[len(reads) - 1]
+
+    monkeypatch.setattr(verify_module, "_read_document_bytes", read_once)
+    first = source.current()
+    assert first.document == other.document and source._digest == hashlib.sha256(b_bytes).digest()
+    second = source.current()
+    assert second.document == key.document and source._digest == hashlib.sha256(a_bytes).digest()
+    assert len(reads) == 2
