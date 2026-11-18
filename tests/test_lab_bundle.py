@@ -35,3 +35,318 @@ def test_no_state_tracked():
     tracked = subprocess.run(["git", "ls-files", "labs/finbot/state", "labs/finbot/.env"], cwd=ROOT,
                              capture_output=True, text=True, check=True).stdout
     assert tracked == ""
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# compose.yaml and compose.openai.yaml (Task 3)
+# ---------------------------------------------------------------------------------------------------------------------
+
+import re  # noqa: E402
+
+import pytest  # noqa: E402
+import yaml  # noqa: E402
+
+COMPOSE = BUNDLE / "compose.yaml"
+COMPOSE_OPENAI = BUNDLE / "compose.openai.yaml"
+DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
+LAB_IMAGES = {"LAB_RUNTIME_IMAGE": "ghcr.io/genai-security-project/acs-lab-runtime",
+              "LAB_FINBOT_IMAGE": "ghcr.io/genai-security-project/acs-lab-finbot"}
+# A.2 as amended: four published ports, each on loopback with its own override variable.
+PORTS = {"finbot": ("LAB_PORT_FINBOT", 8000), "acs-gateway": ("LAB_PORT_APPROVER", 8090),
+         "acs-viewer": ("LAB_PORT_VIEWER", 8095), "jaeger": ("LAB_PORT_JAEGER", 16686)}
+# FinBot's own docker-compose.yml at 1450fc4, its app service's environment block, vendored so the test needs no
+# network. The lab may differ from it in exactly the four A.3 settings.
+FINBOT_OWN_ENV = {"REDIS_URL": "redis://redis:6379", "DATABASE_URL": "${DATABASE_URL:-sqlite://data/finbot.db}",
+                  "POSTGRES_HOST": "postgres"}
+FINBOT_LAB_SETTINGS = {"OPENAI_BASE_URL": "http://acs-gateway:8080/v1", "OPENAI_API_KEY": "lab-dummy",
+                       "LLM_TIMEOUT": "360", "WEB_CONCURRENCY": "1"}
+ACS_SERVICES = ("acs-gateway", "acs-guardian", "acs-viewer", "lab")
+
+
+def _compose(path: Path = COMPOSE) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _services(path: Path = COMPOSE) -> dict:
+    return _compose(path)["services"]
+
+
+def _env(service: dict) -> dict[str, str]:
+    env = service.get("environment", {})
+    assert isinstance(env, dict), "environment is written as a mapping"
+    return {k: str(v) for k, v in env.items()}
+
+
+def _image_default(image: str) -> tuple[str | None, str]:
+    match = re.fullmatch(r"\$\{(\w+):-([^}]+)\}", image)
+    return (match.group(1), match.group(2)) if match else (None, image)
+
+
+def _all_images() -> list[tuple[str, str]]:
+    found = []
+    for path in (COMPOSE, COMPOSE_OPENAI):
+        for name, service in _services(path).items():
+            if "image" in service:
+                found.append((name, service["image"]))
+    return found
+
+
+def test_third_party_images_pinned_by_digest():
+    for name, image in _all_images():
+        variable, default = _image_default(image)
+        if variable in LAB_IMAGES:
+            continue
+        assert DIGEST.search(image), f"{name}: {image}"
+
+
+@pytest.mark.xfail(strict=True, reason="The two lab images get digests only after labs-images.yml first publishes. "
+                   "The follow-up commit pins them and removes this mark (issue #588).")
+def test_every_image_pinned_by_digest():
+    for name, image in _all_images():
+        _, default = _image_default(image)
+        assert DIGEST.search(default), f"{name}: {image}"
+
+
+def test_lab_images_name_ghcr_and_keep_a_build():
+    # Rock 2026-11-17: pull from ghcr first, build locally when the pull fails. lab.sh swaps the name through the
+    # variable, since docker can't tag a local build with a digest reference.
+    seen = set()
+    for name, service in _services().items():
+        variable, default = _image_default(service.get("image", ""))
+        if variable is None:
+            continue
+        assert variable in LAB_IMAGES, f"{name}: {service['image']}"
+        assert default.startswith(LAB_IMAGES[variable]), f"{name}: {default}"
+        assert "build" in service, f"{name} needs a build section for the local fallback"
+        seen.add(variable)
+    assert seen == set(LAB_IMAGES)
+
+
+def test_finbot_builds_pinned_commit_with_pinned_bases():
+    build = _services()["finbot"]["build"]
+    assert build["context"] == ("https://github.com/GenAI-Security-Project/finbot-ctf.git"
+                                "#1450fc4d15cbe80dbaf52dde1df767dbc967e32e")
+    assert build["target"] == "app"
+    contexts = build["additional_contexts"]
+    assert set(contexts) == {"python:3.13-slim-bookworm", "ghcr.io/astral-sh/uv:0.6"}
+    for key, value in contexts.items():
+        assert value.startswith(f"docker-image://{key}@sha256:") and DIGEST.search(value), value
+
+
+def test_ports_bind_loopback_with_override():
+    services = _services()
+    for name, (variable, port) in PORTS.items():
+        assert services[name]["ports"] == [f"127.0.0.1:${{{variable}:-{port}}}:{port}"], name
+
+
+def test_only_four_ports_published():
+    published = {name for path in (COMPOSE, COMPOSE_OPENAI) for name, s in _services(path).items() if s.get("ports")}
+    assert published == set(PORTS)
+    for path in (COMPOSE, COMPOSE_OPENAI):
+        for name, service in _services(path).items():
+            assert "expose" not in service and service.get("network_mode") is None, name
+
+
+def test_no_replay_service():
+    # Ledger 2026-11-17: replay runs inside the gateway, so there is no replay or collector container (P22).
+    services = _services()
+    assert "replay" not in services and "otel-collector" not in services
+    assert "8070" not in COMPOSE.read_text(encoding="utf-8")
+
+
+def test_no_proxy_value():
+    assert _env(_services()["acs-gateway"])["NO_PROXY"] == "acs-guardian,jaeger"
+
+
+def test_acs_net_internal_and_ui_net_not():
+    networks = _compose()["networks"]
+    assert networks["acs-net"]["internal"] is True
+    assert not networks["ui-net"].get("internal", False)
+    assert not networks["finbot-net"].get("internal", False)
+
+
+def test_published_services_have_a_non_internal_network():
+    # Docker publishes no port for a container whose only network is internal.
+    networks = _compose()["networks"]
+    for name in PORTS:
+        attached = _services()[name]["networks"]
+        assert any(not networks[n].get("internal", False) for n in attached), name
+
+
+def test_service_networks_match_a2():
+    expected = {"finbot": {"finbot-net"}, "redis": {"finbot-net"}, "acs-gateway": {"finbot-net", "acs-net"},
+                "acs-guardian": {"acs-net"}, "opa": {"acs-net"}, "acs-viewer": {"ui-net"},
+                "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net"}}
+    services = _services()
+    assert set(services) == set(expected)
+    for name, nets in expected.items():
+        assert set(services[name]["networks"]) == nets, name
+
+
+def test_guardian_unreachable_from_finbot_net():
+    services = _services()
+    for name in ("acs-guardian", "opa"):
+        assert list(services[name]["networks"]) == ["acs-net"], name
+
+
+def test_admin_port_binds_only_the_fixed_acs_net_address():
+    # Review focus 1: FinBot's network_request tool runs on finbot-net, where the gateway also sits.
+    compose = _compose()
+    subnet = compose["networks"]["acs-net"]["ipam"]["config"][0]["subnet"]
+    gateway = compose["services"]["acs-gateway"]
+    address = gateway["networks"]["acs-net"]["ipv4_address"]
+    env = _env(gateway)
+    assert env["ACS_GATEWAY_ADMIN_HOST"] == address
+    assert env["ACS_GATEWAY_ADMIN_PORT"] == "8091"
+    assert subnet == "${LAB_ACS_SUBNET:-10.88.47.0/24}"
+    assert address == "${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}"
+    assert _env(compose["services"]["lab"])["ACS_GATEWAY_ADMIN_HOST"] == address
+
+
+def test_secrets_only_where_a2_says():
+    # The lab CLI holds the whole bundle mount, which it needs to write state/, so it gets no compose secret.
+    expected = {"acs-gateway": {"acs-hmac", "acs-admin-token", "acs-approver-token"},
+                "acs-guardian": {"acs-hmac", "acs-guardian-key"}}
+    for name, service in _services().items():
+        assert set(service.get("secrets", [])) == expected.get(name, set()), name
+    openai = _services(COMPOSE_OPENAI)
+    assert set(openai) == {"acs-gateway"}
+    assert set(openai["acs-gateway"]["secrets"]) == {"openai-key"}
+    assert set(_compose(COMPOSE_OPENAI)["secrets"]) == {"openai-key"}
+    files = {name: s["file"] for name, s in _compose()["secrets"].items()}
+    assert files == {"acs-hmac": "./state/secrets/hmac.key", "acs-guardian-key": "./state/secrets/guardian.key",
+                     "acs-admin-token": "./state/secrets/admin.token",
+                     "acs-approver-token": "./state/secrets/approver.token"}
+
+
+def test_lab_secrets_name_every_mounted_secret():
+    # The entrypoint copies exactly what LAB_SECRETS names, so the two lists must agree.
+    for path in (COMPOSE, COMPOSE_OPENAI):
+        for name, service in _services(path).items():
+            env = service.get("environment", {})
+            if "LAB_SECRETS" not in env:
+                continue
+            names = {pair.split(":", 1)[0] for pair in env["LAB_SECRETS"].split()}
+            secrets = set(service.get("secrets", []))
+            if path == COMPOSE_OPENAI:
+                secrets |= set(_services()[name].get("secrets", []))
+            assert names == secrets, f"{path.name} {name}"
+
+
+def test_state_secrets_masked_outside_the_cli():
+    # Every ACS service but the CLI mounts state/ for logs and keys. A tmpfs over state/secrets keeps the Guardian's
+    # private key out of the gateway and the viewer, which run as the same uid.
+    for name in ("acs-gateway", "acs-guardian", "acs-viewer"):
+        service = _services()[name]
+        assert any(v.split(":")[0] == "./state" for v in service["volumes"]), name
+        assert "/lab/state/secrets" in service["tmpfs"], name
+
+
+def test_finbot_settings_differ_in_exactly_four():
+    finbot = _services()["finbot"]
+    env = _env(finbot)
+    changed = {k: v for k, v in env.items() if FINBOT_OWN_ENV.get(k) != v}
+    assert changed == FINBOT_LAB_SETTINGS
+    assert set(FINBOT_OWN_ENV) <= set(env)
+    assert "SECRET_KEY" not in env and "env_file" not in finbot
+
+
+def test_jaeger_only_under_traces_profile():
+    services = _services()
+    assert services["jaeger"]["profiles"] == ["traces"]
+    assert services["lab"]["profiles"] == ["cli"]
+    for name, service in services.items():
+        if name not in ("jaeger", "lab"):
+            assert "profiles" not in service, name
+    # Spans go to Jaeger only when lab traces on sets the endpoint. Empty leaves tracing off in the gateway.
+    assert _env(services["acs-gateway"])["OTEL_EXPORTER_OTLP_ENDPOINT"] == "${LAB_OTLP_ENDPOINT:-}"
+
+
+def test_opa_ignores_reference_dirs():
+    opa = _services()["opa"]
+    assert opa["command"] == ["run", "--server", "--addr", "0.0.0.0:8181", "--watch", "--ignore", "starters",
+                              "--ignore", "solutions", "--ignore", "tests", "--ignore", "tools", "/policy"]
+    assert opa["volumes"] == ["./policy:/policy:ro"]
+
+
+def test_no_secret_in_environment():
+    # A key name may only point at a file under /run/acs, never carry a value, apart from FinBot's dummy key.
+    secretish = re.compile(r"(KEY|TOKEN|PASSWORD|SECRET)(_FILE)?$")
+    for path in (COMPOSE, COMPOSE_OPENAI):
+        for name, service in _services(path).items():
+            for key, value in _env(service).items():
+                if not secretish.search(key) or key in ("ACS_HMAC_KEY_ID", "ACS_GUARDIAN_KEY_ID"):
+                    continue
+                if (name, key) == ("finbot", "OPENAI_API_KEY"):
+                    assert value == "lab-dummy"
+                    continue
+                if key == "ACS_UPSTREAM_KEY_SHARED":
+                    continue
+                assert value.startswith("/run/acs/") or key == "ACS_GATEWAY_ADMIN_TOKEN_FILE", f"{name} {key}"
+
+
+def test_gateway_environment_names_match_the_gateway():
+    # Interface pin: every ACS_ name compose sets on the gateway is one the gateway or acs.client reads.
+    source = "\n".join(p.read_text(encoding="utf-8") for p in
+                       [*(ROOT / "adapters" / "gateway" / "src" / "acs_gateway").glob("*.py"),
+                        *(ROOT / "adapters" / "src" / "acs" / "client").glob("*.py")])
+    for key in _env(_services()["acs-gateway"]):
+        if key.startswith("ACS_"):
+            assert f'"{key}"' in source, key
+
+
+def test_guardian_environment_names_match_the_guardian():
+    source = "\n".join(p.read_text(encoding="utf-8") for p in
+                       [*(ROOT / "adapters" / "src" / "acs" / "guardian").glob("*.py"),
+                        *(ROOT / "adapters" / "src" / "acs" / "client").glob("*.py")])
+    guardian = _services()["acs-guardian"]
+    for key in _env(guardian):
+        if key.startswith("ACS_"):
+            assert f'"{key}"' in source, key
+    assert guardian["command"] == ["acs-example-guardian", "--host", "0.0.0.0", "--port", "8787"]
+    assert 'acs-example-guardian = "acs.guardian.example_guardian:main"' in (
+        ROOT / "adapters" / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_guardian_fails_closed_and_signs_ml_dsa_by_default():
+    env = _env(_services()["acs-guardian"])
+    assert "ACS_ON_DECISION_FAILURE" not in env
+    assert env["ACS_RESPONSE_SIGNING"] == "${ACS_RESPONSE_SIGNING:-ML-DSA-65}"
+    assert _env(_services()["acs-gateway"])["ACS_RESPONSE_ALGORITHMS"] == "${ACS_RESPONSE_ALGORITHMS:-ML-DSA-65}"
+    assert _env(_services()["acs-gateway"])["ACS_LAB_MODE"] == "${ACS_LAB_MODE:-enforce}"
+
+
+def test_replay_by_default_and_openai_only_by_override():
+    gateway = _env(_services()["acs-gateway"])
+    assert gateway["ACS_UPSTREAM"] == "replay"
+    assert "ACS_UPSTREAM_KEY_FILE" not in gateway
+    openai = _env(_services(COMPOSE_OPENAI)["acs-gateway"])
+    assert openai["ACS_UPSTREAM"] == "openai"
+    assert openai["ACS_UPSTREAM_KEY_FILE"] == "/run/acs/openai.key"
+    # LAB-06 final review: a key file on a non-loopback model port needs the explicit opt-in.
+    assert openai["ACS_UPSTREAM_KEY_SHARED"] == "1"
+    assert _compose(COMPOSE_OPENAI)["secrets"]["openai-key"]["file"] == "./state/secrets/openai.key"
+
+
+def test_acs_services_drop_to_the_attendee_uid():
+    services = _services()
+    for name in ("acs-gateway", "acs-guardian"):
+        env = _env(services[name])
+        assert env["LAB_UID"] == "${LAB_UID:-10001}" and env["LAB_GID"] == "${LAB_GID:-10001}", name
+        assert "user" not in services[name], name
+    for name in ("acs-viewer", "lab"):
+        assert services[name]["user"] == "${LAB_UID:-10001}:${LAB_GID:-10001}", name
+    for name in ACS_SERVICES:
+        assert "no-new-privileges:true" in services[name]["security_opt"], name
+        assert services[name]["cap_drop"] == ["ALL"], name
+
+
+def test_viewer_command_matches_lab_13():
+    viewer = _services()["acs-viewer"]
+    assert viewer["command"] == ["python", "/opt/lab/viewer/server.py", "--host", "0.0.0.0", "--port", "8095"]
+    server = BUNDLE / "viewer" / "server.py"
+    if not server.exists():
+        pytest.skip("LAB-13's viewer has not merged into this tree yet")
+    text = server.read_text(encoding="utf-8")
+    for needle in ('"--host"', '"--port"', "ACS_TRANSCRIPT_DIR", "ACS_AUDIT_FILE", "ACS_GUARDIAN_KEYS"):
+        assert needle in text, needle

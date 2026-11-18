@@ -1,0 +1,22 @@
+# Live OpenAI answers for keeper takes (issue #588, LAB-15). lab.sh adds this file after compose.yaml when
+# `lab upstream openai` has run, and refuses without labs/finbot/state/secrets/openai.key.
+#
+# Version 1.0.0. Owner: Rock Lambros. The key mounts into the gateway only, never into FinBot, which keeps its dummy.
+#
+# Lab convention (issue #588): ACS_UPSTREAM_KEY_SHARED=1. The gateway refuses a key file on a model port off loopback,
+# because anyone who reaches that port spends the key. In this bundle the model port listens on finbot-net, whose only
+# other members are FinBot and redis, so the opt-in is set here and nowhere else.
+
+services:
+  acs-gateway:
+    environment:
+      LAB_SECRETS: "acs-hmac:hmac.key acs-admin-token:admin.token acs-approver-token:approver.token openai-key:openai.key"
+      ACS_UPSTREAM: openai
+      ACS_UPSTREAM_KEY_FILE: /run/acs/openai.key
+      ACS_UPSTREAM_KEY_SHARED: "1"
+    secrets:
+      - openai-key
+
+secrets:
+  openai-key:
+    file: ./state/secrets/openai.key
