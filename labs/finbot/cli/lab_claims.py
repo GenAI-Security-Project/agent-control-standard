@@ -39,6 +39,8 @@ class Ledger:
     unconfirmed: tuple[str, ...] = ()
     # The sign-off row is filled in but its digest no longer matches the ledger text above it.
     stale: bool = False
+    # (Not claimed id, the banned phrases that row excuses), from the claims-not-claimed block.
+    excuses: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 def _cells(line: str) -> list[str]:
@@ -59,6 +61,28 @@ def _block(text: str, tag: str) -> tuple[str, ...]:
     if not lines:
         raise ValueError(f"the ledger's {tag} block is empty")
     return lines
+
+
+def _excuses(text: str, ids: frozenset[str], banned: tuple[str, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Parse the claims-not-claimed block. Every Not claimed row needs a line, and each phrase must be banned.
+
+    A marker excuses only the phrases its own row names, so one N marker can't carry a different banned phrase.
+    """
+    known = {_normalize(b).lower() for b in banned}
+    rows: dict[str, tuple[str, ...]] = {}
+    for line in _block(text, "claims-not-claimed"):
+        row, _, rest = line.partition(":")
+        phrases = tuple(p.strip() for p in rest.split("|") if p.strip())
+        if row not in ids or not row.startswith("N-") or row in rows or not phrases:
+            raise ValueError(f"claims-not-claimed line {line!r} doesn't name a Not claimed row and its phrases")
+        for phrase in phrases:
+            if _normalize(phrase).lower() not in known:
+                raise ValueError(f"{row} excuses {phrase!r}, which isn't on the banned list")
+        rows[row] = phrases
+    missing = sorted(i for i in ids if i.startswith("N-") and i not in rows)
+    if missing:
+        raise ValueError(f"Not claimed rows with no phrase line: {missing}")
+    return tuple(sorted(rows.items()))
 
 
 def ledger_digest(text: str) -> str:
@@ -112,14 +136,17 @@ def load_ledger(path: Path) -> Ledger:
     """Parse the ledger. Raises OSError when unreadable and ValueError when malformed."""
     text = Path(path).read_text(encoding="utf-8")
     signed, stale = _signed(text)
+    ids = frozenset(ID_ROW.findall(text))
+    banned = _block(text, "claims-banned")
     return Ledger(
-        ids=frozenset(ID_ROW.findall(text)),
-        banned=_block(text, "claims-banned"),
+        ids=ids,
+        banned=banned,
         triggers=_block(text, "claims-triggers"),
         exclude=_block(text, "claims-exclude"),
         signed=signed,
         unconfirmed=_unconfirmed(text),
         stale=stale,
+        excuses=_excuses(text, ids, banned),
     )
 
 
@@ -134,7 +161,9 @@ class Finding:
 
 
 SCANNED = frozenset({".md", ".txt", ".html", ".js", ".css", ".py", ".rego", ".yaml", ".yml", ".json", ".sh", ".ps1"})
+COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
+TAG = re.compile(r"</?[A-Za-z][^>]*>")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 HEADING = re.compile(r"^\s{0,3}#{1,6}\s")
@@ -183,8 +212,12 @@ def _glob_regex(glob: str) -> re.Pattern[str]:
 def _normalize(text: str) -> str:
     """The copy phrases and triggers are matched against, so markup and look-alike characters can't hide one.
 
-    Markers are read from the raw text, because the author typed them on purpose.
+    Markers are read from the raw text, because the author typed them on purpose. Only an HTML comment marks.
     """
+    # Comment delimiters go but their text stays, so a banned phrase inside a comment is still matched. Tags go
+    # before entities are unescaped, so an escaped angle bracket in prose isn't taken for markup.
+    text = text.replace("<!--", " ").replace("-->", " ")
+    text = TAG.sub("", text)
     text = html.unescape(text)
     text = LINK.sub(r"\1", text)
     text = unicodedata.normalize("NFKC", text)
@@ -249,15 +282,24 @@ def _units(text: str, markdown: bool) -> tuple[list[tuple[int, str, bool]], int 
     return units, (fence_line if fence is not None else None)
 
 
-def _check(unit: str, in_fence: bool, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str]) -> list[tuple[str, str]]:
-    markers = MARKER.findall(unit)
+def _markers(unit: str) -> list[str]:
+    """Ids written as claim:X-NN inside an HTML comment. The same words in plain text are ordinary text."""
+    return [m for comment in COMMENT.findall(unit) for m in MARKER.findall(comment)]
+
+
+def _check(unit: str, in_fence: bool, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str],
+           excused: dict[str, frozenset[str]]) -> list[tuple[str, str]]:
+    markers = _markers(unit)
     valid = [m for m in markers if m in ledger.ids]
     found = [("unknown_id", f"claim:{m}") for m in markers if m not in ledger.ids]
     seen = _normalize(unit)
-    # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the defect.
-    if banned.search(seen) and not any(m.startswith("N-") for m in valid):
+    # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the
+    # defect. It excuses only the phrases its own row names.
+    allowed = frozenset().union(*(excused.get(m, frozenset()) for m in valid))
+    hits = {" ".join(m.group().lower().split()) for m in banned.finditer(seen)}
+    if hits - allowed:
         found.append(("banned", unit))
-    elif not in_fence and triggers.search(seen) and not valid:
+    elif not hits and not in_fence and triggers.search(seen) and not valid:
         found.append(("unledgered", unit))
     return found
 
@@ -268,6 +310,7 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
     skip = ledger_path.resolve() if ledger_path else None
     banned = _phrase_regex(ledger.banned, whole_word=True)
     triggers = _phrase_regex(ledger.triggers, whole_word=False)
+    excused = {row: frozenset(_normalize(p).lower() for p in phrases) for row, phrases in ledger.excuses}
     findings: list[Finding] = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -297,7 +340,7 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
             text = raw.decode("utf-8", errors="replace")
             units, open_fence = _units(text, path.suffix.lower() == ".md")
             for line, unit, in_fence in units:
-                for kind, shown in _check(unit, in_fence, ledger, banned, triggers):
+                for kind, shown in _check(unit, in_fence, ledger, banned, triggers, excused):
                     findings.append(Finding(rel, line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
             if open_fence is not None:
                 # Everything after an unclosed fence is exempt from triggers, so the fence itself is the defect.

@@ -316,9 +316,9 @@ def test_honest_negative_survives_markup(tree):
     assert _scan(tree, {"a.md": "The stack isn\u2019t **ACS-Core** conformant. <!-- claim:N-06 -->\n"}) == []
 
 
-def test_marker_is_read_from_raw_text(tree):
-    # A marker in a link target or inline code still counts, because the author typed it there.
-    assert _scan(tree, {"a.md": "ACS guarantees nothing. [x](claim:C-03)\n"}) == []
+def test_marker_in_a_comment_is_read_from_raw_text(tree):
+    # The comment is stripped from the matching copy, but the marker inside it still counts.
+    assert _scan(tree, {"a.md": "ACS guarantees nothing. <!--claim:C-03-->\n"}) == []
 
 
 def test_marker_clears_only_its_list_item(tree):
@@ -454,3 +454,64 @@ def test_ledger_truth_rows():
     assert "_response_signing.py" in rows["C-02"][2]
     assert "digest" in _section("What the tests enforce and what only a reader catches")
     assert "non-Markdown" in _section("What the tests enforce and what only a reader catches")
+
+
+# ---------------------------------------------------------------- Fix round 3
+
+
+def test_n_marker_excuses_only_its_own_phrases(tree):
+    body = "The lab isn't ACS-Core conformant and isn't FIPS 140 validated. <!-- claim:N-06 -->\n"
+    findings = _scan(tree, {"a.md": body})
+    assert [(f.kind, f.line) for f in findings] == [("banned", 1)]
+    both = "The lab isn't ACS-Core conformant and isn't FIPS 140 validated. <!-- claim:N-06 claim:N-13 -->\n"
+    assert [f for f in _scan(tree, {"b.md": both}) if f.path == "b.md"] == []
+
+
+def test_n_marker_for_another_row_does_not_excuse(tree):
+    assert "banned" in _kinds(_scan(tree, {"a.md": "The stack is ACS-Core conformant. <!-- claim:N-01 -->\n"}))
+
+
+def test_every_not_claimed_row_names_banned_phrases(tree):
+    root, ledger = tree
+    loaded = lab_claims.load_ledger(ledger)
+    named = dict(loaded.excuses)
+    not_claimed = [i for i in loaded.ids if i.startswith("N-")]
+    assert sorted(named) == sorted(not_claimed)
+    assert all(phrases for phrases in named.values())
+    banned = {p.lower() for p in loaded.banned}
+    assert all(p.lower() in banned for phrases in named.values() for p in phrases)
+
+
+def test_ledger_with_an_unmapped_not_claimed_row_is_unreadable(tree, tmp_path):
+    root, ledger = tree
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("N-06: ", "N-99: ", 1), encoding="utf-8")
+    assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 2
+
+
+def test_plain_text_marker_does_not_mark(tree):
+    assert "banned" in _kinds(_scan(tree, {"a.md": "The lab is ACS-Core conformant. claim:N-06\n"}))
+    assert [f.kind for f in _scan(tree, {"b.md": "ACS guarantees safety. claim:C-03\n"}) if f.path == "b.md"] == [
+        "unledgered"]
+
+
+def test_plain_text_marker_id_is_not_checked(tree):
+    assert _scan(tree, {"a.md": "Write markers as claim:C-99 in a comment.\n"}) == []
+
+
+@pytest.mark.parametrize("name,body", [
+    ("a.md", "The lab is <b>ACS-Core</b> conformant.\n"),
+    ("b.md", "The lab is ACS-<i>Core</i> conformant.\n"),
+    ("c.html", "<p>The lab is <b>ACS-Core</b> conformant.</p>\n"),
+    ("d.html", "<p>ACS-<span class=\"x\">Core</span> conformant</p>\n"),
+    ("e.md", "The lab is <a href=\"x\">ACS-Core</a> conformant.\n"),
+])
+def test_html_tags_do_not_hide_a_banned_phrase(tree, name, body):
+    assert "banned" in _kinds(_scan(tree, {name: body}))
+
+
+def test_html_tags_do_not_hide_a_trigger(tree):
+    assert _kinds(_scan(tree, {"a.html": "<p>ACS <em>prevents</em> leaks.</p>\n"})) == ["unledgered"]
+
+
+def test_comment_text_is_still_matched(tree):
+    assert "banned" in _kinds(_scan(tree, {"a.md": "<!-- The lab is ACS-Core conformant -->\n"}))

@@ -43,6 +43,7 @@ Evidence names code on the lab branch. A row that starts its evidence with `Unco
 | N-10 | That ACS is benchmarked against, or interoperates with, Microsoft's Agent Governance Toolkit. | LAB-10 times ACS signatures only. |
 | N-11 | That 0.1.5 makes an ACS-Crypto or ACS-Core claim. | Signing is experimental and off by default. |
 | N-12 | That the lab was tested by anyone outside the build team. | The outside tester slot (LAB-17) was cut. |
+| N-13 | That the signing library is a FIPS 140-3 validated module. | ML-DSA-65 follows FIPS 204, and the library has no FIPS 140 validation. |
 
 ## Disclosures
 
@@ -54,7 +55,7 @@ Say each of these wherever the lab is shown.
 
 ## Banned phrasing
 
-One case-insensitive phrase per line. A phrase matches on word boundaries. A line or paragraph that holds one fails the check unless it also carries a marker for a row in the Not claimed table, such as `claim:N-06`.
+One case-insensitive phrase per line. A phrase matches on word boundaries. A unit that holds one fails the check unless it also carries a marker, written as an HTML comment such as `<!-- claim:N-06 -->`, for a Not claimed row that names that phrase in the block below. A marker for another row doesn't excuse it. A marker written as plain text isn't a marker.
 
 ```claims-banned
 ACS-Core conformant
@@ -80,6 +81,7 @@ independently tested
 benchmarked against
 0.2.0 is released
 production-ready
+reproduces a live model
 Zenity
 supports Windows
 Windows is supported
@@ -88,9 +90,27 @@ runs on Windows
 runs under Windows
 ```
 
+Each Not claimed row names the banned phrases it excuses, as `N-NN: phrase | phrase`. Every Not claimed row needs a line here, and every phrase must be on the banned list above.
+
+```claims-not-claimed
+N-01: can't tell a control exists | invisible to the agent
+N-02: attributable
+N-03: revocation is solved
+N-04: proves the record is complete | prove the record is complete
+N-05: prevents downgrade
+N-06: ACS-Core conformant
+N-07: stops attacks | blocks every
+N-08: reproduces a live model
+N-09: 0.2.0 is released
+N-10: Agent Governance Toolkit | AGT | interoperates with | interoperability with | benchmarked against
+N-11: ACS-Crypto
+N-12: tested by attendees | independently tested
+N-13: FIPS 140 | FIPS validated | FIPS-validated
+```
+
 ## Claim triggers
 
-One case-insensitive word stem per line, matched at the start of a word. A paragraph or line that holds one needs a marker for a row in this ledger, such as `claim:C-03`. Markdown code fences are exempt, because they hold commands.
+One case-insensitive word stem per line, matched at the start of a word. A paragraph or line that holds one needs a marker for a row in this ledger, such as `<!-- claim:C-03 -->`. Markdown code fences are exempt, because they hold commands.
 
 ```claims-triggers
 prove
