@@ -33,6 +33,12 @@ RUN cd /src/adapters \
  && cd /src/adapters/gateway \
  && UV_PROJECT_ENVIRONMENT=/opt/acs/gateway/.venv uv sync --locked --no-default-groups --no-editable --extra pqc
 
+# The claims check's Markdown renderer goes into the venv the lab CLI runs from, by wheel hash at the root uv.lock's
+# versions. claims-requirements.txt says why each flag is there.
+COPY labs/finbot/images/claims-requirements.txt /src/claims-requirements.txt
+RUN uv pip install --python /opt/acs/adapters/.venv/bin/python --require-hashes --no-deps --only-binary :all: \
+        -r /src/claims-requirements.txt
+
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 LABEL org.opencontainers.image.title="acs-lab-runtime" \

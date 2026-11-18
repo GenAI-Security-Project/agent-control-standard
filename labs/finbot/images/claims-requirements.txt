@@ -1,0 +1,10 @@
+# The claims check's Markdown renderer in the lab CLI image (issue #588, LAB-15). Owner: Rock Lambros.
+#
+# LAB-14's lab_claims renders Markdown with Python-Markdown and pymdown-extensions' superfences, and exits 2 without
+# them. Each pin is the root uv.lock's version and wheel hash, so the CLI renders exactly what the repository's tests
+# render. tests/test_lab_bundle.py fails when either drifts from the lock. Installed with --no-deps: superfences
+# imports nothing from pymdown-extensions' PyYAML dependency.
+markdown==3.10.3 \
+    --hash=sha256:fa6c92a00a4a3c98b22728c64a935ae1928250ae65058a6ded814d2cc29a4cea
+pymdown-extensions==11.0.1 \
+    --hash=sha256:db3943a62bab7e03af1364f0c4083e64b91fb097675a4b6cceccfbe9a77e5eb2

@@ -514,3 +514,46 @@ def test_base_compose_never_shares_the_model_key():
     for name, service in _services().items():
         assert "ACS_UPSTREAM_KEY_SHARED" not in service.get("environment", {}), name
 
+
+CLAIMS_REQUIREMENTS = BUNDLE / "images" / "claims-requirements.txt"
+CLAIMS_PACKAGES = {"markdown", "pymdown-extensions"}
+
+
+def _root_lock_wheels(name: str) -> tuple[str, set[str]]:
+    import tomllib
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    package = next(p for p in lock["package"] if p["name"] == name)
+    return package["version"], {w["hash"] for w in package.get("wheels", [])}
+
+
+def test_claims_check_packages_pinned_to_the_root_lock():
+    # LAB-14's claims check renders Markdown with Python-Markdown and superfences, and exits 2 without them. The image
+    # installs both at the root uv.lock's versions, by hash, so the CLI renders exactly what the repository's tests do.
+    pins: dict[str, tuple[str, set[str]]] = {}
+    # A trailing backslash continues a requirement onto the next line, as pip and uv read it.
+    text = CLAIMS_REQUIREMENTS.read_text(encoding="utf-8").replace("\\\n", " ")
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        spec, *options = line.split()
+        name, version = spec.split("==")
+        hashes = {o.split("=", 1)[1] for o in options if o.startswith("--hash=")}
+        assert hashes, f"{name} has no hash"
+        pins[name.lower()] = (version, hashes)
+    assert set(pins) == CLAIMS_PACKAGES
+    for name, (version, hashes) in pins.items():
+        lock_version, lock_hashes = _root_lock_wheels(name)
+        assert version == lock_version, name
+        assert hashes <= lock_hashes, name
+    assert pins["pymdown-extensions"][0] == "11.0.1"
+
+
+def test_image_installs_the_claims_packages_by_hash():
+    text = (BUNDLE / "images" / "acs.Dockerfile").read_text(encoding="utf-8")
+    assert "COPY labs/finbot/images/claims-requirements.txt" in text
+    install = re.search(r"uv pip install[^\n]*(?:\\\n[^\n]*)*", text)
+    assert install, "no uv pip install step"
+    for flag in ("--require-hashes", "--no-deps", "--only-binary :all:", "--python /opt/acs/adapters/.venv/bin/python"):
+        assert flag in install.group(0), flag

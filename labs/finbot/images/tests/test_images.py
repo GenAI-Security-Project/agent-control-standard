@@ -183,3 +183,15 @@ def test_cli_present(image):
     result = _run(image, "sh", "-c", "test -f /opt/lab/cli/lab.py && test -f /opt/lab/cli/commands.py "
                   "&& test ! -e /opt/lab/cli/tests")
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_python_renders_markdown_for_the_claims_check(image):
+    # LAB-14's claims check runs on the lab CLI's interpreter, the first python on PATH, and exits 2 without
+    # Python-Markdown and superfences. The versions are the root uv.lock's (tests/test_lab_bundle.py pins them).
+    result = _run(image, "python", "-c",
+                  "import importlib.metadata as m, markdown, pymdownx.superfences; "
+                  "print(m.version('markdown'), m.version('pymdown-extensions')); "
+                  "print(markdown.markdown('- a\\n\\n    ```\\n    b\\n    ```', extensions=['pymdownx.superfences']))")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[0] == "3.10.3 11.0.1"
+    assert "<code>b" in result.stdout
