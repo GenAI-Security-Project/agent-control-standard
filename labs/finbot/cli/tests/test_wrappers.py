@@ -252,3 +252,67 @@ def test_up_rebuilds_local_images(bundle):
     assert compose_calls(lines) == ["compose -f compose.yaml --profile cli build",
                                     "compose -f compose.yaml up -d --wait"]
     assert all("LAB_RUNTIME_IMAGE=acs-lab-runtime:local" in line for line in lines)
+
+
+def _with_model_key(bundle: Path) -> None:
+    (bundle / "state" / "secrets" / "openai.key").write_text("sk-x\n", encoding="utf-8")
+
+
+def test_reset_without_a_terminal_keeps_the_model_key(bundle):
+    _with_model_key(bundle)
+    result, lines = run(bundle, "reset")
+    assert result.returncode == 0, result.stderr
+    assert compose_calls(lines)[-1] == "compose -f compose.yaml run --rm lab _wipe"
+    assert "openai.key" in result.stdout and "--delete-model-key" in result.stdout
+
+
+def test_reset_deletes_the_model_key_only_with_the_flag(bundle):
+    _with_model_key(bundle)
+    result, lines = run(bundle, "reset", "--delete-model-key")
+    assert result.returncode == 0, result.stderr
+    assert compose_calls(lines)[-1] == "compose -f compose.yaml run --rm lab _wipe --delete-model-key"
+
+
+def test_reset_rejects_unknown_arguments_before_stopping_anything(bundle):
+    result, lines = run(bundle, "reset", "--all")
+    assert result.returncode == 2
+    assert compose_calls(lines) == []
+
+
+def _run_on_a_terminal(bundle: Path, answer: str) -> tuple[subprocess.CompletedProcess, list[str]]:
+    # stdin on a pseudo-terminal, so lab.sh sees an attendee at the keyboard. The answer waits in the terminal's
+    # input queue until lab.sh reads it.
+    import pty
+
+    leader, follower = pty.openpty()
+    try:
+        os.write(leader, answer.encode() + b"\n")
+        log = bundle.parent / "docker.log"
+        log.write_text("", encoding="utf-8")
+        env = {"PATH": str(_bin(bundle.parent, True)), "FAKE_DOCKER_LOG": str(log), "HOME": str(bundle.parent)}
+        result = subprocess.run(["sh", str(bundle / "lab.sh"), "reset"], cwd=bundle, env=env, stdin=follower,
+                                capture_output=True, text=True, timeout=30)
+    finally:
+        os.close(follower)
+        os.close(leader)
+    return result, [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+
+
+@pytest.mark.parametrize(("answer", "deletes"), [("y", True), ("yes", True), ("n", False), ("", False)])
+def test_reset_on_a_terminal_warns_and_asks(bundle, answer, deletes):
+    _with_model_key(bundle)
+    result, lines = _run_on_a_terminal(bundle, answer)
+    assert result.returncode == 0, result.stderr
+    assert "openai.key" in result.stdout
+    calls = compose_calls(lines)
+    expected = "compose -f compose.yaml run --rm lab _wipe" + (" --delete-model-key" if deletes else "")
+    assert calls[-1] == expected
+    # The question comes before anything stops, so Ctrl-C at the prompt leaves the lab as it was.
+    assert calls[0].endswith("down --volumes")
+
+
+def test_reset_on_a_terminal_without_a_model_key_asks_nothing(bundle):
+    result, lines = _run_on_a_terminal(bundle, "y")
+    assert result.returncode == 0, result.stderr
+    assert "openai.key" not in result.stdout
+    assert compose_calls(lines)[-1] == "compose -f compose.yaml run --rm lab _wipe"

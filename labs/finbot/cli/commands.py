@@ -51,6 +51,10 @@ SETTINGS: dict[str, dict[str, dict[str, str | None]]] = {
 DEFAULTS = {"ACS_LAB_MODE": "enforce", "ACS_UPSTREAM": "replay", "ACS_RESPONSE_SIGNING": "ML-DSA-65",
             "ACS_RESPONSE_ALGORITHMS": "ML-DSA-65"}
 SECRET_FILES = ("hmac.key", "guardian.key", "admin.token", "approver.token")
+# The attendee's own model key, pasted in by hand for `lab upstream openai`. lab init can't make it again, so lab reset
+# keeps it unless told otherwise.
+MODEL_KEY = "openai.key"
+DELETE_MODEL_KEY = "--delete-model-key"
 
 
 def bundle() -> Path:
@@ -203,8 +207,23 @@ def cmd_epoch(args: list[str]) -> int:
     return report.EXIT_PASS
 
 
+def _remove(path: Path) -> None:
+    # A link is removed as a link, so a link to anywhere else never takes its target with it.
+    if path.is_symlink() or not path.is_dir():
+        path.unlink()
+    else:
+        shutil.rmtree(path)
+
+
 def cmd_wipe(args: list[str]) -> int:
-    """_wipe: removes everything inside state/ and nothing outside it. .env and the bundle stay."""
+    """_wipe [--delete-model-key]: removes everything inside state/ and nothing outside it. .env and the bundle stay.
+
+    state/secrets/openai.key stays unless --delete-model-key is given. lab.sh asks the attendee before passing it.
+    """
+    if args not in ([], [DELETE_MODEL_KEY]):
+        report.not_yet(f"_wipe takes only {DELETE_MODEL_KEY}, got {' '.join(args)}")
+        return report.EXIT_BROKEN
+    keep_key = not args
     root = state()
     if root.is_symlink() or (root.exists() and not root.is_dir()):
         report.not_yet(f"{root} is not a plain directory, so lab reset won't touch it")
@@ -215,13 +234,20 @@ def cmd_wipe(args: list[str]) -> int:
     if root.resolve().parent != bundle().resolve():
         report.not_yet(f"{root} resolves outside the lab bundle, so lab reset won't touch it")
         return report.EXIT_BROKEN
+    secrets_dir = root / "secrets"
+    kept = keep_key and (secrets_dir / MODEL_KEY).is_file() and not secrets_dir.is_symlink()
     for child in root.iterdir():
-        # A link is removed as a link, so a link to anywhere else never takes its target with it.
-        if child.is_symlink() or not child.is_dir():
-            child.unlink()
+        if kept and child.name == "secrets":
+            for secret in secrets_dir.iterdir():
+                if secret.name != MODEL_KEY:
+                    _remove(secret)
         else:
-            shutil.rmtree(child)
-    report.done("state/ wiped. Run ./lab.sh init to start again")
+            _remove(child)
+    if kept:
+        report.done(f"state/ wiped, except your model key in state/secrets/{MODEL_KEY}. "
+                    f"Run ./lab.sh reset {DELETE_MODEL_KEY} to delete it too, or ./lab.sh init to start again")
+    else:
+        report.done("state/ wiped. Run ./lab.sh init to start again")
     return report.EXIT_PASS
 
 

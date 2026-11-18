@@ -10,7 +10,8 @@
 #   init                          lab init in the container: secrets, Guardian keys, key document, .env, state/
 #   up                            pull the images (build them locally when the pull fails), then start and wait
 #   down                          stop the lab, keeping state/
-#   reset                         stop the lab, drop FinBot's data, then wipe state/ in the container
+#   reset [--delete-model-key]    stop the lab, drop FinBot's data, then wipe state/ in the container. Your model key
+#                                 stays unless you confirm at the prompt or pass --delete-model-key
 #   doctor                        check Docker, Compose v2, memory, architecture, ports and images on this host
 #   logs [SERVICE...]             docker compose logs
 #   mode off|shadow|enforce       set ACS_LAB_MODE, recreate acs-gateway, bump the epoch
@@ -210,6 +211,37 @@ claims() {
     fi
 }
 
+reset_lab() {
+    # Every question comes before anything stops, so Ctrl-C at the prompt leaves the lab as it was.
+    wipe_flag=
+    case $# in
+        0) ;;
+        1) [ "$1" = --delete-model-key ] || { say "NOT YET: lab reset takes only --delete-model-key, got $1."; exit 2; }
+           wipe_flag=--delete-model-key ;;
+        *) say "NOT YET: lab reset takes only --delete-model-key."; exit 2 ;;
+    esac
+    if [ -z "$wipe_flag" ] && [ -f state/secrets/openai.key ]; then
+        say "Your model key is in labs/finbot/state/secrets/openai.key. lab init can't make it again."
+        if [ -t 0 ]; then
+            printf 'Delete it with the rest of state/? [y/N] '
+            answer=
+            read -r answer || answer=
+            case $answer in
+                y | Y | yes | YES | Yes) wipe_flag=--delete-model-key ;;
+            esac
+        else
+            # No one to ask, so the key stays. Deleting it takes the explicit flag.
+            say "No terminal to ask on, so the key stays. Run ./lab.sh reset --delete-model-key to delete it too."
+        fi
+    fi
+    compose --profile traces --profile cli down --volumes
+    if [ -n "$wipe_flag" ]; then
+        lab _wipe "$wipe_flag"
+    else
+        lab _wipe
+    fi
+}
+
 usage() {
     sed -n '/^# Command table:/,/^# Exit 0/p' "$BUNDLE_DIR/lab.sh" | sed 's/^# \{0,1\}//'
 }
@@ -238,8 +270,7 @@ case $verb in
     down)
         compose --profile traces --profile cli down ;;
     reset)
-        compose --profile traces --profile cli down --volumes
-        lab _wipe ;;
+        reset_lab "$@" ;;
     logs)
         compose logs "$@" ;;
     mode)

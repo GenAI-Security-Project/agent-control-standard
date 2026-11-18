@@ -289,3 +289,36 @@ def test_lab_py_runs_by_path(bundle, tmp_path):
     assert result.returncode == 2 and result.stdout.startswith("NOT YET: unknown command")
     result = subprocess.run([sys.executable, str(LAB_PY)], capture_output=True, text=True, env=env)
     assert result.returncode == 0 and "init" in result.stdout
+
+
+def _state_with_model_key(bundle: Path) -> Path:
+    secrets = bundle / "state" / "secrets"
+    secrets.mkdir(parents=True)
+    for name in ("hmac.key", "openai.key"):
+        (secrets / name).write_text("x\n", encoding="utf-8")
+    (bundle / "state" / "audit.log").write_text("{}\n", encoding="utf-8")
+    return secrets
+
+
+def test_wipe_keeps_the_model_key_by_default(bundle, capsys):
+    # The attendee pasted that key in by hand, and lab init can't make it again. Only an explicit flag deletes it.
+    secrets = _state_with_model_key(bundle)
+    code, out = lab("_wipe", capsys=capsys)
+    assert code == 0 and out.startswith("DONE")
+    assert [p.name for p in (bundle / "state").iterdir()] == ["secrets"]
+    assert [p.name for p in secrets.iterdir()] == ["openai.key"]
+    assert "openai.key" in out
+
+
+def test_wipe_deletes_the_model_key_when_told(bundle, capsys):
+    _state_with_model_key(bundle)
+    code, out = lab("_wipe", "--delete-model-key", capsys=capsys)
+    assert code == 0 and out.startswith("DONE")
+    assert list((bundle / "state").iterdir()) == []
+
+
+def test_wipe_rejects_unknown_arguments(bundle, capsys):
+    secrets = _state_with_model_key(bundle)
+    code, out = lab("_wipe", "--everything", capsys=capsys)
+    assert code == report.EXIT_BROKEN and out.startswith("NOT YET:")
+    assert (secrets / "hmac.key").exists() and (secrets / "openai.key").exists()
