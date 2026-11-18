@@ -28,13 +28,19 @@ const BEAT_LABELS = {
 
 const VERIFY_WORDS = {
   verified: "verified",
+  warning: "key warning",
   failed: "failed",
   not_checked: "not checked",
   unsigned: "unsigned",
   no_answer: "no answer",
 };
 
+// A decision string comes from a log, so it is mapped through this fixed set before it names a class.
+const DECISION_CLASSES = { allow: "d-allow", deny: "d-deny", modify: "d-modify", ask: "d-ask" };
+
 const POLL_MS = 500;
+// The page keeps at most this many rows and drops the oldest past it, so a long run can't slow the page down.
+const MAX_DOM_ROWS = 1000;
 
 const table = document.getElementById("log");
 const beatEl = document.getElementById("beat");
@@ -100,7 +106,15 @@ function draw(row) {
   cell(tr, shortTime(row.t));
   cell(tr, shortMethod(row.method));
   breakableCell(tr, row.tool);
-  cell(tr, row.decision, row.decision ? "d-" + row.decision : "");
+  const decisionCell = cell(tr, row.decision, DECISION_CLASSES[row.decision] || "d-other");
+  if (row.applied && row.applied !== row.decision) {
+    // The signed decision stays in the cell. What the gateway says it did goes under it, and a disagreement the
+    // audit log can't explain is flagged.
+    const applied = document.createElement("div");
+    applied.className = row.conflict ? "applied conflict" : "applied";
+    applied.textContent = (row.conflict ? "conflict, gateway: " : "gateway: ") + row.applied;
+    decisionCell.appendChild(applied);
+  }
   breakableCell(tr, row.reason_codes.join(", "));
   cell(tr, row.algorithm);
   const verify = row.verify in VERIFY_WORDS ? row.verify : "not_checked";
@@ -117,7 +131,8 @@ function draw(row) {
 }
 
 function summary(row) {
-  const parts = [shortMethod(row.method), row.tool, row.decision, row.reason_codes.join(", "),
+  const applied = row.applied && row.applied !== row.decision ? "gateway " + row.applied : "";
+  const parts = [shortMethod(row.method), row.tool, row.decision, applied, row.reason_codes.join(", "),
     row.algorithm, VERIFY_WORDS[row.verify]];
   if (row.note) parts.push(row.note);
   return parts.filter((p) => p).join(" | ");
@@ -157,18 +172,28 @@ function apply(data) {
   for (const group of groups.values()) {
     for (const tr of group.children) tr.classList.toggle("painted", group === lastPainted);
   }
+  while (groups.size > MAX_DOM_ROWS) {
+    const [oldestId, oldest] = groups.entries().next().value;
+    if (oldest === lastPainted) lastPainted = null;
+    oldest.remove();
+    groups.delete(oldestId);
+    paintedBeat.delete(oldestId);
+  }
   if (newest) newest.scrollIntoView({ block: "end" });
   next = data.next;
   emptyEl.hidden = !data.no_record;
   emptyEl.textContent = data.no_record ? data.no_record_text : "";
-  caughtUp = true;
+  // While the server says more rows wait, the page is still catching up, so nothing it draws is logged as a paint.
+  if (!data.more) caughtUp = true;
+  return data.more === true;
 }
 
 async function poll() {
+  let more = false;
   try {
     const response = await fetch("/api/rows?after=" + next, { cache: "no-store" });
     if (response.ok) {
-      apply(await response.json());
+      more = apply(await response.json());
       statusEl.textContent = "";
     } else {
       statusEl.textContent = "The viewer answered " + response.status + ". Retrying.";
@@ -176,7 +201,7 @@ async function poll() {
   } catch (err) {
     statusEl.textContent = "The viewer server can't be reached. Retrying.";
   } finally {
-    setTimeout(poll, POLL_MS);
+    setTimeout(poll, more ? 0 : POLL_MS);
   }
 }
 

@@ -99,6 +99,20 @@ td.note {
 .d-deny { color: #a3141b; font-weight: 700; }
 .d-modify, .d-ask { color: #7a4b00; font-weight: 700; }
 
+.applied {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: #3d4654;
+}
+
+.applied.conflict {
+  color: #ffffff;
+  background: #a3141b;
+  font-weight: 700;
+  padding: 0 0.2rem;
+}
+
 .v-verified { color: #11632b; font-weight: 700; }
 .v-failed { color: #ffffff; background: #a3141b; font-weight: 700; }
+.v-warning { color: #7a4b00; font-weight: 700; }
 .v-not_checked, .v-unsigned, .v-no_answer { color: #5b6472; }
