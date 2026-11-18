@@ -1,6 +1,8 @@
 """The viewer's log reader: escaping, incremental tails, and one row per governed step (issue #586)."""
 from __future__ import annotations
 
+import os
+
 from lab_lines import SESSION_A, SESSION_B, LabLogs, answer, tool_request
 from model import LogTail, Model, escape_text
 
@@ -47,10 +49,16 @@ def test_bad_line_becomes_one_unreadable_row(tmp_path):
     req = tool_request("echo")
     logs.pair(req, answer(req, "allow"))
     got = rows(Model(logs.transcript_dir, None, None))
-    assert [r.method for r in got] == ["unreadable", "unreadable", "steps/toolCallRequest"]
-    assert got[0].note == "\\xff\\xfe\\x1b"
-    assert got[1].note == "not json"
-    assert got[2].decision == "allow"
+    # Two bad lines in a row are one row with a count (fix round 1, I5), shown from the first line's bytes.
+    assert [r.method for r in got] == ["unreadable", "steps/toolCallRequest"]
+    assert got[0].note == "\\xff\\xfe\\x1b (2 unreadable lines)"
+    assert got[1].decision == "allow"
+    # A readable line ends the run, so the next bad line starts a row of its own.
+    with path.open("ab") as f:
+        f.write(b"not json\n")
+    model = Model(logs.transcript_dir, None, None)
+    assert [r.note for r in rows(model) if r.method == "unreadable"] == ["\\xff\\xfe\\x1b (2 unreadable lines)",
+                                                                          "not json"]
 
 
 def test_req_resp_pair_gives_one_row(tmp_path):
@@ -85,7 +93,9 @@ def test_audit_joins_by_request_id(tmp_path):
                guardian_decision="deny", reason_codes=["external_recipient"], cause=None, failure_class=None)
     [updated] = rows(model, row.seq)
     assert updated.id == row.id and updated.seq > row.seq
-    assert (updated.note, updated.decision) == ("shadow", "deny")
+    # The decision column keeps the signed answer's decision. The audit line adds what the gateway did.
+    assert (updated.decision, updated.applied, updated.mode, updated.conflict) == ("deny", "allow", "shadow", False)
+    assert updated.note == "shadow: the gateway forwarded the call"
 
 
 def test_audit_line_read_before_its_transcript_line_still_joins(tmp_path):
@@ -98,8 +108,8 @@ def test_audit_line_read_before_its_transcript_line_still_joins(tmp_path):
     assert rows(model) == []
     logs.pair(req, answer(req, "allow"))
     [row] = rows(model)
-    assert row.decision == "deny"
-    assert row.note == "gateway applied deny (response_signature_invalid), Guardian said allow"
+    assert (row.decision, row.applied, row.conflict) == ("allow", "deny", False)
+    assert row.note == "gateway applied deny (response_signature_invalid)"
 
 
 def test_new_session_file_is_picked_up(tmp_path):
@@ -151,3 +161,95 @@ def test_session_end_is_a_row(tmp_path):
     logs.pair(end, answer(end, "allow"))
     [row] = rows(Model(logs.transcript_dir, None, None))
     assert (row.method, row.tool) == ("steps/sessionEnd", None)
+
+
+# Fix round 1: a forged audit line never rewrites the signed decision (probes I and J).
+
+
+def test_forged_audit_line_never_rewrites_the_signed_decision(tmp_path):
+    logs = LabLogs(tmp_path)
+    d, e = tool_request("delete_all"), tool_request("delete_more")
+    logs.pair(d, answer(d, "deny", reason_codes=["destructive"]))
+    logs.pair(e, answer(e, "deny", reason_codes=["destructive"]))
+    logs.audit("decision_applied", session_id=SESSION_A, request_id=d["params"]["request_id"], decision="allow")
+    logs.audit("shadow_decision", session_id=SESSION_A, request_id=e["params"]["request_id"], decision="allow",
+               guardian_decision="allow")
+    first, second = rows(Model(logs.transcript_dir, logs.audit_file, None))
+    assert (first.decision, first.applied, first.conflict) == ("deny", "allow", True)
+    assert first.note == "conflict: the gateway applied allow, the signed answer says deny"
+    assert (second.decision, second.applied, second.conflict) == ("deny", "allow", True)
+    assert second.note == "conflict: the audit line says the Guardian said allow, the signed answer says deny"
+
+
+def test_waiting_audit_lines_are_keyed_by_session_and_request(tmp_path):
+    # M8: a request_id is unique within a session only, so an audit line for another session never joins this row.
+    logs = LabLogs(tmp_path)
+    req = tool_request("echo")
+    rid = req["params"]["request_id"]
+    logs.audit("decision_applied", session_id=SESSION_B, epoch=0, method=req["method"], tool="echo",
+               call_id="c1", request_id=rid, decision="deny", guardian_decision="deny", reason_codes=None,
+               cause=None, failure_class=None)
+    model = Model(logs.transcript_dir, logs.audit_file, None)
+    model.refresh()
+    logs.pair(req, answer(req, "allow"))
+    [row] = rows(model)
+    assert (row.decision, row.applied, row.note) == ("allow", None, None)
+
+
+# Fix round 1: bounds (I5). A junk or very long log must not grow memory or a poll without limit.
+
+
+def test_a_run_of_unreadable_lines_is_one_row(tmp_path):
+    logs = LabLogs(tmp_path)
+    logs.transcript_dir.mkdir(parents=True)
+    logs.transcript().write_bytes(b"x\n" * 200_000)
+    model = Model(logs.transcript_dir, None, None)
+    for _ in range(3):
+        model.refresh()
+    [row] = model.rows_after(0)
+    assert row.method == "unreadable"
+    # 200000 lines is past the lines the viewer holds for acs-verify, so the session also says to run lab verify.
+    assert row.note == ("x (200000 unreadable lines) | this session is too long for the viewer to judge. "
+                        "Run lab verify on it")
+
+
+def test_rows_kept_are_capped_and_the_oldest_go_first(tmp_path, monkeypatch):
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_ROWS", 3)
+    logs = LabLogs(tmp_path)
+    for tool in [f"t{i}" for i in range(5)]:
+        req = tool_request(tool)
+        logs.pair(req, answer(req, "allow"))
+    assert [r.tool for r in rows(Model(logs.transcript_dir, None, None))] == ["t2", "t3", "t4"]
+
+
+def test_one_answer_holds_a_bounded_page(tmp_path, monkeypatch):
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_ROWS_PER_ANSWER", 2)
+    logs = LabLogs(tmp_path)
+    for tool in ("a", "b", "c", "d", "e"):
+        req = tool_request(tool)
+        logs.pair(req, answer(req, "allow"))
+    model = Model(logs.transcript_dir, None, None)
+    model.refresh()
+    seen, after = [], 0
+    while True:
+        page, after, more = model.page(after)
+        seen += [r.tool for r in page]
+        if not more:
+            break
+    assert seen == ["a", "b", "c", "d", "e"]
+    assert model.page(after) == ([], after, False)
+
+
+def test_session_files_tracked_are_capped(tmp_path, monkeypatch):
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_SESSIONS", 2)
+    logs = LabLogs(tmp_path)
+    sessions = ["33333333-3333-4333-8333-33333333333" + str(i) for i in range(4)]
+    for number, session_id in enumerate(sessions):
+        req = tool_request("echo", session_id=session_id)
+        logs.pair(req, answer(req, "allow"))
+        os.utime(logs.transcript(session_id), ns=((number + 1) * 10**9, (number + 1) * 10**9))
+    got = rows(Model(logs.transcript_dir, None, None))
+    assert sorted(r.session_id for r in got) == sessions[2:]

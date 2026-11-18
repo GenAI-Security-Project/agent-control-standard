@@ -115,8 +115,8 @@ def test_new_lines_appear_without_reload(start, logs):
     [row] = second["rows"]
     assert (row["session_id"], row["tool"], row["decision"], row["beat"]) == (
         SESSION_A, "finmail__send_email", "deny", "deny")
-    assert set(row) == {"id", "seq", "t", "session_id", "method", "tool", "decision", "reason_codes", "algorithm",
-                        "verify", "note", "beat"}
+    assert set(row) == {"id", "seq", "t", "session_id", "method", "tool", "decision", "applied", "conflict",
+                        "reason_codes", "algorithm", "verify", "note", "beat"}
     assert second["no_record"] is False
     assert rows(port, second["next"])["rows"] == []
 
@@ -222,3 +222,47 @@ def test_viewer_never_writes_logs(start, logs):
     assert {path: (path.read_bytes(), os.stat(path).st_mtime_ns, os.stat(path).st_mode) for path in files} == before
     assert sorted(p.name for p in logs.root.rglob("*")) == sorted(
         ["audit.log", "transcripts", logs.transcript().name])
+
+
+# Fix round 1
+
+
+def test_strings_are_escaped_exactly_once(start, logs):
+    # I1: the tool name holds ESC and a literal backslash-n. One escape gives send\x1b[2J\\n, and the JSON text
+    # doubles each of those backslashes once more. A second escape would double them again.
+    port = start()
+    req = tool_request("send\x1b[2J\\n")
+    logs.pair(req, answer(req, "deny"))
+    _, _, data = call(port, "GET", "/api/rows?after=0")
+    assert r'"tool": "send\\x1b[2J\\\\n"' in data.decode("ascii")
+    assert json.loads(data)["rows"][0]["tool"] == "send\\x1b[2J\\\\n"
+
+
+def test_a_poll_answer_is_bounded_and_says_there_is_more(start, logs, monkeypatch):
+    import model as model_module
+    monkeypatch.setattr(model_module, "MAX_ROWS_PER_ANSWER", 1)
+    port = start()
+    for tool in ("a", "b"):
+        req = tool_request(tool)
+        logs.pair(req, answer(req, "allow"))
+    first = rows(port)
+    assert [r["tool"] for r in first["rows"]] == ["a"] and first["more"] is True
+    second = rows(port, first["next"])
+    assert [r["tool"] for r in second["rows"]] == ["b"] and second["more"] is False
+
+
+def test_a_silent_client_is_dropped(start, monkeypatch):
+    # M9: a connection that sends nothing is closed after the handler's timeout, so it can't hold a thread.
+    import socket
+    import time
+    monkeypatch.setattr(viewer_server.ViewerHandler, "timeout", 0.3)
+    port = start()
+    started = time.monotonic()
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+        assert sock.recv(1024) == b""
+    assert time.monotonic() - started < 3
+
+
+def test_the_handler_has_a_socket_timeout():
+    assert 0 < viewer_server.HANDLER_TIMEOUT_S <= 30
+    assert viewer_server.ViewerHandler.timeout == viewer_server.HANDLER_TIMEOUT_S

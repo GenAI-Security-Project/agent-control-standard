@@ -35,7 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from beats import BEATS, NO_RECORD_TEXT  # noqa: E402
 from model import Model, escape_text, receipt_time  # noqa: E402
-from verify import load_keys, make_verifier  # noqa: E402
+from verify import KeySource  # noqa: E402
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 DEFAULT_HOST = "127.0.0.1"
@@ -45,6 +45,8 @@ WILDCARD_HOSTS = frozenset({"", "0.0.0.0", "::"})
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8"}
 _STATIC_NAME = re.compile(r"[a-z][a-z0-9_-]*\.(?:html|js|css)")
+# A client that sends nothing for this long is dropped, so a silent connection can't hold a handler thread (M9).
+HANDLER_TIMEOUT_S = 10.0
 # A paint is a beat index and a line of text. Anything larger is not from the page.
 MAX_PAINT_BYTES = 4096
 MAX_PAINT_TEXT = 1000
@@ -89,6 +91,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
     server: ViewerServer
     server_version = "acs-lab-viewer"
     sys_version = ""
+    timeout = HANDLER_TIMEOUT_S
 
     def log_message(self, format: str, *args: Any) -> None:
         # Request lines carry text any client chose, so none of it reaches a terminal (issue #468).
@@ -162,7 +165,8 @@ class ViewerHandler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 # A read that breaks leaves the rows already read standing. The page keeps polling.
                 sys.stderr.write(f"acs-viewer: reading the logs failed: {escape_text(type(e).__name__)}\n")
-            body = {"rows": [row.public() for row in model.rows_after(after)], "next": model.last_seq,
+            page, next_seq, more = model.page(after)
+            body = {"rows": [row.public() for row in page], "next": next_seq, "more": more,
                     "no_record": model.no_record, "no_record_text": NO_RECORD_TEXT,
                     "paint": self.server.paint_log is not None}
         self._json(HTTPStatus.OK, body)
@@ -237,11 +241,11 @@ def main(argv: list[str] | None = None) -> int:
     audit = env.get("ACS_AUDIT_FILE", "").strip()
     verify_dir = env.get("ACS_VIEWER_VERIFY_DIR", "").strip()
     paint = env.get("ACS_VIEWER_PAINT_LOG", "").strip()
-    keys = load_keys(env)
-    if keys is None and env.get("ACS_GUARDIAN_KEYS", "").strip():
-        sys.stderr.write("acs-viewer: ACS_GUARDIAN_KEYS can't be used, so every ML-DSA-65 answer reads not "
-                         "checked\n")
-    model = Model(transcript_dir, Path(audit) if audit else None, make_verifier(keys),
+    keys = KeySource(env)
+    if keys.configured and keys.current() is None:
+        sys.stderr.write("acs-viewer: ACS_GUARDIAN_KEYS can't be used yet, so every row reads not checked until it "
+                         "can\n")
+    model = Model(transcript_dir, Path(audit) if audit else None, keys,
                   verify_dir=Path(verify_dir) if verify_dir else transcript_dir.parent / "verify")
     httpd = make_server(args.host, args.port, model, STATIC_DIR, Path(paint) if paint else None)
     sys.stdout.write(f"ACS_VIEWER_LISTENING port={httpd.server_address[1]}\n")
