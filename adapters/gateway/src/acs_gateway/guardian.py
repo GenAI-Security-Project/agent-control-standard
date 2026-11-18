@@ -265,10 +265,14 @@ class GuardianClient:
                 return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
             posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
         outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        # The token saw whether the send started. Without one (sessionStart inside the handshake), only an envelope
+        # the gateway couldn't sign stays unsent.
+        if token is not None:
+            sent = token.sent
+        else:
+            sent = not (isinstance(outcome, Resolution) and outcome.cause == "envelope_not_signable")
         if outcome is None:
-            return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout")
-        # _send settles an unsignable envelope before anything is written or sent. Every other outcome went out.
-        sent = outcome.cause != "envelope_not_signable" if isinstance(outcome, Resolution) else True
+            return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout", sent=sent)
         if isinstance(outcome, Resolution):
             return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"),
                               sent=sent)

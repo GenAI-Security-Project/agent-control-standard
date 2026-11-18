@@ -1055,7 +1055,8 @@ class Gateway:
         if result.cause is None and time.monotonic() >= token.deadline:
             # The worker times out an answer that arrived late. This catches one that arrived in time but came back
             # late, such as behind a slow response line, which the transcript then holds without a cause.
-            return StepResult(method, result.request_id, cause="decision_timeout", failure_class="timeout")
+            return StepResult(method, result.request_id, cause="decision_timeout", failure_class="timeout",
+                              sent=result.sent)
         return result
 
     async def _settle_abandoned(self, session: Session, method: str, token: StepToken, future: Any,

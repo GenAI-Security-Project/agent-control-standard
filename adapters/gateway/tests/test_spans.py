@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -495,3 +496,27 @@ def test_the_verbatim_relay_parses_the_body_once(gateway, upstream, monkeypatch)
     monkeypatch.setattr(app_module, "_parse", counting)
     assert client.post("/v1/responses", json=finbot_request()).status_code == 200
     assert len(calls) == 1
+
+
+def test_an_answer_handed_back_late_keeps_its_request_id(gateway, guardian, upstream, audit, monkeypatch):
+    """The Guardian answered in time and the worker handed the answer back after the deadline. The step still names the
+    request the Guardian received, so the span joins the decision_applied line (rehearsal R4)."""
+    from acs_gateway import guardian as g
+
+    real = g.GuardianClient.step
+
+    def late(self, session, method, payload, token=None):
+        result = real(self, session, method, payload, token)
+        if token is not None and method == "steps/toolCallRequest":
+            time.sleep(max(0.0, token.deadline - time.monotonic()) + 0.05)
+        return result
+
+    monkeypatch.setattr(g.GuardianClient, "step", late)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian, ACS_DECISION_TIMEOUT_MS="500")
+    spans = traced(client)
+    client.post("/v1/responses", json=finbot_request())
+    applied = next(e for e in audit() if e["acs_audit_event"] == "decision_applied")
+    assert applied["cause"] == "decision_timeout" and applied["request_id"]
+    (span,) = step_spans(spans())
+    assert span.attributes.get("acs.request_id") == applied["request_id"]
