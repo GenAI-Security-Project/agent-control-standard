@@ -240,12 +240,13 @@ def test_no_body_argument_output_or_secret_reaches_a_span(gateway, harness_guard
 
 
 @pytest.mark.parametrize("choice,outcome,decision", [("approve", "approved", "allow"), (None, "timed_out", "deny")])
-def test_an_ask_resolution_is_a_span_event(gateway, harness_guardian, upstream, audit, choice, outcome, decision):
+def test_an_ask_resolution_is_a_span_event(gateway, harness_guardian, upstream, audit, tmp_path, choice, outcome,
+                                           decision):
     from test_ask import approver, enforce
 
     upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
     env = {} if choice else {"HARNESS_ASK_TIMEOUT_S": "1"}
-    client = enforce(gateway, harness_guardian, **env)
+    client = enforce(gateway, harness_guardian, tmp_path, **env)
     spans = traced(client)
     thread = approver(client, choice) if choice else None
     client.post("/v1/responses", json=finbot_request())
@@ -464,11 +465,11 @@ def test_a_processor_fault_on_end_never_touches_a_relayed_answer(gateway, guardi
     assert response.status_code == 200 and response.json() == reply
 
 
-def test_the_ask_hold_is_not_counted_as_a_tool_call(gateway, harness_guardian, upstream, audit):
+def test_the_ask_hold_is_not_counted_as_a_tool_call(gateway, harness_guardian, upstream, audit, tmp_path):
     from test_ask import approver, enforce
 
     upstream.reply(response_body(call_item("ask_tool", {"vendor_id": 7}, "call_1")))
-    client = enforce(gateway, harness_guardian)
+    client = enforce(gateway, harness_guardian, tmp_path)
     spans = traced(client)
     thread = approver(client, "approve")
     client.post("/v1/responses", json=finbot_request())
