@@ -34,8 +34,8 @@ class Transcript:
         line may also carry its envelope and a cause, for an answer that came back but can't be used, such as one
         that arrived after its deadline.
 
-        acs.client doesn't hand back a refused, malformed or tampered answer, so the line can't carry it yet.
-        LAB-03 (issue #576) adds that hook (PREMORTEM P6).
+        acs.client's on_wire hook (issue #576) hands the gateway every envelope sent and every answer received, a
+        refused, malformed or tampered one included, so each line holds the envelope verbatim (PREMORTEM P6).
         """
         if direction not in DIRECTIONS:
             raise ValueError(f"direction must be one of {DIRECTIONS}, got {direction!r}")

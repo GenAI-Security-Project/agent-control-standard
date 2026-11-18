@@ -26,7 +26,7 @@ from acs.client import (
     round_trip,
     sign_envelope,
 )
-from acs.core import Decision, method_evaluated, normalize_decision, request_envelope
+from acs.core import Decision, method_evaluated, normalize_decision, request_envelope, response_shape_problem
 
 from acs_gateway.config import GatewayConfig
 from acs_gateway.sessions import Session
@@ -62,8 +62,8 @@ _SURROGATE = re.compile("[\ud800-\udfff]")
 def jcs_problem(value: Any, depth: int = 0) -> str | None:
     """Why RFC 8785 can't encode value, or None.
 
-    acs.client would rewrite such a value before signing, and then the transcript line written before the send would
-    differ from the envelope sent. The gateway refuses the step instead, and refusing a gated step denies it.
+    acs.client would rewrite such a value before signing, so the Guardian would judge an envelope other than the one the
+    gateway gated. The gateway refuses the step instead, and refusing a gated step denies it.
     """
     if depth > 100:
         return "nesting deeper than 100"
@@ -181,6 +181,73 @@ def write_line(token: StepToken | None, write: Callable[[], None]) -> bool:
     return True
 
 
+class _StepRetired(Exception):
+    """The loop retired the step. Raised inside on_wire, so acs.client refuses the step and sends nothing more."""
+
+
+class Wire:
+    """The on_wire callback for one exchange (PREMORTEM P6). It writes each envelope acs.client sends or receives to
+    the transcript exactly once, through the step token, so the request line lands before the send (P20) and a
+    retired step writes and sends nothing more.
+
+    After round_trip or open_session returns, its fields say what was written, so the caller adds a gap line only
+    for a request that was written and got no envelope back.
+    """
+
+    def __init__(self, transcript: Transcript, session_id: str, token: StepToken | None = None) -> None:
+        self.transcript = transcript
+        self.session_id = session_id
+        self.token = token
+        self.request_written = False
+        # An answer envelope arrived. answer_written says its line landed, answer_cause what that line says.
+        self.answer_seen = False
+        self.answer_written = False
+        self.answer_cause: str | None = None
+        self.sending = False
+        self.stopped = False
+        # A transcript write that raised. The caller re-raises it, so the step settles as the gateway's own error.
+        self.error: BaseException | None = None
+
+    def __call__(self, direction: str, envelope: Any) -> None:
+        try:
+            if direction == "req":
+                self._request(envelope)
+            else:
+                self._answer(envelope)
+        except _StepRetired:
+            self.stopped = True
+            raise
+        except Exception as e:  # noqa: BLE001
+            self.error = e
+            raise
+
+    def _request(self, envelope: Any) -> None:
+        if not write_line(self.token, lambda: self.transcript.append(self.session_id, "req", envelope)):
+            raise _StepRetired("the step was retired before its request line")
+        self.request_written = True
+        if self.token is not None:
+            # Checked under the token's lock as one step with retirement, after the line and right before post().
+            if not self.token.begin_send():
+                raise _StepRetired("the step was retired before the send")
+            self.sending = True
+
+    def _answer(self, envelope: Any) -> None:
+        if response_shape_problem(envelope) is not None:
+            # A body that isn't a JSON-RPC answer, such as a 429's detail, is no envelope (A.7). The caller writes
+            # the gap line with the outcome's cause instead.
+            return
+        self.answer_seen = True
+        if self.token is not None and time.monotonic() >= self.token.deadline:
+            # An answer that arrives after its deadline keeps its envelope, since the Guardian chained it.
+            self.answer_cause = "decision_timeout"
+        cause = self.answer_cause
+        if not write_line(self.token, lambda: self.transcript.append(self.session_id, "resp", envelope,
+                                                                     cause=cause)):
+            self.stopped = True
+            return
+        self.answer_written = True
+
+
 class GuardianClient:
     def __init__(self, config: GatewayConfig, transcript: Transcript) -> None:
         self.config = config
@@ -227,9 +294,15 @@ class GuardianClient:
                 sent.append(request_id)
             return outcome
 
+        wire = Wire(self.transcript, session.session_id)
         handshake = open_session(config=self.acs_config, session_id=session.session_id, agent_id=self.config.agent_id,
-                                 platform=PLATFORM, methods_implemented=METHODS, start=start)
+                                 platform=PLATFORM, methods_implemented=METHODS, start=start, on_wire=wire)
         session.handshake = handshake
+        if wire.request_written and not wire.answer_seen and wire.error is None:
+            # The ClientHello went out and no envelope came back, so its gap is explicit, as for a step. Nothing
+            # else was written in between, since sessionStart follows only a ServerHello.
+            self.transcript.append(session.session_id, "resp", None,
+                                   cause=getattr(handshake, "cause", None) or "no_answer")
         hello = dict(handshake.server_hello) if isinstance(handshake, Negotiated) else None
         session.posture = self.posture(hello)
         audit_event("session_opened", session_id=session.session_id, epoch=session.epoch,
@@ -306,33 +379,30 @@ class GuardianClient:
         signature = dict(request["params"]["signature"])
         if token is not None and not token.claim(request_id):
             return None, request_id
-        # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
-        if not write_line(token, lambda: self.transcript.append(session_id, "req", request)):
-            return None, request_id
-        if token is not None and not token.begin_send():
-            # The loop gave up on this step and retired its session before the send could start.
-            return None, request_id
+        wire = Wire(self.transcript, session_id, token)
         try:
             outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
-                                 session_id=session_id, gate=True)
+                                 session_id=session_id, gate=True, on_wire=wire)
         finally:
-            if token is not None:
+            if wire.sending:
                 token.end_send()
+        if wire.error is not None:
+            raise wire.error
+        if request["params"].get("signature") != signature:
+            audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
+        if wire.stopped:
+            # The loop retired the step, so no line may follow and no answer counts.
+            return None, request_id
         # round_trip's own timeout was set before the request line was written, so a slow write lets an answer
         # through after the deadline. Whatever a late answer says, the step times out.
         late = token is not None and time.monotonic() >= token.deadline
-        if request["params"].get("signature") != signature:
-            audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
-        if isinstance(outcome, Resolution):
-            cause = "decision_timeout" if late else outcome.cause
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=cause))
-        else:
-            # round_trip has already verified the response's signature. acs.client accepts HMAC-SHA256 only, and
-            # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document. A late
-            # answer keeps its envelope, since the Guardian chained it.
-            cause = "decision_timeout" if late else None
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", outcome.response,
-                                                                       cause=cause))
-        if not written or late:
+        if not wire.answer_seen:
+            if wire.request_written:
+                # The request went out and no envelope came back, so the gap is explicit.
+                cause = "decision_timeout" if late else outcome.cause
+                if not write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=cause)):
+                    return None, request_id
+            return (None if late else outcome), request_id
+        if late:
             return None, request_id
         return outcome, request_id
