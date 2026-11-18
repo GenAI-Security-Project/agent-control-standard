@@ -1055,9 +1055,7 @@ class Gateway:
             # The request itself was cancelled (a client disconnect, a shutdown). The step must not outlive it.
             await self._settle_abandoned(session, method, token, future, timeout)
             raise
-        if result.retire is not None:
-            # The transcript holds an allow the step withheld and couldn't mark, so the session takes no more lines.
-            self._retire(session, method, token, result.retire)
+        if self._honor_retire(session, method, token, result):
             return result
         if result.cause is None and time.monotonic() >= token.deadline:
             # The worker settled in time and the loop resumed after the deadline. The answer is withheld like any
@@ -1094,13 +1092,25 @@ class Gateway:
         if token.cancel():
             return
         try:
-            await asyncio.wait_for(asyncio.shield(future), timeout)
+            result = await asyncio.wait_for(asyncio.shield(future), timeout)
+            self._honor_retire(session, method, token, result)
         except asyncio.TimeoutError:
             self._retire(session, method, token, "step_hung")
         except asyncio.CancelledError:
             # The request was cancelled while its claimed step was still landing. Retire, then let it end cancelled.
             self._retire(session, method, token, "request_cancelled")
             raise
+
+    def _honor_retire(self, session: Session, method: str, token: StepToken, result: StepResult) -> bool:
+        """The one place a settled step's retire request is carried out, whichever path settled it. True when it was.
+
+        A worker sets retire when the transcript holds an allow the step withheld and couldn't mark, so the session
+        must take no more lines.
+        """
+        if result.retire is None:
+            return False
+        self._retire(session, method, token, result.retire)
+        return True
 
     def _retire(self, session: Session, method: str, token: StepToken, cause: str) -> None:
         in_flight = token.retire()

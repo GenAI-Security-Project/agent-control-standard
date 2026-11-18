@@ -159,3 +159,77 @@ def test_a_discards_line_the_loop_cannot_write_retires_the_session(gateway, guar
     gw.guardian.step = real_step
     gw.guardian.transcript = inner
     assert_retired_without_a_mark(client, upstream, audit, tmp_path)
+
+
+def spy_steps(gw):
+    """Record every StepResult the loop settles, as the audit line and LAB-09's span read it."""
+    results, real = [], gw._step
+
+    async def spy(*args, **kwargs):
+        result = await real(*args, **kwargs)
+        results.append(result)
+        return result
+
+    gw._step = spy
+    return results
+
+
+def test_an_answer_the_loop_finds_late_keeps_sent(gateway, guardian, upstream, audit, tmp_path):
+    client = started(gateway, guardian, upstream, "enforce", "300")
+    gw = client.app.state.gateway
+    real_step = gw.guardian.step
+
+    def step(session, method, payload, token=None):
+        result = real_step(session, method, payload, token)
+        time.sleep(max(0.0, token.deadline - time.monotonic()) + 0.05)
+        return result
+
+    gw.guardian.step = step
+    results = spy_steps(gw)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    (result,) = results
+    # The Guardian received and answered this request, so the late StepResult still says it was sent.
+    assert (result.cause, result.sent) == ("decision_timeout", True)
+    assert result.request_id == events(audit, "decision_applied")[0]["request_id"]
+
+
+def test_an_answer_late_on_arrival_keeps_sent(gateway, guardian, upstream, audit, tmp_path):
+    client = started(gateway, guardian, upstream, "enforce", "100")
+    gw = client.app.state.gateway
+    gw.guardian.transcript = SlowLine(gw.guardian.transcript, 0.3, "req")
+    results = spy_steps(gw)
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    (result,) = results
+    assert (result.cause, result.sent) == ("decision_timeout", True)
+
+
+def test_a_discard_failure_after_the_loop_gave_up_still_retires(gateway, guardian, upstream, audit, tmp_path):
+    """The worker outlives the deadline plus the grace (1.5 s here) and lands inside the extra wait (to 2.0 s)."""
+    client = started(gateway, guardian, upstream, "enforce", "500")
+    gw = client.app.state.gateway
+    gw.guardian.transcript = UnmarkableLine(gw.guardian.transcript, 1.75, "resp")
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    gw.guardian.transcript = gw.guardian.transcript.inner
+    retired = events(audit, "session_retired")
+    assert [e["cause"] for e in retired] == ["discard_unwritten"]
+    assert not [line for line in transcript_lines(tmp_path) if "discards" in line]
+
+
+class BareFailure(UnmarkableLine):
+    def append(self, session_id, direction, envelope, **kwargs):
+        if kwargs.get("discards"):
+            raise OSError()
+        SlowLine.append(self, session_id, direction, envelope, **kwargs)
+
+
+def test_a_bare_discard_failure_is_audited_by_its_repr(gateway, guardian, upstream, audit, tmp_path):
+    client = started(gateway, guardian, upstream, "enforce", "300")
+    gw = client.app.state.gateway
+    gw.guardian.transcript = BareFailure(gw.guardian.transcript, 0.5, "resp")
+    upstream.reply(response_body(call_item("get_vendor_details", {"vendor_id": 7}, "call_1")))
+    client.post("/v1/responses", json=finbot_request())
+    errors = [e for e in events(audit, "gateway_step_error") if e.get("phase") == "discard_late"]
+    assert [e["error"] for e in errors] == ["OSError()"]

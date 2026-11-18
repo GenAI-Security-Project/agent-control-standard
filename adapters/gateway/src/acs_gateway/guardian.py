@@ -362,10 +362,11 @@ class GuardianClient:
         try:
             outcome, request_id = self._send(session.session_id, method, payload, posture, token)
         except _DiscardUnwritten as e:
+            # repr, since an OSError raised with no arguments has no text at all.
             audit_event("gateway_step_error", session_id=session.session_id, method=method, phase="discard_late",
-                        request_id=e.args[0], error=str(e.__cause__))
+                        request_id=e.args[0], error=repr(e.__cause__))
             return StepResult(method, e.args[0], cause="decision_timeout", failure_class="timeout",
-                              retire="discard_unwritten")
+                              retire="discard_unwritten", sent=True)
         # The token saw whether the send started. Without one (sessionStart inside the handshake), only an envelope
         # the gateway couldn't sign stays unsent.
         if token is not None:
