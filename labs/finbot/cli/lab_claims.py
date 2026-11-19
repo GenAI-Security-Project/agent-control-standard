@@ -23,7 +23,10 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 # Up to three spaces may lead a table row, as in CommonMark, so an indented row is still read.
-ID_ROW = re.compile(r"^ {0,3}\|\s*([CN]-\d{2})\s*\|", re.M)
+# The leading pipe is optional, as in GFM, so a row written without one is still a row.
+ID_ROW = re.compile(r"^ {0,3}\|?\s*([CN]-\d{2})\s*\|", re.M)
+ROW_LINE = re.compile(r" {0,3}\|?\s*[CN]-\d{2}\s*\|")
+FENCE_LINE = re.compile(r" {0,3}(`{3,}|~{3,})")
 SIGN_HEADING = re.compile(r"^## Sign-off$", re.M)
 SIGN_HEADER = "| Signed by | Date | Commit | Ledger sha256 |"
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -40,7 +43,10 @@ PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
 # A backticked token in an Evidence cell that names a file or directory in the repository: a relative path, at any
 # depth, ending in a slash or a known file suffix. A token like ACS_RESPONSE_SIGNING names no path. A token that holds
 # a slash but is neither, such as acs-lab-keys/1, is skipped, and the sign gate says so.
-EVIDENCE_TOKEN = re.compile(r"`([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/?)`")
+EVIDENCE_TOKEN = re.compile(r"`([^`\s]+)`")
+# A line number, a line range or an anchor after a cited path points into the file, so it goes before the check.
+EVIDENCE_POINTER = re.compile(r"(?::\d+(?:-\d+)?|#[^/]*)$")
+CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-]+(?:/[A-Za-z0-9_.@+~-]+)*/?")
 PATH_SUFFIXES = frozenset({".py", ".md", ".json", ".txt", ".toml", ".yml", ".yaml", ".lock", ".rego", ".sh", ".js",
                            ".html", ".css", ".go", ".mod", ".sum", ".ts", ".tsx", ".mjs", ".rs", ".ini", ".cfg",
                            ".proto", ".xml", ".csv"})
@@ -150,7 +156,7 @@ def _unconfirmed(text: str) -> tuple[str, ...]:
     """
     rows = []
     for line in text.splitlines():
-        cells = _cells(line) if re.match(r" {0,3}\|", line) else []
+        cells = _cells(line) if ROW_LINE.match(line) else []
         if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
             # The gate reads cells as a reader sees them, so an entity or emphasis can't hide a word from it.
             shown = [_cell_text(c) for c in cells]
@@ -167,21 +173,56 @@ def _evidence(text: str) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, 
     """
     paths, skipped = [], []
     for line in text.splitlines():
-        cells = _cells(line) if re.match(r" {0,3}\|", line) else []
+        cells = _cells(line) if ROW_LINE.match(line) else []
         if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
             cited = re.split(r"unconfirmed", cells[2], maxsplit=1, flags=re.I)[0]
             for token in EVIDENCE_TOKEN.findall(cited):
-                if token.endswith("/") or Path(token).suffix in PATH_SUFFIXES:
-                    paths.append((cells[0], token))
-                elif "/" in token:
+                path = EVIDENCE_POINTER.sub("", token)
+                if CLEAN_PATH.fullmatch(path) and (path.endswith("/") or Path(path).suffix.lower() in PATH_SUFFIXES):
+                    paths.append((cells[0], path))
+                elif "/" in token or Path(path).suffix.lower() in PATH_SUFFIXES:
                     skipped.append((cells[0], token))
     return tuple(paths), tuple(skipped)
 
 
+def _exists_exact(root: Path, path: str) -> bool:
+    """True when path names an entry under root with every part spelled exactly, case included.
+
+    Each part is compared with its directory's listing, because a case-folding filesystem such as macOS's default
+    would answer exists() for a wrong-case path that git and a Linux checkout don't hold.
+    """
+    here = Path(root)
+    for part in path.rstrip("/").split("/"):
+        try:
+            if part in (".", "..") or part not in os.listdir(here):
+                return False
+        except OSError:
+            return False
+        here = here / part
+    return here.is_dir() if path.endswith("/") else True
+
+
 def missing_evidence(ledger: Ledger, root: Path = REPO_ROOT) -> list[tuple[str, str]]:
-    """Cited evidence paths that don't exist under root. A path that climbs out of root counts as missing."""
-    return [(row, path) for row, path in ledger.evidence
-            if ".." in Path(path).parts or not (root / path).exists()]
+    """Cited evidence paths that don't exist under root, spelled exactly. A path that climbs out counts as missing."""
+    return [(row, path) for row, path in ledger.evidence if not _exists_exact(root, path)]
+
+
+def _unfenced(text: str) -> str:
+    """The ledger text with fenced blocks blanked, so a table row shown in an example never becomes a claim row."""
+    out, fence = [], None
+    for line in text.split("\n"):
+        opener = FENCE_LINE.match(line)
+        if fence is None and opener:
+            fence = opener.group(1)
+            out.append("")
+        elif fence is not None:
+            if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence) \
+                    and not line[opener.end():].strip():
+                fence = None
+            out.append("")
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 def _signed(text: str) -> tuple[bool, bool]:
@@ -213,20 +254,21 @@ def load_ledger(path: Path) -> Ledger:
     if ID_ROW.search(below) or BLOCK_OPEN.search(below):
         raise ValueError("the ledger holds a claim row or a machine block below '## Sign-off'")
     signed, stale = _signed(text)
-    found = ID_ROW.findall(above)
+    rows = _unfenced(above)
+    found = ID_ROW.findall(rows)
     duplicates = sorted({i for i in found if found.count(i) > 1})
     if duplicates:
         raise ValueError(f"the ledger repeats the ids {duplicates}")
     ids = frozenset(found)
     banned = _block(above, "claims-banned")
-    evidence, skipped = _evidence(above)
+    evidence, skipped = _evidence(_unfenced(above))
     return Ledger(
         ids=ids,
         banned=banned,
         triggers=_block(above, "claims-triggers"),
         exclude=_block(above, "claims-exclude"),
         signed=signed,
-        unconfirmed=_unconfirmed(above),
+        unconfirmed=_unconfirmed(rows),
         stale=stale,
         excuses=_excuses(above, ids, banned),
         evidence=evidence,

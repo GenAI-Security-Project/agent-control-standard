@@ -1870,3 +1870,59 @@ def test_banned_phrase_in_a_marker_comment_is_quoted(tree, name, body, phrase):
     findings = [f for f in _scan(tree, {name: body}) if f.kind == "banned"]
     assert findings and all(phrase in f.text and f.text.strip() for f in findings), findings
     assert all("claim:" not in f.text for f in findings), findings
+
+
+
+# ---------------------------------------------------------------- Final review: evidence paths and ledger rows
+
+
+@pytest.mark.parametrize("token,path", [
+    ("adapters/src/acs/core/_nothing_here.py:12", "adapters/src/acs/core/_nothing_here.py"),
+    ("adapters/src/acs/core/_nothing_here.py:12-30", "adapters/src/acs/core/_nothing_here.py"),
+    ("docs/nothing_here.md#section", "docs/nothing_here.md"),
+    ("adapters/nothing@v1/x.py", "adapters/nothing@v1/x.py"),
+    ("adapters/no+thing~1/x.py", "adapters/no+thing~1/x.py"),
+    ("NOTHING.MD", "NOTHING.MD"),
+])
+def test_r2_evidence_with_a_line_or_anchor_is_checked(tree, capsys, token, path):
+    paths, _ = lab_claims._evidence(f"| C-01 | Claim. | `{token}` (here). | None. |\n")
+    assert paths == (("C-01", path),)
+    root, _ = tree
+    ledger = _evidence_ledger(tree, f"`{token}` (gone).")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert f"missing_evidence C-15 {path}" in capsys.readouterr().out
+
+
+def test_r2_a_cited_line_in_a_real_file_passes():
+    ledger = lab_claims.Ledger(ids=frozenset(), banned=(), triggers=(), exclude=(), signed=True,
+                               evidence=(("C-01", "labs/finbot/cli/lab_claims.py"),))
+    assert lab_claims.missing_evidence(ledger, ROOT) == []
+    paths, _ = lab_claims._evidence("| C-01 | x | `labs/finbot/cli/lab_claims.py:10` | y |\n")
+    assert paths == (("C-01", "labs/finbot/cli/lab_claims.py"),)
+
+
+def test_r4_evidence_paths_match_case_exactly(tmp_path):
+    (tmp_path / "adapters" / "gateway").mkdir(parents=True)
+    (tmp_path / "adapters" / "gateway" / "README.md").write_text("x\n", encoding="utf-8")
+    ledger = lab_claims.Ledger(ids=frozenset(), banned=(), triggers=(), exclude=(), signed=True,
+                               evidence=(("C-01", "Adapters/Gateway/readme.md"), ("C-02", "adapters/gateway/README.md"),
+                                         ("C-03", "adapters/Gateway/"), ("C-04", "adapters/gateway/")))
+    assert lab_claims.missing_evidence(ledger, tmp_path) == [("C-01", "Adapters/Gateway/readme.md"),
+                                                             ("C-03", "adapters/Gateway/")]
+
+
+def test_r5_a_claim_row_without_a_leading_pipe_is_read(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8").replace(
+        "| C-16 |", "C-17 | A claim. | Unconfirmed: nothing yet. | None. |\n| C-16 |", 1)
+    ledger.write_text(text, encoding="utf-8")
+    parsed = lab_claims.load_ledger(ledger)
+    assert "C-17" in parsed.ids and "C-17" in parsed.unconfirmed
+
+
+def test_r5_a_row_inside_a_fenced_example_is_not_an_id(tree):
+    _, ledger = tree
+    example = "```text\n| C-99 | example | `x.py` | none |\n```\n\n## Claims\n"
+    ledger.write_text(ledger.read_text(encoding="utf-8").replace("## Claims\n", example, 1), encoding="utf-8")
+    parsed = lab_claims.load_ledger(ledger)
+    assert "C-99" not in parsed.ids and ("C-99", "x.py") not in parsed.evidence
