@@ -185,13 +185,19 @@ def test_cli_present(image):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_cli_python_renders_markdown_for_the_claims_check(image):
+def test_cli_python_parses_markdown_for_the_claims_check(image):
     # LAB-14's claims check runs on the lab CLI's interpreter, the first python on PATH, and exits 2 without
-    # Python-Markdown and superfences. The versions are the root uv.lock's (tests/test_lab_bundle.py pins them).
+    # markdown-it-py. It parses CommonMark plus tables, as GitHub does. The versions are the root uv.lock's
+    # (tests/test_lab_bundle.py pins them), and the Python-Markdown pair the check dropped is gone.
     result = _run(image, "python", "-c",
-                  "import importlib.metadata as m, markdown, pymdownx.superfences; "
-                  "print(m.version('markdown'), m.version('pymdown-extensions')); "
-                  "print(markdown.markdown('- a\\n\\n    ```\\n    b\\n    ```', extensions=['pymdownx.superfences']))")
+                  "import importlib.metadata as m, importlib.util as u, markdown_it; "
+                  "print(m.version('markdown-it-py'), m.version('mdurl')); "
+                  "print(u.find_spec('markdown'), u.find_spec('pymdownx')); "
+                  "md = markdown_it.MarkdownIt('commonmark', {'html': True}).enable(['table', 'strikethrough']); "
+                  "print(md.render('- a\\n\\n  ```\\n  b\\n  ```\\n\\n| x |\\n|---|\\n| y |'))")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.splitlines()[0] == "3.10.3 11.0.1"
+    lines = result.stdout.splitlines()
+    assert lines[0] == "4.2.0 0.1.2"
+    assert lines[1] == "None None"
     assert "<code>b" in result.stdout
+    assert "<td>y</td>" in result.stdout

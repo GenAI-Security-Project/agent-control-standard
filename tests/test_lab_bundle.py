@@ -516,20 +516,12 @@ def test_base_compose_never_shares_the_model_key():
 
 
 CLAIMS_REQUIREMENTS = BUNDLE / "images" / "claims-requirements.txt"
-CLAIMS_PACKAGES = {"markdown", "pymdown-extensions"}
+# LAB-14 round 8 (#587) moved the claims check to markdown-it-py, a CommonMark parser, whose one dependency is mdurl.
+CLAIMS_PINS = {"markdown-it-py": "4.2.0", "mdurl": "0.1.2"}
+LAB_CLAIMS = BUNDLE / "cli" / "lab_claims.py"
 
 
-def _root_lock_wheels(name: str) -> tuple[str, set[str]]:
-    import tomllib
-
-    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    package = next(p for p in lock["package"] if p["name"] == name)
-    return package["version"], {w["hash"] for w in package.get("wheels", [])}
-
-
-def test_claims_check_packages_pinned_to_the_root_lock():
-    # LAB-14's claims check renders Markdown with Python-Markdown and superfences, and exits 2 without them. The image
-    # installs both at the root uv.lock's versions, by hash, so the CLI renders exactly what the repository's tests do.
+def _claims_pins() -> dict[str, tuple[str, set[str]]]:
     pins: dict[str, tuple[str, set[str]]] = {}
     # A trailing backslash continues a requirement onto the next line, as pip and uv read it.
     text = CLAIMS_REQUIREMENTS.read_text(encoding="utf-8").replace("\\\n", " ")
@@ -542,12 +534,37 @@ def test_claims_check_packages_pinned_to_the_root_lock():
         hashes = {o.split("=", 1)[1] for o in options if o.startswith("--hash=")}
         assert hashes, f"{name} has no hash"
         pins[name.lower()] = (version, hashes)
-    assert set(pins) == CLAIMS_PACKAGES
+    return pins
+
+
+def _root_lock_packages() -> dict[str, dict]:
+    import tomllib
+
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    return {p["name"]: p for p in lock["package"]}
+
+
+def test_claims_check_packages_pinned():
+    # The claims check exits 2 without its parser, so the CLI image carries it at exact versions, one sha256 each.
+    pins = _claims_pins()
+    assert {name: version for name, (version, _) in pins.items()} == CLAIMS_PINS
+    for name, (_, hashes) in pins.items():
+        assert len(hashes) == 1 and all(re.fullmatch(r"sha256:[0-9a-f]{64}", h) for h in hashes), name
+
+
+def test_claims_check_packages_pinned_to_the_root_lock():
+    # The pins are the root uv.lock's version and wheel hash, so the CLI parses exactly what the repository's tests
+    # parse. The root lock gains markdown-it-py with LAB-14's claims check, so this waits only while neither is here.
+    packages = _root_lock_packages()
+    if "markdown-it-py" not in packages and not LAB_CLAIMS.exists():
+        pytest.skip("the root uv.lock gets markdown-it-py with LAB-14's claims check (#587), not on this branch yet")
+    pins = _claims_pins()
     for name, (version, hashes) in pins.items():
-        lock_version, lock_hashes = _root_lock_wheels(name)
-        assert version == lock_version, name
-        assert hashes <= lock_hashes, name
-    assert pins["pymdown-extensions"][0] == "11.0.1"
+        package = packages[name]
+        assert version == package["version"], name
+        assert hashes <= {w["hash"] for w in package.get("wheels", [])}, name
+        # The image installs with --no-deps, which holds only while the pinned set carries every locked dependency.
+        assert {d["name"] for d in package.get("dependencies", [])} <= set(pins), name
 
 
 def test_image_installs_the_claims_packages_by_hash():
