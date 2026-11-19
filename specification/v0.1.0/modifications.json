@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/modifications.json",
   "title": "ACS Modifications",
-  "description": "Modifications applied when decision is 'modify'. Two mutually exclusive shapes: wholesale replacement via 'modified_content', or structured edits via 'redactions' and/or 'parameter_overrides'. The two shapes never combine, and structured edits MUST target disjoint paths so the effective payload is order-independent (Specification 6.3). The provenance of values introduced by 'parameter_overrides' is not defined in v0.1.",
+  "description": "Modifications applied when decision is 'modify'. Two mutually exclusive shapes: wholesale leaf-text replacement via 'modified_content', or structured edits via 'redactions' and/or 'parameter_overrides'. The two shapes never combine, and structured edits MUST target disjoint paths so the effective payload is order-independent (Specification 6.3). At postCompact, a MODIFY replacing summary.value sets Guardian-supplied provenance on summary.provenance (origin: 'system', trust: 'trusted', source_id naming the Guardian or policy rule); the provenance of values introduced by 'parameter_overrides' at other hooks is not defined in v0.1.",
   "type": "object",
   "properties": {
     "modified_content": {
       "type": "string",
-      "description": "Replacement content for the entire payload. Exclusive: MUST NOT be combined with 'redactions' or 'parameter_overrides', which have no path to address inside an opaque replacement."
+      "description": "Wholesale replacement string for the hook payload's single primary text leaf: summary.value at postCompact, content[0].value on a single-text-part userMessage or agentResponse, the trigger text at agentTrigger, or outputs[0].value on a single-output toolCallResult (Specification 6.3). Structured object or multi-part payload edits MUST use 'redactions' and/or 'parameter_overrides'. Exclusive: MUST NOT be combined with 'redactions' or 'parameter_overrides', which have no path to address inside an opaque replacement."
     },
     "redactions": {
       "type": "array",

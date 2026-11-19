@@ -103,7 +103,7 @@ Fires when the agent is activated by an external triggering condition (event arr
 
 **Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (IBAC adopters populate; the Intent registered at sessionStart, carried here for activation-time policy checks).
 
-**Decision:** ALLOW / DENY / MODIFY. Guardian MAY rewrite the trigger payload (e.g. redact PII) before activation.
+**Decision:** ALLOW / DENY / MODIFY. Guardian MAY rewrite or redact the trigger payload (e.g. redact PII via `redactions`, or replace the trigger text via `modified_content`) before delivery to the agent, so the agent starts on the modified trigger payload while the audit chain records both the original `request_hash` and the applied modification.
 
 ---
 
@@ -217,7 +217,11 @@ Fires before context-window compaction. Compaction is the chokepoint where prove
 
 **Payload:** `entries_to_compact` (array of `step_id`s that will be summarized), pre-compaction `provenance_summary` (so the Guardian can see what it's about to lose), `triggered_by` (`size_threshold`, `manual`, `agent_initiated`).
 
-**Decision:** Decision-eligible. Guardian MAY return DENY to block compaction (e.g. because deployment policy disallows compacting after `untrusted` data has entered until a trusted re-grounding occurs).
+**Decision:** Decision-eligible. Guardian MAY return DENY to block compaction (e.g. because deployment policy disallows compacting after `untrusted` data has entered until a trusted re-grounding occurs). When `triggered_by` is `size_threshold`, the runtime is already out of context-window room; if `preCompact` returns `DENY` on a `size_threshold` trigger, the Observed Agent MUST NOT silently compact the unapproved entries as trusted. Instead, the Observed Agent MUST either:
+
+1. Drop the untrusted or policy-flagged entries identified by the policy decision before re-attempting compaction;
+2. Compact with the tainted lineage preserved (`derived_from` spanning all compacted entries and effective `trust: "untrusted"`, reported at `postCompact` where the Guardian MAY rewrite `summary.value` via `MODIFY`); or
+3. Halt the turn or end the session (`sessionEnd`) when the context window cannot proceed without compaction.
 
 ---
 
@@ -229,7 +233,13 @@ Fires after compaction. Audit + provenance-binding hook.
 
 **Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
 
-**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
+**Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY to rewrite or redact the compacted summary, but MAY NOT return DENY:
+
+- **Target:** A `postCompact` `MODIFY` carrying `modified_content` (or a `/summary/value` redaction) replaces `summary.value` in the agent's compacted context window before the agent resumes reasoning on the compacted context.
+- **Provenance:** The replacement summary carries Guardian-supplied provenance (`origin: "system"`, `trust: "trusted"` when `trust` is populated per [§7.1](specification.md#71-optional-trust-enum), and `source_id` naming the Guardian or policy rule, with `derived_from` preserving the compacted entries' `provenance_id`s; see [§6.3](specification.md#63-modify-composition-normative)).
+- **Audit and chain hash:** The `postCompact` `ContextEntry` and the response `chain_hash` commit to the **post-MODIFY** summary that actually enters the context window, while `ContextEntry.request_hash` covers the original `postCompact` request payload.
+
+For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
 ---
 
