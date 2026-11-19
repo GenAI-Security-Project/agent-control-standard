@@ -10,7 +10,9 @@ The Observed Agent emits; it does not adjudicate its own actions. That separatio
 
 ## Guardian Agent
 
-The policy authority. It receives hooks from the Observed Agent, evaluates them against deployment policy, and returns a disposition: `allow`, `deny`, `modify`, `ask`, or `defer`. It consumes AgBOM for inventory-dependent policy and emits Trace events for the decisions it makes.
+The policy enforcement and decision point. It receives hooks from the Observed Agent, evaluates them against deployment policy, and returns a disposition: `allow`, `deny`, `modify`, `ask`, or `defer`. It consumes AgBOM for inventory-dependent policy and emits Trace events for the decisions it makes.
+
+**Guardian identity** names the deciding Guardian service or instance as its own principal—distinct from the policy document (`policy_references`) and from the policy author ([Conformance](../spec/conformance.md)). In v0.1, neither `ServerHello` (`handshake.json`) nor `response-envelope.json` carries a Guardian principal identifier field; a signed response identifies the Guardian's configured signing key through `signature.key_id` ([Specification §10](../spec/instrument/specification.md#10-cryptographic-signatures)).
 
 > **Decision logging (normative).** A Guardian MUST log every decision with its reasoning, the evaluator's model identifier, and confidence when available.
 

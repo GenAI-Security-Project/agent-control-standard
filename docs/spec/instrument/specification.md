@@ -388,8 +388,8 @@ ACS MUST be deployable across IDE, SaaS, on-prem on Linux/Windows/macOS/mobile/b
 
 - Resource identifiers MUST use URI form (`file:///C:/...`, `posix:///etc/...`, `https://...`).
 - Capability vocabulary uses abstract names (`filesystem.delete`, `network.egress`, `process.execute`).
-- Identity descriptors carry a `type` discriminator (`posix_uid`, `windows_sid`, `oauth_subject`, `cert_subject`, …). Schema owned by the Identity workstream.
-- Authentication mechanism declared in handshake; spec mandates none.
+- Conceptual identity descriptors align with [RFC 9493](https://www.rfc-editor.org/rfc/rfc9493) (*Subject Identifiers for Security Event Tokens*: `iss_sub` carrying both `iss` and `sub` for OAuth/OIDC principals, `uri` for SPIFFE/WIMSE workload IDs such as `spiffe://example.com/agent/finbot`, `did`, `email`, `opaque`) alongside OS-local and certificate schemes (`posix_uid`, `windows_sid`, `cert_subject`, `spiffe`); see the WIMSE and SPIFFE discussion in [Standards](../../identity/standards.md). In v0.1, the wire schemas (`user_identity` in `session-start.json` and `user_context` in `request-envelope.json`) carry `{user_id, roles, authentication_method}` (`{id, role, attributes}` / `{user_id, tenant_id, roles, session_attributes}` in profile prose) without a separate `type` or `format` discriminator field on the wire. Schema owned by the Identity workstream.
+- Spec mandates no authentication mechanism; in v0.1 `handshake.json` carries no authentication-mechanism field and transport/authentication binding is established out of band by the deployment.
 
 ## 12. Policy Engine and Agent Layers
 
