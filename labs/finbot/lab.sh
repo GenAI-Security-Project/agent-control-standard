@@ -18,7 +18,8 @@
 #   upstream replay|openai        set the model upstream, recreate acs-gateway, bump the epoch
 #   sign hmac|mldsa               set decision signing, recreate acs-guardian and acs-gateway, bump the epoch
 #   traces on|off                 start or stop Jaeger and point the gateway's spans at it
-#   claims check [PATH]           the claims ledger check, with PATH mounted read only at /scan
+#   claims check [PATH] [FLAGS]   the claims ledger check, with PATH mounted read only at /scan. FLAGS:
+#                                 --require-signed, --digest
 #   anything else                 docker compose run --rm lab <args>
 #
 # Exit 0 means pass, 1 not yet, 2 the environment is broken. Checks print lines starting DONE or NOT YET:.
@@ -193,22 +194,46 @@ doctor() {
 }
 
 claims() {
-    if [ "$#" -ge 2 ] && [ "$1" = check ]; then
-        target=$2
-        case $target in /*) ;; *) target=$CALLER_DIR/$target ;; esac
-        if [ ! -e "$target" ]; then
-            say "NOT YET: $2 doesn't exist."
-            exit 2
-        fi
-        if [ -d "$target" ]; then
-            target=$(cd "$target" && pwd)
-        else
-            target=$(cd "$(dirname "$target")" && pwd)/$(basename "$target")
-        fi
-        compose run --rm -v "$target:/scan:ro" lab claims check /scan
-    else
+    # check [PATH] [--require-signed] [--digest], in any order. PATH is mounted read only at /scan. Every flag goes
+    # through to the check, and anything the wrapper can't pass through is refused, never dropped: a lost
+    # --require-signed would turn the signing gate into an unsigned check that still prints DONE.
+    if [ "${1:-}" != check ]; then
         lab claims "$@"
+        return
     fi
+    shift
+    path=
+    flags=
+    for arg in "$@"; do
+        case $arg in
+            --require-signed | --digest) flags="$flags $arg" ;;
+            -*) say "NOT YET: lab claims check takes PATH, --require-signed and --digest, got $arg."; exit 2 ;;
+            *) [ -z "$path" ] || { say "NOT YET: lab claims check takes one PATH, got $path and $arg."; exit 2; }
+               path=$arg ;;
+        esac
+    done
+    if [ -z "$path" ]; then
+        # shellcheck disable=SC2086
+        lab claims check $flags
+        return
+    fi
+    target=$path
+    case $target in /*) ;; *) target=$CALLER_DIR/$target ;; esac
+    if [ ! -e "$target" ]; then
+        say "NOT YET: $path doesn't exist."
+        exit 2
+    fi
+    if [ -d "$target" ]; then
+        target=$(cd "$target" && pwd)
+    else
+        target=$(cd "$(dirname "$target")" && pwd)/$(basename "$target")
+    fi
+    case $target in
+        # docker's -v splits on a colon, so the mount would name another path.
+        *:*) say "NOT YET: $path has a colon in it, which a Docker mount can't take. Move or rename it."; exit 2 ;;
+    esac
+    # shellcheck disable=SC2086
+    compose run --rm -v "$target:/scan:ro" lab claims check /scan $flags
 }
 
 reset_lab() {
@@ -233,6 +258,10 @@ reset_lab() {
             # No one to ask, so the key stays. Deleting it takes the explicit flag.
             say "No terminal to ask on, so the key stays. Run ./lab.sh reset --delete-model-key to delete it too."
         fi
+    fi
+    if [ -n "$wipe_flag" ] && [ "$(env_value ACS_UPSTREAM)" = openai ]; then
+        # .env survives the wipe, so the openai upstream would outlive its key and the next up would fail on it.
+        lab _set upstream replay
     fi
     compose --profile traces --profile cli down --volumes
     if [ -n "$wipe_flag" ]; then
@@ -259,6 +288,10 @@ case $verb in
         if [ ! -f state/secrets/hmac.key ]; then
             say "NOT YET: run ./lab.sh init first. It creates the lab's secrets and keys."
             exit 1
+        fi
+        if [ "$(env_value ACS_UPSTREAM)" = openai ] && [ ! -f state/secrets/openai.key ]; then
+            say "NOT YET: the openai upstream needs your model key in labs/finbot/state/secrets/openai.key (mode 0600). Put it back, or run ./lab.sh upstream replay."
+            exit 2
         fi
         if [ -f state/image-source ] && [ "$(cat state/image-source)" = built ]; then
             # A local build goes stale when the bundle changes, so up rebuilds it. The layer cache keeps it quick.

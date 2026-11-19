@@ -316,3 +316,71 @@ def test_reset_on_a_terminal_without_a_model_key_asks_nothing(bundle):
     assert result.returncode == 0, result.stderr
     assert "openai.key" not in result.stdout
     assert compose_calls(lines)[-1] == "compose -f compose.yaml run --rm lab _wipe"
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review: claims flags pass through, and the openai upstream never outlives its key
+# ---------------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("order", ["flag_last", "flag_first"])
+def test_claims_path_keeps_require_signed_in_any_position(bundle, tmp_path, order):
+    # Dropping the flag would turn the signing gate into an unsigned check that can still print DONE.
+    scan = tmp_path / "recording"
+    scan.mkdir()
+    args = [str(scan), "--require-signed"] if order == "flag_last" else ["--require-signed", str(scan)]
+    result, lines = run(bundle, "claims", "check", *args)
+    assert result.returncode == 0, result.stderr
+    assert compose_calls(lines) == [
+        f"compose -f compose.yaml run --rm -v {scan}:/scan:ro lab claims check /scan --require-signed"]
+
+
+def test_claims_flags_pass_through_without_a_path(bundle):
+    result, lines = run(bundle, "claims", "check", "--require-signed", "--digest")
+    assert result.returncode == 0, result.stderr
+    assert compose_calls(lines) == ["compose -f compose.yaml run --rm lab claims check --require-signed --digest"]
+
+
+@pytest.mark.parametrize("bad", [["--ledger", "x"], ["--require-signd"], ["-s"], ["a", "b"]])
+def test_claims_refuses_what_it_cannot_pass_through(bundle, tmp_path, bad):
+    # --ledger names a host path the container can't see, a typo would vanish, and a second path has nowhere to go.
+    for name in ("a", "b", "x"):
+        (tmp_path / name).mkdir(exist_ok=True)
+    result, lines = run(bundle, "claims", "check", *bad, cwd=tmp_path)
+    assert result.returncode == 2, result.stdout
+    assert result.stdout.startswith("NOT YET:")
+    assert compose_calls(lines) == []
+
+
+def test_claims_refuses_a_path_with_a_colon(bundle, tmp_path):
+    # docker's -v splits on the colon, so the mount would name another path.
+    scan = tmp_path / "a:b"
+    scan.mkdir()
+    result, lines = run(bundle, "claims", "check", str(scan))
+    assert result.returncode == 2
+    assert compose_calls(lines) == []
+
+
+def test_up_refuses_the_openai_upstream_without_the_key(bundle):
+    (bundle / ".env").write_text("ACS_UPSTREAM=openai\n", encoding="utf-8")
+    result, lines = run(bundle, "up")
+    assert result.returncode == 2
+    assert "NOT YET:" in result.stdout and "./lab.sh upstream replay" in result.stdout
+    assert compose_calls(lines) == []
+
+
+def test_reset_deleting_the_key_sets_the_upstream_back_to_replay(bundle):
+    _with_model_key(bundle)
+    (bundle / ".env").write_text("ACS_UPSTREAM=openai\n", encoding="utf-8")
+    result, lines = run(bundle, "reset", "--delete-model-key")
+    assert result.returncode == 0, result.stderr
+    calls = compose_calls(lines)
+    assert calls[0] == "compose -f compose.yaml -f compose.openai.yaml run --rm lab _set upstream replay"
+    assert calls[-1].endswith("run --rm lab _wipe --delete-model-key")
+
+
+def test_reset_keeping_the_key_keeps_the_upstream(bundle):
+    _with_model_key(bundle)
+    (bundle / ".env").write_text("ACS_UPSTREAM=openai\n", encoding="utf-8")
+    result, lines = run(bundle, "reset")
+    assert result.returncode == 0, result.stderr
+    assert not [c for c in compose_calls(lines) if "_set" in c]
