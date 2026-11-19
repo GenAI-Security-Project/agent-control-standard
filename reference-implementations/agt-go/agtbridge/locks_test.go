@@ -18,17 +18,18 @@ const agtTree = "../../agt"
 // one without the other.
 func TestAGTLocksPinOneCommit(t *testing.T) {
 	type pin struct {
-		Repo string `json:"agt_repo"`
-		Ref  string `json:"agt_ref"`
+		Repo       string `json:"agt_repo"`
+		Ref        string `json:"agt_ref"`
+		OPAVersion string `json:"opa_version"`
 	}
 	var typescript, native pin
 	readLock(t, agtTree+"/agt.lock", &typescript)
 	readLock(t, "../agt-native.lock", &native)
-	if typescript.Repo == "" || typescript.Ref == "" {
-		t.Fatalf("agt.lock names no repo or ref: %+v", typescript)
+	if typescript.Repo == "" || typescript.Ref == "" || typescript.OPAVersion == "" {
+		t.Fatalf("agt.lock names no repo, ref, or opa_version: %+v", typescript)
 	}
 	if typescript != native {
-		t.Fatalf("agt.lock pins %s@%s, and agt-native.lock pins %s@%s", typescript.Repo, typescript.Ref, native.Repo, native.Ref)
+		t.Fatalf("agt.lock pins %s@%s (opa %s), and agt-native.lock pins %s@%s (opa %s)", typescript.Repo, typescript.Ref, typescript.OPAVersion, native.Repo, native.Ref, native.OPAVersion)
 	}
 }
 

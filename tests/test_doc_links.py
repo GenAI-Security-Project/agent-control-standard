@@ -47,6 +47,7 @@ ROOT_MARKDOWN_FILES = (
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTORS.md",
     "STYLE.md",
+    "reference-implementations/README.md",
 )
 
 # The only GitHub repositories any doc may link to. Add an entry here only as a
@@ -131,3 +132,104 @@ def test_root_markdown_files_are_scanned():
         path = ROOT / name
         assert path.is_file(), f"{name} does not exist at the repository root"
         assert path in scanned, f"{name} is not included in the scan"
+
+
+MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+HEADING_LINE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+INLINE_CODE = re.compile(r"`[^`]*`")
+
+
+def _heading_slug(text: str) -> str:
+    """Compute a GitHub-compatible heading anchor slug."""
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+    cleaned = cleaned.replace("`", "").replace("*", "").replace("_", "")
+    cleaned = cleaned.strip().lower()
+    cleaned = re.sub(r"[^\w\s-]", "", cleaned, flags=re.UNICODE)
+    return re.sub(r"\s", "-", cleaned)
+
+
+def _headings_in_markdown(path: Path) -> set[str]:
+    """Return every heading anchor slug (GitHub and MkDocs forms) in a markdown file."""
+    slugs: set[str] = set()
+    counts: dict[str, int] = {}
+    in_fence = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = HEADING_LINE.match(line)
+        if not match:
+            continue
+        base = _heading_slug(match.group(2))
+        idx = counts.get(base, 0)
+        counts[base] = idx + 1
+        slug = base if idx == 0 else f"{base}-{idx}"
+        slugs.add(slug)
+        slugs.add(re.sub(r"-+", "-", slug).strip("-"))
+    return slugs
+
+
+def _validate_relative_links(path: Path, text: str | None = None) -> list[str]:
+    """Validate relative file links and markdown heading anchors inside `path`."""
+    content = path.read_text(encoding="utf-8") if text is None else text
+    violations: list[str] = []
+    in_fence = False
+    rel_source = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    for lineno, line in enumerate(content.splitlines(), start=1):
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        scrubbed = INLINE_CODE.sub("", line)
+        for match in MARKDOWN_LINK.finditer(scrubbed):
+            raw_target = match.group(1).strip()
+            target = raw_target.split()[0] if " " in raw_target else raw_target
+            if not target or "://" in target or target.startswith("mailto:"):
+                continue
+            path_part, _, fragment = target.partition("#")
+            resolved = (path.parent / path_part).resolve() if path_part else path.resolve()
+            if not resolved.exists():
+                violations.append(
+                    f"{rel_source}:{lineno}: relative link {target!r} does not exist"
+                )
+                continue
+            if fragment and resolved.is_file() and resolved.suffix.lower() == ".md":
+                slugs = _headings_in_markdown(resolved)
+                if fragment not in slugs:
+                    violations.append(
+                        f"{rel_source}:{lineno}: anchor #{fragment} not found in "
+                        f"{resolved.relative_to(ROOT)}"
+                    )
+    return violations
+
+
+def test_relative_links_and_anchors_resolve():
+    """Check relative file links and heading anchors across scanned docs and reference-implementations READMEs."""
+    ref_readmes = sorted((ROOT / "reference-implementations").rglob("README.md"))
+    candidates = sorted(set(_scanned_paths()) | set(ref_readmes))
+    violations: list[str] = []
+    for path in candidates:
+        violations.extend(_validate_relative_links(path))
+    assert not violations, "Broken relative links or heading anchors:\n" + "\n".join(violations)
+
+
+def test_reference_implementations_readme_key_links_resolve():
+    """Ensure reference-implementations/README.md is scanned and its key links and anchors resolve."""
+    readme = ROOT / "reference-implementations" / "README.md"
+    assert readme in _scanned_paths()
+    text = readme.read_text(encoding="utf-8")
+    assert "(../docs/spec/instrument/specification.md#10-cryptographic-signatures)" in text
+    assert "(agt/agt.lock)" in text
+    assert _validate_relative_links(readme) == []
+
+    broken_anchor = (
+        "[sig](../docs/spec/instrument/specification.md#10-renamed-signatures)\n"
+    )
+    assert _validate_relative_links(readme, broken_anchor) != []
+
+    broken_path = "[lock](agt/missing-agt.lock)\n"
+    assert _validate_relative_links(readme, broken_path) != []
+

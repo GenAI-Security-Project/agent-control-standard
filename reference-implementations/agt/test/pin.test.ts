@@ -9,13 +9,32 @@ describe("AGT pin", () => {
     expect(lock.agt_ref).toMatch(/^[0-9a-f]{40}$/);
   });
 
+  it("records a valid semver OPA version", () => {
+    expect(lock.opa_version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(lock.opa_version).toBe("0.70.0");
+  });
+
   it("pins the SDK version the bridge installs", () => {
-    const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-    const dep =
-      pkg.dependencies?.["agent-control-specification"] ??
-      pkg.devDependencies?.["agent-control-specification"];
-    expect(dep).toBeDefined();
-    expect(dep.replace(/^[^0-9]*/, "")).toBe(lock.sdk_version);
+    for (const manifestPath of [
+      "package.json",
+      "packages/agt-bridge/package.json",
+      "packages/conformance/package.json",
+    ]) {
+      const pkg = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const dep =
+        pkg.dependencies?.[lock.sdk_package] ??
+        pkg.devDependencies?.[lock.sdk_package];
+      expect(dep).toBeDefined();
+      expect(dep.replace(/^[^0-9]*/, "")).toBe(lock.sdk_version);
+    }
+  });
+
+  it("keeps every implementation lock file aligned with agt.lock", () => {
+    const nativeLock = JSON.parse(readFileSync("../agt-go/agt-native.lock", "utf8"));
+    expect(nativeLock.agt_repo).toBe(lock.agt_repo);
+    expect(nativeLock.agt_ref).toBe(lock.agt_ref);
+    expect(nativeLock.opa_version).toBe(lock.opa_version);
+    expect(nativeLock.crate_version).toBe(lock.sdk_version);
   });
 
   it("vendors the stock bundle with every stock module present", () => {
