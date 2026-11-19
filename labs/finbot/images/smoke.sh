@@ -167,49 +167,64 @@ for service in acs-gateway acs-guardian acs-viewer; do
     [ -z "$listing" ] && pass "$service can't see state/secrets" || fail "$service sees state/secrets: $listing"
 done
 
-count_lines() { if [ -f "$1" ]; then wc -l < "$1"; else echo 0; fi; }
-before=$(count_lines state/model-inputs.jsonl)
-transcripts_before=$(ls state/transcripts 2>/dev/null | wc -l)
-reply=$(in_service finbot python -c '
-import json, os, urllib.request
+# Module 1's model path. Every check below needs a positive result this run produced, never the absence of an error,
+# so leftovers from an earlier local run can't pass it (final review R1). The call carries a fresh nonce, which also
+# gives it a conversation of its own, so the gateway opens a new session and a new transcript for it.
+nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+audit_before=0
+[ ! -f state/audit.log ] || audit_before=$(wc -c < state/audit.log | tr -d ' ')
+transcripts_before=$(mktemp)
+ls state/transcripts 2>/dev/null | sort > "$transcripts_before"
+# The call passes only on HTTP 200 with the replay miss response, and prints its id and text so this shell checks
+# them too. Anything else raises, which exits nonzero.
+expected="resp_replay_miss: I couldn't complete that action."
+if reply=$(in_service finbot python -c '
+import json, os, sys, urllib.request
 base = os.environ["OPENAI_BASE_URL"].rstrip("/")
-body = json.dumps({"model": "gpt-5-nano", "input": [{"role": "user", "content": "lab smoke check"}]}).encode()
-request = urllib.request.Request(base + "/responses", data=body, headers={
+body = json.dumps({"model": "gpt-5-nano", "input": [{"role": "user", "content": "lab smoke check " + sys.argv[1]}]})
+request = urllib.request.Request(base + "/responses", data=body.encode(), headers={
     "Content-Type": "application/json", "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})
 with urllib.request.urlopen(request, timeout=30) as response:
+    assert response.status == 200, response.status
     answer = json.load(response)
-print(answer["output"][0]["content"][0]["text"])
-' 2>&1)
-if [ -n "$reply" ] && printf '%s' "$reply" | grep -qv Traceback; then
-    pass "a model call through FinBot's base URL got a replay answer: $reply"
+print(answer["id"] + ": " + answer["output"][0]["content"][0]["text"])
+' "$nonce" 2>&1) && [ "$reply" = "$expected" ]; then
+    pass "a model call through FinBot's base URL got the replay answer: $reply"
 else
-    fail "the model call through FinBot's base URL failed: $reply"
+    fail "the model call through FinBot's base URL didn't get the replay answer: $reply"
 fi
-after=$(count_lines state/model-inputs.jsonl)
-[ "$after" -gt "$before" ] && pass "the model input log recorded the call" || fail "the model input log didn't grow"
-if grep -q '"acs_audit_event": *"replay_miss"' state/audit.log 2>/dev/null; then
-    pass "the audit log marks the unrecorded call as a replay miss"
+if grep -q "lab smoke check $nonce" state/model-inputs.jsonl 2>/dev/null; then
+    pass "the model input log recorded this run's call"
 else
-    fail "no replay_miss line in state/audit.log"
+    fail "the model input log has no line for this run's call"
+fi
+if [ -f state/audit.log ] && tail -c "+$((audit_before + 1))" state/audit.log | grep -q '"acs_audit_event": *"replay_miss"'; then
+    pass "the audit log marks this run's unrecorded call as a replay miss"
+else
+    fail "no replay miss line in state/audit.log since this run started"
 fi
 
-# The session the call opened left a transcript, and acs-verify (LAB-11) checks its ML-DSA-65 decisions with the key
-# document alone plus the HMAC secret for the requests. Interface pin on acs-verify's first output line.
-newest=$(ls -t state/transcripts 2>/dev/null | head -n 1)
-if [ "$(ls state/transcripts 2>/dev/null | wc -l)" -gt "$transcripts_before" ] && [ -n "$newest" ]; then
-    pass "the call left a transcript, $newest"
+# The session this call opened left a transcript named by its session id, one no earlier run created. acs-verify
+# (LAB-11) checks its ML-DSA-65 decisions with the key document alone plus the HMAC secret for the requests.
+# Interface pin on acs-verify's first output line.
+new_transcripts=$(ls state/transcripts 2>/dev/null | sort | comm -13 "$transcripts_before" -)
+rm -f "$transcripts_before"
+if [ -n "$new_transcripts" ]; then
+    pass "the call left a new transcript: $(printf '%s' "$new_transcripts" | tr '\n' ' ')"
     if [ "$(cat state/image-source 2>/dev/null)" = built ]; then
         export LAB_RUNTIME_IMAGE=acs-lab-runtime:local LAB_FINBOT_IMAGE=acs-lab-finbot:local
     fi
     [ "$(id -u)" -eq 0 ] || export LAB_UID="$(id -u)" LAB_GID="$(id -g)"
-    verified=$(docker compose -f compose.yaml run --rm -T --entrypoint python lab -m acs.testing.verify \
-               "/lab/state/transcripts/$newest" --keys /lab/state/keys/guardian-keys.json \
-               --hmac-secret /lab/state/secrets/hmac.key 2>/dev/null || true)
-    if printf '%s\n' "$verified" | grep -q '^acs-verify: PASS' && printf '%s' "$verified" | grep -q 'ML-DSA-65'; then
-        pass "acs-verify passes the transcript's ML-DSA-65 decisions"
-    else
-        fail "acs-verify didn't pass the transcript: $verified"
-    fi
+    for name in $new_transcripts; do
+        verified=$(docker compose -f compose.yaml run --rm -T --entrypoint python lab -m acs.testing.verify \
+                   "/lab/state/transcripts/$name" --keys /lab/state/keys/guardian-keys.json \
+                   --hmac-secret /lab/state/secrets/hmac.key 2>/dev/null || true)
+        if printf '%s\n' "$verified" | grep -q '^acs-verify: PASS' && printf '%s' "$verified" | grep -q 'ML-DSA-65'; then
+            pass "acs-verify passes $name's ML-DSA-65 decisions"
+        else
+            fail "acs-verify didn't pass $name: $verified"
+        fi
+    done
 else
     fail "the call left no new transcript"
 fi

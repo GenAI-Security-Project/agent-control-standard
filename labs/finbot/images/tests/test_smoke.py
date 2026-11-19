@@ -23,12 +23,15 @@ SMOKE = Path(__file__).resolve().parents[1] / "smoke.sh"
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="smoke.sh runs on macOS and Linux only (Rock, 2026-11-17)")
 
-# Logs each call on one line, newlines in inline code included, and answers the reachability probe, and only it,
-# with one line per host and port it was given.
+# Logs each call on one line, newlines in inline code included. It answers the reachability probe with one line per
+# host and port it was given, and the model call with FAKE_MODEL_REPLY and exit status FAKE_MODEL_RC.
 FAKE_DOCKER = """#!/bin/sh
 printf '%s' "$*" | tr '\\n' ' ' >> "$FAKE_DOCKER_LOG"
 printf '\\n' >> "$FAKE_DOCKER_LOG"
 case "$*" in
+    *OPENAI_BASE_URL*)
+        printf '%s' "${FAKE_MODEL_REPLY:-}"
+        exit "${FAKE_MODEL_RC:-0}" ;;
     *lab-reach-record*)
         while [ "$#" -gt 0 ] && [ "$1" != -c ]; do shift; done
         shift 2
@@ -58,11 +61,12 @@ def bundle(tmp_path: Path) -> Path:
     return root
 
 
-def run_smoke(bundle: Path, reachable: str = "acs-gateway") -> tuple[subprocess.CompletedProcess, list[str]]:
+def run_smoke(bundle: Path, reachable: str = "acs-gateway", reply: str = "",
+              reply_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str]]:
     log = bundle.parent / "docker.log"
     log.write_text("", encoding="utf-8")
     env = {**os.environ, "PATH": f"{bundle.parent / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(log),
-           "FAKE_REACHABLE": reachable}
+           "FAKE_REACHABLE": reachable, "FAKE_MODEL_REPLY": reply, "FAKE_MODEL_RC": str(reply_rc)}
     result = subprocess.run(["sh", str(bundle / "images" / "smoke.sh")], env=env, capture_output=True, text=True,
                             timeout=60)
     return result, log.read_text(encoding="utf-8").splitlines()
@@ -156,3 +160,72 @@ def test_the_probe_bound_covers_the_name_lookup(tmp_path):
     assert done.returncode == 0, done.stderr
     assert done.stdout.splitlines() == ["cannot reach slow.invalid:443 (TimeoutError)", f"reaches 127.0.0.1:{port}"]
     assert elapsed < 6, elapsed
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review R1: every model-path check needs a positive result from this run
+# ---------------------------------------------------------------------------------------------------------------------
+
+MISS_ANSWER = "resp_replay_miss: I couldn't complete that action."
+TRACEBACK = """Traceback (most recent call last):
+  File "<string>", line 8, in <module>
+urllib.error.URLError: <urlopen error [Errno 111] Connection refused>"""
+
+
+def _line(result: subprocess.CompletedProcess, words: str) -> str:
+    found = [line for line in result.stdout.splitlines() if words in line]
+    assert len(found) == 1, result.stdout
+    return found[0]
+
+
+def test_a_traceback_from_the_model_call_fails_the_smoke(bundle):
+    result, _ = run_smoke(bundle, reply=TRACEBACK, reply_rc=1)
+    assert _line(result, "model call through FinBot").startswith("NOT YET:")
+    assert result.returncode == 1
+
+
+def test_a_traceback_fails_even_when_the_exec_exits_0(bundle):
+    result, _ = run_smoke(bundle, reply=TRACEBACK, reply_rc=0)
+    assert _line(result, "model call through FinBot").startswith("NOT YET:")
+
+
+def test_an_empty_answer_fails_the_smoke(bundle):
+    result, _ = run_smoke(bundle, reply="", reply_rc=0)
+    assert _line(result, "model call through FinBot").startswith("NOT YET:")
+
+
+def test_the_replay_answer_passes_the_model_call_check(bundle):
+    # The positive control: the check isn't simply always red.
+    result, _ = run_smoke(bundle, reply=MISS_ANSWER, reply_rc=0)
+    assert _line(result, "model call through FinBot").startswith("DONE:")
+
+
+def test_the_call_carries_a_fresh_nonce_each_run(bundle):
+    _, first = run_smoke(bundle, reply=MISS_ANSWER)
+    _, second = run_smoke(bundle, reply=MISS_ANSWER)
+    calls = [c for c in first + second if "OPENAI_BASE_URL" in c]
+    assert len(calls) == 2
+    nonces = [re.search(r" ([0-9a-f]{16})$", c) for c in calls]
+    assert all(nonces), calls
+    assert nonces[0].group(1) != nonces[1].group(1)
+
+
+def test_a_stale_replay_miss_line_from_an_earlier_run_fails_the_smoke(bundle):
+    # A local rerun keeps state/audit.log, so a miss line from the last run must not satisfy this one.
+    (bundle / "state").mkdir()
+    (bundle / "state" / "audit.log").write_text(
+        'ACS_AUDIT {"acs_audit_event": "replay_miss", "cause": "no_recording", "timestamp": "2026-11-17T10:00:00Z"}\n',
+        encoding="utf-8")
+    result, _ = run_smoke(bundle, reply=MISS_ANSWER)
+    assert _line(result, "replay miss").startswith("NOT YET:")
+
+
+def test_stale_model_input_and_transcript_fail_the_smoke(bundle):
+    # The input log and the transcripts from an earlier run hold nothing this run created.
+    state = bundle / "state"
+    (state / "transcripts").mkdir(parents=True)
+    (state / "transcripts" / "11111111-1111-4111-8111-111111111111.jsonl").write_text("{}\n", encoding="utf-8")
+    (state / "model-inputs.jsonl").write_text('{"input": "lab smoke check 0123456789abcdef"}\n', encoding="utf-8")
+    result, _ = run_smoke(bundle, reply=MISS_ANSWER)
+    assert _line(result, "model input log").startswith("NOT YET:")
+    assert _line(result, "transcript").startswith("NOT YET:")
