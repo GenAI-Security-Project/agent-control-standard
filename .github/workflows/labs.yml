@@ -99,8 +99,8 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: "0.9.9"
-      - name: Run the CLI and lab.sh tests, standard library plus pytest
-        run: uv run --no-project --python 3.12 --with pytest==9.2.0 python -m pytest labs/finbot/cli/tests -v
+      - name: Run the CLI and lab.sh tests from the adapters' locked test group
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/cli/tests -v
 
   viewer:
     runs-on: ubuntu-latest
@@ -141,7 +141,7 @@ jobs:
         env:
           # A runner without Docker fails here instead of skipping.
           LAB_REQUIRE_DOCKER: "1"
-        run: uv run --no-project --python 3.12 --with pytest==9.2.0 python -m pytest labs/finbot/images/tests -v
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/images/tests -v
 
   smoke:
     # Module 1's replay path end to end on a fresh runner with no model key. The runner's uid is 1001, which tests the

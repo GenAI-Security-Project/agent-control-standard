@@ -465,11 +465,16 @@ def test_compose_job_checks_every_combination():
 
 def test_cli_viewer_and_images_jobs_run_their_suites():
     jobs = _workflow(LABS_WORKFLOW)["jobs"]
-    assert "python -m pytest labs/finbot/cli/tests -v" in _runs(jobs["cli"])
+    # Every pytest job runs from a locked project, so pytest and its dependencies install by hash (final review R6).
+    assert ("uv run --project adapters --locked --group test python -m pytest labs/finbot/cli/tests -v"
+            in _runs(jobs["cli"]))
     assert ("uv run --project adapters --locked --extra pqc --group test python -m pytest labs/finbot/viewer/tests -v"
             in _runs(jobs["viewer"]))
     images = jobs["images"]
-    assert "python -m pytest labs/finbot/images/tests -v" in _runs(images)
+    assert ("uv run --project adapters --locked --group test python -m pytest labs/finbot/images/tests -v"
+            in _runs(images))
+    for job in jobs.values():
+        assert "--with pytest" not in _runs(job)
     assert any(step.get("env", {}).get("LAB_REQUIRE_DOCKER") == "1" for step in _steps(images))
 
 
