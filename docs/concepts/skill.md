@@ -2,7 +2,7 @@
 
 A skill is loadable executable content that composes lower-level components into a higher-level ability. It packages instructions, helper scripts, and an action manifest that run together. Where a [capability](./capability.md) names what an action does and a tool exercises one, a skill is a reusable unit of agent behavior assembled from many tools, MCP servers, peers, and sometimes other skills.
 
-A skill differs from an [`agent_capability`](./capability.md) in one way that governs how ACS treats it. An `agent_capability` is a passive grouping: a label over components already in the inventory. A skill carries a **definition artifact**, content that loads and runs. That artifact is a trust surface, and it is the reason skills earn lifecycle governance of their own.
+A skill differs from an AgBOM [`agent_capability`](../spec/inspect/README.md) inventory component (which is distinct from the abstract permission [Capability](./capability.md) label on `toolCallRequest.capability` and `Intent.parsed`) in one way that governs how ACS treats it. An `agent_capability` component in [`agbom/component.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/component.json) records a passive callable surface in the Bill of Materials: a label grouping `tools[]`, `mcp_servers[]`, and `a2a_peers[]` already in the inventory. A skill carries a **definition artifact**, content that loads and runs. That artifact is a trust surface, and it is the reason skills earn lifecycle governance of their own.
 
 ## Skill and composition
 

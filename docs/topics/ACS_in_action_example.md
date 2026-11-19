@@ -104,7 +104,7 @@ The Guardian's deterministic layer evaluates against IBAC (does `email.send` to 
     ],
     "policy_data": {
       "fides": { "recipient_trust": "trusted", "body_trust": "untrusted", "p_f_passed": true },
-      "ibac": { "matched_capability": { "tool": "email.send", "resource": "manager@example.com" } }
+      "ibac": { "matched_capability": { "tool": "email.send", "resource": "mailto:manager@example.com" } }
     },
     "cited_provenance_ids": ["p1", "p3"],
     "metadata": {
@@ -142,7 +142,7 @@ User's committed Intent: `["summarize Project X"]`. The agent attempts `email.se
   ],
   "policy_data": {
     "ibac": {
-      "requested_capability": { "tool": "email.send", "resource": "manager@example.com" },
+      "requested_capability": { "tool": "email.send", "resource": "mailto:manager@example.com" },
       "intent_parsed": ["summarize.read"],
       "closest_match_in_intent": null
     }

@@ -21,7 +21,7 @@
     },
     "capability": {
       "type": "string",
-      "description": "Abstract capability identifier (e.g., filesystem.delete, network.egress, process.execute)"
+      "description": "Abstract capability identifier using a hierarchical domain.verb convention (core illustrative set: filesystem.read, filesystem.write, filesystem.delete, network.egress, process.execute, memory.read, memory.write, subagent.spawn). ACS v0.1 defines no central capability registry; matching between toolCallRequest.capability, AgBOM declarations, and policy rules is deployment-local exact string matching."
     },
     "arguments": {
       "type": "object",

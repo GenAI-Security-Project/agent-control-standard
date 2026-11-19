@@ -133,7 +133,7 @@ A concrete example that illustrates several of these challenges is Palo Alto Net
 
 ## How ACS-Identity composes with the rest of ACS
 
-ACS-Identity is one of eight cross-cutting concepts (Identity, Provenance, Trust, Intent, Capability, Skill, Agents, Session Lifecycle). It produces signals that the three pillars consume:
+ACS-Identity is one of eight cross-cutting concepts (Agents, Identity, Session Lifecycle, Intent, Provenance, Capability, Skill, Trust Basis). It produces signals that the three pillars consume:
 
 - **Instrument** fires authorization decisions against identity + intent + taint.
 - **Trace** records each chain link as a span attribute (signed, verifiable).

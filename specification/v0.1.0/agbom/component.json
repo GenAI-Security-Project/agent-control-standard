@@ -21,7 +21,7 @@
     "endpoint": {
       "type": "string",
       "format": "uri",
-      "description": "URI per Section 3.11 (file:///, posix:///, https://, etc.)."
+      "description": "RFC 3986 URI per Section 11 (https://, file:///, mailto:, etc.)."
     },
     "registration_provenance": {
       "$ref": "../provenance.json",
@@ -68,7 +68,7 @@
       "properties": {
         "capability": {
           "type": "string",
-          "description": "Abstract capability per Section 3.11 (e.g., filesystem.delete, network.egress, process.execute)."
+          "description": "Abstract capability per Section 11 (e.g., filesystem.read, filesystem.write, filesystem.delete, network.egress, process.execute, memory.read, memory.write, subagent.spawn)."
         }
       }
     },
@@ -117,7 +117,7 @@
           "description": "Reference and integrity digest for the skill's COMPLETE loadable artifact, including any bundled or fetched model files, adapters, or other binary assets, not only text. The body itself MUST NOT be required on the wire. Only the reference and digest persist in the AgBOM; the full body is available for inspection in the transient steps/skillRegister payload. A model-bearing skill, whose backdoor can live in opaque weights rather than readable instructions, is governed here through the digest and registration_provenance rather than source inspection.",
           "required": ["ref", "digest"],
           "properties": {
-            "ref": { "type": "string", "format": "uri", "description": "URI of the complete loadable skill artifact per Section 3.11 (file:///, https://, etc.), including any bundled model files or adapters." },
+            "ref": { "type": "string", "format": "uri", "description": "URI of the complete loadable skill artifact per Section 11 (file:///, https://, etc.), including any bundled model files or adapters." },
             "digest": {
               "type": "object",
               "description": "Integrity digest over the complete loadable artifact, not only its text. Lets a Guardian detect tampering between registration and load, and bind a steps/skillLoad to the exact artifact vetted at steps/skillRegister via the (skill_id, digest) pair.",

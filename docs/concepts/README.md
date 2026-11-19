@@ -1,6 +1,6 @@
 # Concepts
 
-These pages define the foundational concepts ACS uses across every pillar: agents, identity, the session lifecycle, intent, provenance, capability, and trust basis. They are the single source of truth. Each pillar's specification references down into these definitions rather than restating them.
+These pages define the eight foundational concepts ACS uses across every pillar: agents, identity, the session lifecycle, intent, provenance, capability, skill, and trust basis. They are the single source of truth. Each pillar's specification references down into these definitions rather than restating them.
 
 This split exists because these concepts are horizontal. Intent, for example, flows through all three pillars: Instrument fires decisions against it, Trace records it as a span attribute, and Inspect catalogs what it authorized. Defining it inside any one pillar would subordinate a concept the other two depend on.
 

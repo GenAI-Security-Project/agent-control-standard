@@ -386,8 +386,8 @@ For any algorithm of the form `<PQC>+<CLASSICAL>`, the `value` field carries the
 
 ACS MUST be deployable across IDE, SaaS, on-prem on Linux/Windows/macOS/mobile/browser. Normative:
 
-- Resource identifiers MUST use URI form (`file:///C:/...`, `posix:///etc/...`, `https://...`).
-- Capability vocabulary uses abstract names (`filesystem.delete`, `network.egress`, `process.execute`).
+- Fields that name addressable network or artifact endpoints—specifically AgBOM `component.endpoint` and skill `definition.ref`—SHOULD use RFC 3986 URIs (`https://...`, `file:///...`, `mailto:...`), while domain-specific resource scopes (`Intent.parsed[].resource`, database rows, process names, or file paths) use the deployment's canonical identifier format (`file:///C:/...`, `file:///etc/...` rather than the unregistered `posix:///` scheme).
+- Capability vocabulary uses abstract `domain.verb` names (`filesystem.read`, `filesystem.write`, `filesystem.delete`, `network.egress`, `process.execute`, `memory.read`, `memory.write`, `subagent.spawn`). ACS v0.1 defines no central capability registry; capability matching between `toolCallRequest.capability`, AgBOM declarations, and policy rules is deployment-local exact string matching.
 - Identity descriptors carry a `type` discriminator (`posix_uid`, `windows_sid`, `oauth_subject`, `cert_subject`, …). Schema owned by the Identity workstream.
 - Authentication mechanism declared in handshake; spec mandates none.
 
