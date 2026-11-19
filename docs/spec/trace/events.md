@@ -106,7 +106,7 @@ OCSF `action_id` and `disposition_id` for decision events are also set from the 
 | `ask` | 99 (Other) | 99 (Other) | true |
 | `defer` | 99 (Other) | 99 (Other) | true |
 
-On an on-time decision event, `is_alert` is true exactly when `severity_id` is 3 or higher, so the two fields never disagree. `ask` and `defer` alert because each holds an action for a later answer, and v0.1.0 has no Trace event for how either one ends, so the decision event is the only signal a SOC gets. `modify` does not alert, because the action ran in the form the policy required, and a MODIFY the client cannot apply becomes a DENY (§6.5), which alerts.
+On an on-time decision event, `is_alert` is true exactly when `severity_id` is 3 (Medium) or higher, so the two fields never disagree. `ask` and `defer` alert because each holds an action for a later answer, and v0.1.0 has no Trace event for how either one ends, so the decision event is the only signal a SOC gets. `modify` does not alert, because the action ran in the form the policy required, and a MODIFY the client cannot apply becomes a DENY (§6.5), which alerts.
 
 A Guardian SHOULD NOT set `verdict_id` or the finding's `status_id`, because both belong to whoever triages the finding.
 

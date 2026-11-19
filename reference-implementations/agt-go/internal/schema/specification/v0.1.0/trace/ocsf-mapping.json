@@ -100,7 +100,7 @@
         },
         "alert_mapping": {
           "type": "object",
-          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 or higher, so the two fields never disagree. ask and defer alert because each holds an action for a later answer, and v0.1.0 has no Trace event for how either one ends, so this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
+          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 (Medium) or higher, so the two fields never disagree. ask and defer alert because each holds an action for a later answer, and v0.1.0 has no Trace event for how either one ends, so this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
           "additionalProperties": { "type": "boolean" },
           "default": {
             "allow": false,

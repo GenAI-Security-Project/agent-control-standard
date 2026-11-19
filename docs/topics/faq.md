@@ -108,7 +108,7 @@ Observability is now one of three pillars. Trace records what happened, Instrume
 
 No, and no runtime mechanism can. Current research finds essentially every production LLM remains vulnerable to some form of prompt injection. What ACS adds is that the agent acting on injected reasoning becomes visible and gateable, rather than silent.
 
-One caveat belongs here rather than buried further down. The default failure posture is fail-closed: when no decision arrives, the step is blocked and recorded. A deployment can opt into fail-open for availability, and then an attacker who can stall or break the Guardian channel converts enforcement into audit. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
+Additionally, to enable a control plane to help in mitigating the impact of prompt injection on agentic systems, ACS's default failure posture is fail-closed: when no decision arrives, the step is blocked and recorded. A deployment can opt into fail-open for availability, and then an attacker who can stall or break the Guardian channel converts enforcement into audit. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
 
 The mechanism is **deviation detection**. ACS lets the agent declare what it is doing this session (its intent) and requires it to send each proposed action through a Guardian before executing it. The Guardian compares the action against the declared intent when the deployment uses one, the policy library, and the trust basis of the data driving the action. An injected agent generally deviates on at least one of those, and the Guardian denies, modifies, or escalates the action before it runs.
 
@@ -131,7 +131,7 @@ You are building ten things:
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
-- **Decision honoring.** Wait for the verdict and apply it. On a timeout or a transport failure, apply the failure posture (`deny` by default, which is fail-closed), and keep that outcome when a decision arrives after the timeout. Block a step the Guardian refused, whatever the posture, and record every decision failure and refusal as an audit event.
+- **Decision honoring.** Wait for the verdict and apply it. On a timeout or a transport failure, apply the failure posture (`deny`/fail-closed by default), and keep that outcome when a decision arrives after the timeout. Block a step the Guardian refused, whatever the posture, and record every decision failure and refusal as an audit event.
 - **Liveness.** A way to notice that the Guardian has stopped answering.
 - **MCP coverage.** The `protocols/MCP/*` methods for MCP traffic.
 

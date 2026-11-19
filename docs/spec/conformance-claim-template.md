@@ -96,13 +96,14 @@ code invented on the page.
 
 ## 5. ACS-Core decision posture
 
-Required whenever `acs-core` is `EXERCISED`. ACS-Core mandates decision honoring, and a
-deployment can opt into `proceed`, so a claim that omits this cannot show whether a permitted
-action was decided or let through.
+Required whenever `acs-core` is `EXERCISED`. ACS-Core requires decisions to be honored, but
+deployments may opt into `proceed` when no usable decision is received. Without this
+information, a claim cannot distinguish actions allowed by a Guardian decision from actions
+that proceeded without one.
 
 | Field | Value |
 |---|---|
-| Failure posture in force (§6.4): the deployment's setting, or a stricter `on_decision_failure` the Guardian declared | `<proceed / deny>` |
+| Failure posture applied (§6.4): `deny` unless the deployment opted into `proceed`, and `deny` whenever the Guardian declared `on_decision_failure: deny` | `<proceed / deny>` |
 | Startup posture on handshake failure (§4.1) | `<proceed / refuse>` |
 | Sessions observed in this run | `<n>` |
 | Decision failures recorded, by failure class (`sessionEnd` `summary.decision_failures`) | `<class: n, ...>` |
