@@ -633,11 +633,13 @@ def _source_lines(source: str, units: list[Unit]) -> None:
     keys = [re.sub(r"[\W_]", "", _fold(ln).lower()) for ln in source.splitlines()]
     spans = [keys[i] + "".join(keys[i + 1:i + 4]) for i in range(len(keys))]
     cursor = 0
+    # The previous unit's own length, so a long code block doesn't push the next unit out of the window.
+    reach = SOURCE_WINDOW
     for unit in units:
         probe = re.sub(r"[\W_]", "", _fold(unit.text).lower())[:12]
         found = None
         for anchored in (True, False):
-            for i in range(cursor, min(len(keys), cursor + SOURCE_WINDOW)):
+            for i in range(cursor, min(len(keys), cursor + reach)):
                 if not keys[i]:
                     continue
                 at = spans[i].find(probe)
@@ -649,6 +651,7 @@ def _source_lines(source: str, units: list[Unit]) -> None:
         if found is not None:
             cursor = found
         unit.line = cursor + 1
+        reach = SOURCE_WINDOW + unit.text.count("\n")
 
 
 def _units(text: str, suffix: str) -> list[Unit]:

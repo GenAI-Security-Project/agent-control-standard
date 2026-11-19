@@ -2024,3 +2024,9 @@ def test_r7_an_oversize_prose_file_is_named_and_fails(tree, capsys, monkeypatch)
 def test_ledger_names_what_the_check_skips():
     text = " ".join(_section("What the tests enforce and what only a reader catches").split())
     assert "never skips a file silently" in text and "symlink" in text
+
+
+def test_r7_pointer_reaches_past_a_long_code_block(tree):
+    # The bounded search starts its window after the previous unit, so a long code block doesn't hide the next line.
+    body = "Intro.\n\n```\n" + "x = 1\n" * 300 + "```\n\nThe lab is ACS-Core conformant.\n"
+    assert [(f.kind, f.line) for f in _scan(tree, {"a.md": body})] == [("banned", 306)]
