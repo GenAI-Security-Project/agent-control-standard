@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.7.0. Owner: ACS lab maintainers.
+Version 1.8.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -298,6 +298,17 @@ MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
 LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 SNIFF_BYTES = 8192
+# A prose file larger than this is named and fails the run, rather than read whole and walked line by line.
+MAX_BYTES = 4 * 1024 * 1024
+# Byte order marks, longest first, since the UTF-32 little-endian mark begins with the UTF-16 one.
+BOMS = ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"), (b"\xef\xbb\xbf", "utf-8"),
+        (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
+# Skips that fail the run on their own: a prose file the check can't read as text. Every other skip (a symlink, which
+# is never followed, a file that isn't regular, a directory it can't list) is named, and fails only the sign gate.
+FATAL_SKIPS = frozenset({"undecodable", "too_large"})
+# Rendered Markdown units are searched for their source line this many lines ahead of the last one, so the pointer
+# stays linear on text, such as entities, whose rendered letters never appear in the source.
+SOURCE_WINDOW = 200
 RENDERER_MISSING = "markdown-it-py must be installed, or Markdown files can't be checked"
 # Printed once under any unledgered finding, so an author knows where a marker counts.
 MARKER_HINT = ("A claim marker such as <!-- claim:C-03 --> goes in the same paragraph, list item, table row or "
@@ -620,15 +631,16 @@ def _source_lines(source: str, units: list[Unit]) -> None:
     the previous unit. A line that can't be found keeps the previous unit's line. It is a pointer for the author.
     """
     keys = [re.sub(r"[\W_]", "", _fold(ln).lower()) for ln in source.splitlines()]
+    spans = [keys[i] + "".join(keys[i + 1:i + 4]) for i in range(len(keys))]
     cursor = 0
     for unit in units:
         probe = re.sub(r"[\W_]", "", _fold(unit.text).lower())[:12]
         found = None
         for anchored in (True, False):
-            for i in range(cursor, len(keys)):
+            for i in range(cursor, min(len(keys), cursor + SOURCE_WINDOW)):
                 if not keys[i]:
                     continue
-                at = (keys[i] + "".join(keys[i + 1:i + 4])).find(probe)
+                at = spans[i].find(probe)
                 if (at == 0) if anchored else (0 <= at < len(keys[i])):
                     found = i
                     break
@@ -741,7 +753,21 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
     return found
 
 
-def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Finding], int]:
+def _decode(raw: bytes) -> str | None:
+    """The text of a prose file, or None when it can't be text: NUL bytes and no byte order mark."""
+    for bom, codec in BOMS:
+        if raw.startswith(bom):
+            try:
+                return raw[len(bom):].decode(codec)
+            except UnicodeDecodeError:
+                return None
+    if b"\x00" in raw[:SNIFF_BYTES]:
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Finding], int, list[Finding]]:
+    """Findings, the count of files scanned, and every skip, each named with its reason."""
     root = Path(root)
     excluded = [_glob_regex(g) for g in ledger.exclude]
     skip = ledger_path.resolve() if ledger_path else None
@@ -749,37 +775,58 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
     triggers = _phrase_regex(ledger.triggers, whole_word=False)
     excused = {row: frozenset(_key(p) for p in phrases) for row, phrases in ledger.excuses}
     findings: list[Finding] = []
+    skips: list[Finding] = []
     scanned = 0
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def unlisted(error: OSError) -> None:
+        rel = Path(error.filename).relative_to(root).as_posix() if error.filename else "."
+        skips.append(Finding(rel, 0, "unlistable", escape_text(f"can't list the directory: {error.strerror}")))
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=unlisted):
         dirnames.sort()
+        for name in list(dirnames):
+            rel = (Path(dirpath) / name).relative_to(root).as_posix()
+            if (Path(dirpath) / name).is_symlink() and not any(rx.match(rel + "/") for rx in excluded):
+                skips.append(Finding(rel, 0, "symlink", "a directory symlink, never followed"))
         for name in sorted(filenames):
             path = Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
             if path.suffix.lower() not in SCANNED:
                 continue
+            if any(rx.match(rel) for rx in excluded):
+                continue
             try:
                 # lstat, so a symlink or a FIFO is skipped before anything opens it. Opening a FIFO blocks forever.
-                if not stat.S_ISREG(path.lstat().st_mode):
-                    continue
+                info = path.lstat()
             except OSError as e:
                 findings.append(Finding(rel, 0, "unreadable", escape_text(str(e))))
                 continue
-            if any(rx.match(rel) for rx in excluded) or (skip and path.resolve() == skip):
+            if stat.S_ISLNK(info.st_mode):
+                skips.append(Finding(rel, 0, "symlink", "a symlink, never followed"))
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                skips.append(Finding(rel, 0, "not_regular", "not a regular file"))
+                continue
+            if skip and path.resolve() == skip:
+                continue
+            if info.st_size > MAX_BYTES:
+                skips.append(Finding(rel, 0, "too_large", f"larger than {MAX_BYTES} bytes"))
                 continue
             try:
                 raw = path.read_bytes()
             except OSError as e:
                 findings.append(Finding(rel, 0, "unreadable", escape_text(str(e))))
                 continue
-            if b"\x00" in raw[:SNIFF_BYTES]:
+            text = _decode(raw)
+            if text is None:
+                skips.append(Finding(rel, 0, "undecodable", "not text: NUL bytes and no UTF byte order mark"))
                 continue
             scanned += 1
-            text = raw.decode("utf-8", errors="replace")
             suffix = path.suffix.lower()
             for unit in _units(text, suffix):
                 for kind, shown in _check(unit, suffix, ledger, banned, triggers, excused):
                     findings.append(Finding(rel, unit.line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
-    return findings, scanned
+    return findings, scanned, skips
 
 
 def scan(root: Path, ledger: Ledger, ledger_path: Path | None = None) -> list[Finding]:
@@ -788,7 +835,9 @@ def scan(root: Path, ledger: Ledger, ledger_path: Path | None = None) -> list[Fi
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read.
+    """Exit 0 clean, 1 findings, 2 the ledger or the path can't be read, a prose file can't be read as text, or the
+    check stopped on an unexpected error. Every skipped file or directory is named, and under --require-signed any
+    skip exits 2.
 
     --require-signed also fails on a sign-off row that is empty or stale, on each claim row still marked
     Unconfirmed or holding empty or placeholder evidence, on each cited evidence path the repository lacks, and on a
@@ -817,8 +866,16 @@ def main(argv: list[str] | None = None) -> int:
     if markdown_it is None:
         print(f"ERROR: {RENDERER_MISSING}", file=sys.stderr)
         return 2
-    findings, scanned = _scan(root, ledger, ledger_path)
-    if args.require_signed:
+    try:
+        return _report(root, ledger, ledger_path, args.require_signed)
+    except Exception as e:  # noqa: BLE001 - any crash must read as "can't check", never as the findings code 1.
+        print(f"ERROR: the check stopped: {type(e).__name__}: {escape_text(str(e))}", file=sys.stderr)
+        return 2
+
+
+def _report(root: Path, ledger: Ledger, ledger_path: Path, require_signed: bool) -> int:
+    findings, scanned, skips = _scan(root, ledger, ledger_path)
+    if require_signed:
         if not ledger.signed:
             why = "the ledger changed after it was signed" if ledger.stale else "the sign-off row is empty"
             findings.append(Finding(ledger_path.name, 0, "unsigned", why))
@@ -834,18 +891,21 @@ def main(argv: list[str] | None = None) -> int:
                  for row, token in ledger.skipped]
     else:
         notes = []
-    if findings:
-        for f in findings:
-            print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")
-        if any(f.kind == "unledgered" for f in findings):
-            print(MARKER_HINT)
-        for note in notes:
-            print(note)
-        return 1
-    print(f"DONE: lab text holds to the ledger ({scanned} files)")
+    for f in findings:
+        print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")
+    if any(f.kind == "unledgered" for f in findings):
+        print(MARKER_HINT)
+    stop = any(f.kind in FATAL_SKIPS for f in skips) or (require_signed and bool(skips))
+    if not findings and not stop:
+        print(f"DONE: lab text holds to the ledger ({scanned} files)")
+    for f in skips:
+        print(f"SKIPPED: {f.path} {f.kind}: {f.text}")
     for note in notes:
         print(note)
-    return 0
+    if stop:
+        print(f"ERROR: {len(skips)} skipped, so the check can't vouch for this tree", file=sys.stderr)
+        return 2
+    return 1 if findings else 0
 
 
 if __name__ == "__main__":

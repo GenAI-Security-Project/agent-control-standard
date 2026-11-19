@@ -1,6 +1,6 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.4.0. Owner: ACS lab maintainers.
+Version 1.5.0. Owner: ACS lab maintainers.
 """
 
 import concurrent.futures
@@ -382,8 +382,8 @@ def test_fence_closes_only_on_its_own_marker(tree):
 def test_file_count_counts_scanned_files_only(tree, capsys):
     root, ledger = tree
     (root / "a.md").write_text("Plain.\n", encoding="utf-8")
-    (root / "clip.mp4").write_bytes(b"x")
-    (root / "blob.txt").write_bytes(b"x\x00")
+    (root / "clip.mp4").write_bytes(b"x\x00")
+    # A prose file that isn't text fails the run since the final review (test_r1_*), so only a non-prose binary here.
     assert lab_claims.main([str(root), "--ledger", str(ledger)]) == 0
     assert "(1 files)" in capsys.readouterr().out
 
@@ -1872,8 +1872,40 @@ def test_banned_phrase_in_a_marker_comment_is_quoted(tree, name, body, phrase):
     assert all("claim:" not in f.text for f in findings), findings
 
 
+# ---------------------------------------------------------------- Final review: the check never skips silently
 
-# ---------------------------------------------------------------- Final review: evidence paths and ledger rows
+def _main(tree, *extra):
+    root, ledger = tree
+    return lab_claims.main([str(root), "--ledger", str(ledger), *extra])
+
+
+OVERCLAIM = "The lab supports Windows and is production-ready.\n"
+
+
+@pytest.mark.parametrize("encoding,bom", [("utf-8", b"\xef\xbb\xbf"), ("utf-16-le", b"\xff\xfe"),
+                                          ("utf-16-be", b"\xfe\xff"), ("utf-32-le", b"\xff\xfe\x00\x00"),
+                                          ("utf-32-be", b"\x00\x00\xfe\xff")])
+def test_r1_a_byte_order_mark_file_is_decoded_and_scanned(tree, capsys, encoding, bom):
+    root, _ = tree
+    (root / "README.md").write_bytes(bom + OVERCLAIM.encode(encoding))
+    assert _main(tree) == 1
+    out = capsys.readouterr().out
+    assert "README.md:1 banned" in out and "(0 files)" not in out
+
+
+def test_r1_an_undecodable_prose_file_is_named_and_fails(tree, capsys):
+    root, _ = tree
+    (root / "README.md").write_bytes(OVERCLAIM.encode("utf-16-le"))
+    assert _main(tree) == 2
+    out = capsys.readouterr().out
+    assert "SKIPPED: README.md" in out and "DONE" not in out
+
+
+def test_r1_a_non_prose_binary_is_still_not_scanned(tree, capsys):
+    root, _ = tree
+    (root / "clip.mp4").write_bytes(b"\x00\x01ACS-Core conformant")
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+    assert _main(tree, ) == 0
 
 
 @pytest.mark.parametrize("token,path", [
@@ -1901,6 +1933,36 @@ def test_r2_a_cited_line_in_a_real_file_passes():
     assert paths == (("C-01", "labs/finbot/cli/lab_claims.py"),)
 
 
+def test_r3_an_unlistable_directory_is_named(tree, capsys):
+    root, _ = tree
+    (root / "sub").mkdir()
+    (root / "sub" / "a.md").write_text(OVERCLAIM, encoding="utf-8")
+    (root / "sub").chmod(0)
+    try:
+        if os.access(root / "sub", os.R_OK):
+            pytest.skip("running as a user who can list any directory")
+        # Named on every run, and a failure only at the sign gate, as for any skip that isn't an unreadable prose file.
+        code = _main(tree)
+        out = capsys.readouterr().out
+        assert "SKIPPED: sub" in out and code == 0
+        assert _main(tree, "--require-signed") == 2
+    finally:
+        (root / "sub").chmod(0o755)
+
+
+def test_r3_a_symlinked_prose_file_is_named_and_fails_the_sign_gate(tree, capsys):
+    root, ledger = tree
+    outside = ledger.parent / "outside"
+    outside.mkdir()
+    (outside / "a.md").write_text(OVERCLAIM, encoding="utf-8")
+    (root / "README.md").symlink_to(outside / "a.md")
+    (root / "docs").symlink_to(outside, target_is_directory=True)
+    assert _main(tree) == 0
+    out = capsys.readouterr().out
+    assert "SKIPPED: README.md" in out and "SKIPPED: docs" in out
+    assert _main(tree, "--require-signed") == 2
+
+
 def test_r4_evidence_paths_match_case_exactly(tmp_path):
     (tmp_path / "adapters" / "gateway").mkdir(parents=True)
     (tmp_path / "adapters" / "gateway" / "README.md").write_text("x\n", encoding="utf-8")
@@ -1926,3 +1988,39 @@ def test_r5_a_row_inside_a_fenced_example_is_not_an_id(tree):
     ledger.write_text(ledger.read_text(encoding="utf-8").replace("## Claims\n", example, 1), encoding="utf-8")
     parsed = lab_claims.load_ledger(ledger)
     assert "C-99" not in parsed.ids and ("C-99", "x.py") not in parsed.evidence
+
+
+def test_r6_an_unexpected_error_exits_2(tree, capsys, monkeypatch):
+    root, _ = tree
+    (root / "a.md").write_text("Plain.\n", encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(lab_claims, "_units", boom)
+    assert _main(tree) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR:") and len(err.strip().splitlines()) == 1
+
+
+def test_r7_source_line_pointer_stays_linear(tree):
+    import time
+    root, _ = tree
+    (root / "a.md").write_text("".join(f"&#65;bc paragraph {i}.\n\n" for i in range(8000)), encoding="utf-8")
+    start = time.perf_counter()
+    lab_claims.scan(root, lab_claims.load_ledger(tree[1]))
+    # Round 11 took about 20 s on this shape, and a bounded search takes well under one.
+    assert time.perf_counter() - start < 5
+
+
+def test_r7_an_oversize_prose_file_is_named_and_fails(tree, capsys, monkeypatch):
+    root, _ = tree
+    monkeypatch.setattr(lab_claims, "MAX_BYTES", 64)
+    (root / "a.md").write_text("Plain words. " * 10, encoding="utf-8")
+    assert _main(tree) == 2
+    assert "SKIPPED: a.md" in capsys.readouterr().out
+
+
+def test_ledger_names_what_the_check_skips():
+    text = " ".join(_section("What the tests enforce and what only a reader catches").split())
+    assert "never skips a file silently" in text and "symlink" in text
