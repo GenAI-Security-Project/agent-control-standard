@@ -473,6 +473,23 @@ def test_cli_viewer_and_images_jobs_run_their_suites():
     assert any(step.get("env", {}).get("LAB_REQUIRE_DOCKER") == "1" for step in _steps(images))
 
 
+def test_viewer_job_installs_the_repositorys_pinned_bun_first():
+    # LAB-13's page test runs the page's app.js under bun and skips without a runtime, so the viewer job installs bun
+    # before its suite. Same action SHA and bun version as the reference implementation's workflow, so one bump moves
+    # every job together.
+    steps = _steps(_workflow(LABS_WORKFLOW)["jobs"]["viewer"])
+    setup = [i for i, s in enumerate(steps) if s.get("uses", "").startswith("oven-sh/setup-bun@")]
+    suite = [i for i, s in enumerate(steps) if "labs/finbot/viewer/tests" in s.get("run", "")]
+    assert len(setup) == 1 and suite and setup[0] < suite[0]
+    reference = [s for s in _steps(_workflow(WORKFLOWS / "reference-implementation.yml")["jobs"]["agt"])
+                 if s.get("uses", "").startswith("oven-sh/setup-bun@")]
+    assert reference, "reference-implementation.yml no longer installs bun"
+    step = steps[setup[0]]
+    assert step["uses"] == reference[0]["uses"]
+    assert step["with"] == {"bun-version": reference[0]["with"]["bun-version"]}
+    assert re.fullmatch(r"\d+\.\d+\.\d+", step["with"]["bun-version"])
+
+
 def test_smoke_job_runs_the_bundle_with_no_model_key():
     job = _workflow(LABS_WORKFLOW)["jobs"]["smoke"]
     runs = _runs(job)
