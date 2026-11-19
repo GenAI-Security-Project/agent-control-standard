@@ -19,19 +19,19 @@ Two parties on the wire:
 
 - **Observed Agent**: the LLM-backed system being monitored. Implements ACS endpoints (or the stdio analog) and sends hook traffic to the Guardian.
 - **Guardian Agent**: the policy enforcement point. Two internal layers:
-    - **Deterministic layer** (Cedar/Rego): always runs first.
-    - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates (`*`, `on_ask`, or pattern-based).
+    - **Deterministic layer** (e.g., OPA/Rego or Cedar): always runs first on every evaluated step.
+    - **Agent layer** (LLM, optional): invoked only when the deterministic layer's rule or chain configuration delegates (`*`, `on_ask`, a hook/tool pattern, or a rule returning `delegate_to: "agent"`).
 
-The diagram below shows the two-layer decision path: the deterministic layer evaluates every hook first and may delegate to the LLM layer, which sees only the deterministic layer's intermediate output and no policy code.
+The diagram below shows the two-layer decision path (§12.1 and §12.2). All handoff structures between the two layers are internal to the Guardian, not wire messages. A deterministic `DENY` is final and never delegated. When the deterministic layer delegates, the agent layer receives the step's request payload together with the deterministic layer's intermediate output (the candidate disposition, matched `policy_references` / `rule_id`s, and any structured annotations). The agent layer MUST NOT receive raw deterministic policy source text (e.g., `.rego` files) or compiled policy bundles in its prompt context, because untrusted hook content could extract confidential detection thresholds/patterns or craft arguments around rule syntax. The agent layer's proposed disposition still has to clear the deterministic layer's constraints (it can narrow an `ALLOW` or `ASK` to `DENY` or supply `reasoning`, but cannot override a deterministic `DENY` or produce a disposition illegal for the hook), and the Guardian's total evaluation budget (`timeout_config`) bounds both layers combined, falling back to the deterministic layer's fallback disposition (`DENY` by default) if the agent layer times out or fails.
 
 ```mermaid
 flowchart LR
     OA["Observed Agent"] -->|"hook, JSON-RPC 2.0"| DET
     subgraph Guardian["Guardian Agent"]
-        DET["Deterministic layer<br/>Cedar/Rego, evaluates first"]
+        DET["Deterministic layer<br/>OPA/Rego, Cedar, evaluates first"]
         LLM["Agent layer (LLM)<br/>invoked only if delegated"]
-        DET -.->|"intermediate output,<br/>no policy code"| LLM
-        LLM -.->|"reasoned decision"| DET
+        DET -.->|"intermediate output + request,<br/>no raw policy source or bundle"| LLM
+        LLM -.->|"proposed disposition"| DET
     end
     DET -->|"allow / deny / modify / ask / defer"| OA
 ```
@@ -395,25 +395,25 @@ ACS MUST be deployable across IDE, SaaS, on-prem on Linux/Windows/macOS/mobile/b
 
 ### 12.1 Policy engine interface
 
-Spec defines the **interface** to the deterministic-layer engine, not the engine.
+The ACS specification is policy-engine agnostic (`D-002`, `D-006`): it defines the logical interface to the deterministic-layer evaluator and the wire contract around it, not an engine-specific input document, bundle layout, or baseline policy bundle in v0.1.0. The reference implementations in this repository (`reference-implementations/agt`, `reference-implementations/agt-go`, and `adapters/`) use OPA/Rego as their reference deterministic evaluator (`D-006`), while normative engine bindings (OPA/Rego and Cedar) are v0.2 scope (§16). Custom engines plug in by respecting the interface and ACS wire conventions (modification format in §6.3, `reasoning` and `policy_references` in §6.1, and no blocking external HTTP calls inside synchronous policy evaluation).
 
-**Input:** request envelope + SessionContext + Intent + provenance. **Output:** decision envelope, plus optional `delegate_to: "agent"`.
+**Deterministic-layer input:** request envelope + SessionContext + Intent + provenance. **Output:** a decision envelope, or an internal delegation handoff to the optional agent layer.
 
-| Engine | Status |
-|---|---|
-| OPA / Rego | v0.1 starting reference |
-| Cedar | v0.2 fast-follow |
+For deployments that run the optional agent layer behind the deterministic layer, the **two-layer handoff contract** is internal to the Guardian (not a wire message) and follows four rules:
 
-Custom engines plug in by respecting the interface. ACS layers conventions on top: modification format, reasoning format, no external HTTP calls in canonical policies, bundle layout, baseline policy bundle.
+- **Trigger:** The deterministic layer runs first on every evaluated step. It invokes the agent layer only when its rule or chain configuration delegates (`*`, `on_ask`, a hook/tool pattern, or a rule returning `delegate_to: "agent"`).
+- **Payload:** The agent layer receives the deterministic layer's intermediate output (the candidate disposition, matched `policy_references` / `rule_id`s, and any structured annotations) together with the step's request payload.
+- **Precedence and veto:** A deterministic `DENY` is final and is never delegated. When the deterministic layer delegates, the agent layer's proposed disposition still has to clear the deterministic layer's constraints: the agent layer can narrow an `ALLOW` or `ASK` to `DENY` or supply `reasoning`, but cannot override a deterministic `DENY` or produce a disposition illegal for the hook (§5).
+- **Timeout:** The Guardian's total evaluation budget (`timeout_config`, §4) bounds both layers combined. If the agent layer times out or fails, the Guardian falls back to the deterministic layer's fallback disposition for that rule (`DENY` by default).
 
 ### 12.2 Agent layer
 
-Invoked by the deterministic layer's chain config. Receives the same input plus the deterministic layer's intermediate output. Returns a decision envelope.
+Invoked only when the deterministic layer delegates under the two-layer handoff contract in §12.1. Receives the step's request payload together with the deterministic layer's intermediate output, and returns a proposed disposition and `reasoning` to the deterministic layer.
 
-- Prompt MUST treat untrusted data as data, not instructions. Untrusted fields MUST be wrapped/quoted.
-- MUST NOT have access to deterministic-layer policy code.
-- Decisions MUST be logged with reasoning, model identifier, confidence (when available).
-- Timeouts follow the handshake's `timeout_config`.
+- **All inputs are data:** Every input field passed to the agent-layer prompt MUST be treated as data (wrapped or quoted in a structured data block) regardless of its `Provenance.trust` value (`trusted`, `semi_trusted`, or `untrusted`), because `trust` is a channel provenance label (§7.2) and never permission for `user_input` or `system` text to act as instructions to the Guardian's model.
+- **No access to deterministic policy code:** The agent layer MUST NOT receive raw deterministic policy source text (e.g., `.rego` files) or compiled policy bundles in its prompt context, because untrusted hook content could extract confidential detection thresholds/patterns or craft arguments around rule syntax. The intermediate output MAY pass the triggered `rule_id`, `policy_references`, and structured annotations that the delegated evaluation needs.
+- **Audit logging:** Decisions MUST be logged with `reasoning`, model identifier, and confidence (when available).
+- **Timeout budget:** Timeouts follow the handshake's `timeout_config` across both layers combined, with fallback to the deterministic layer's fallback disposition (`DENY` by default) on agent-layer timeout or failure (§12.1).
 
 OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
@@ -460,7 +460,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 | Version | Theme | Highlights |
 |---|---|---|
 | **v0.1.0** | Baseline + profiles | ACS-Core (mandatory), ACS-Trace, ACS-Inspect/Inspect-Dynamic, ACS-Provenance, ACS-Crypto, ACS-Audit profiles |
-| **v0.2.0** | Async + composition | Streaming, wrapped streaming, batching atomicity / ordering / dependency semantics, recursive ASK, quorum, multi-tenant isolation, policy-author attestation profile, Cedar binding, connection reuse, sensitivity-tier timeout model, AgBOM federation across A2A peers |
+| **v0.2.0** | Async + composition | Streaming, wrapped streaming, batching atomicity / ordering / dependency semantics, recursive ASK, quorum, multi-tenant isolation, policy-author attestation profile, normative engine bindings (OPA/Rego and Cedar), connection reuse, sensitivity-tier timeout model, AgBOM federation across A2A peers |
 | **v0.3.0+** | Reach + transport | gRPC and unix_socket transports, A2A/MCP `deny`/`modify` extensions, classical-only signature deprecation, full deployment-mode taxonomy |
 
 ## 17. Error Handling

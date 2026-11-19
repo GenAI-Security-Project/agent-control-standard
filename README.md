@@ -216,12 +216,18 @@ the tool ever runs.
 
 This verdict came from the Guardian's deterministic layer alone, an engine like
 OPA/Rego or Cedar evaluating a written policy against the request. The deterministic
-layer always runs first. A chain config MAY delegate to a second, agent layer, an LLM,
-when the deterministic layer cannot resolve the request on its own, but that LLM never
-reads the policy source. It receives only the intermediate output the deterministic
-layer chooses to hand over, and its answer still has to clear the deterministic layer on
-the way back out. Deterministic-only deployments are fully conformant. Delegation is
-optional.
+layer always runs first; a deterministic `DENY` is final and never delegated. A rule or
+chain configuration (`*`, `on_ask`, a hook/tool pattern, or `delegate_to: "agent"`) MAY
+delegate to a second, agent layer, an LLM, when the deterministic layer does not issue a
+final `DENY`, but that LLM MUST NOT receive raw deterministic policy source text (e.g.,
+`.rego` files) or compiled policy bundles in its prompt context, because untrusted hook
+content could extract confidential detection thresholds/patterns or craft arguments
+around rule syntax. Instead, the intermediate output passes the candidate disposition,
+triggered `rule_id` / `policy_references`, and structured annotations that the delegated
+evaluation needs, and the agent layer's proposed disposition still has to clear the
+deterministic layer's constraints on the way back out (falling back to `DENY` by default
+if the agent layer times out or fails within `timeout_config`). Deterministic-only
+deployments are fully conformant. Delegation is optional.
 
 ```mermaid
 flowchart LR
