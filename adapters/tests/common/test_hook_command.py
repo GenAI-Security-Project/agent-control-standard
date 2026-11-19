@@ -307,6 +307,23 @@ class WrittenCommandsAndFiles(unittest.TestCase):
                 self._wire(module, tmp, settings, f"--hook-command={_executable(tmp / script)}", *SECRET_ARGS)
                 self.assertEqual(stat.S_IMODE(settings.stat().st_mode), 0o600)
 
+    def test_two_writes_in_the_same_second_keep_both_backups(self) -> None:
+        import datetime as dt
+        from acs.integrations import _settings_file
+        fixed = dt.datetime(2026, 11, 18, 12, 0, 0)
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "settings.json"
+            target.write_text('{"step": 0}\n')
+            with mock.patch.object(_settings_file.datetime, "datetime") as mock_dt:
+                mock_dt.now.return_value = fixed
+                first = _settings_file.write_atomically(target, '{"step": 1}\n')
+                second = _settings_file.write_atomically(target, '{"step": 2}\n')
+            self.assertIsNotNone(first)
+            self.assertIsNotNone(second)
+            self.assertNotEqual(first, second)
+            self.assertEqual(first.read_text(), '{\n  "step": 0\n}\n')
+            self.assertEqual(second.read_text(), '{\n  "step": 1\n}\n')
+
 class ClaudeCodeRetiredNotificationHook(unittest.TestCase):
     def _settings_after(self, *mode: str) -> dict:
         with tempfile.TemporaryDirectory() as d, contextlib.chdir(d), mock.patch.dict(os.environ, {"HOME": d}), \

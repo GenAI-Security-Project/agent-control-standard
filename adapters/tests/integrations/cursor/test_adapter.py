@@ -86,6 +86,33 @@ class CursorAdapter(unittest.TestCase):
         self.assertEqual(payload["permission"], "deny")
         self.assertIn("destructive", payload["user_message"].lower())
 
+    def test_pre_tool_json_string_tool_input_is_parsed_and_evaluated(self) -> None:
+        rc, out, err = self._run("preToolUse", {
+            "session_id": "cur-3-str-allow", "tool_name": "Read",
+            "tool_input": json.dumps({"file_path": "/tmp/x"}),
+        }, env_overrides={"ACS_DEFAULT_DENY": "0"})
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out), {})
+        self.assertNotIn("adapter_exception", err)
+
+        rc, out, err = self._run("preToolUse", {
+            "session_id": "cur-3-str-deny", "tool_name": "Bash",
+            "tool_input": json.dumps({"command": "rm -rf /home/user"}),
+        }, env_overrides={"ACS_DEFAULT_DENY": "0"})
+        self.assertEqual(rc, 0, err)
+        payload = json.loads(out)
+        self.assertEqual(payload["permission"], "deny")
+        self.assertIn("destructive", payload["user_message"].lower())
+
+        rc, out, err = self._run("preToolUse", {
+            "session_id": "cur-3-str-raw", "tool_name": "Read",
+            "tool_input": "not-json-at-all",
+        }, env_overrides={"ACS_DEFAULT_DENY": "0"})
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(json.loads(out), {})
+        self.assertNotIn("adapter_exception", err)
+        self.assertNotIn("fail_open_bypass", err)
+
     def test_pre_tool_write_to_protected_path_denies(self) -> None:
         rc, out, _ = self._run("preToolUse", {
             "session_id": "cur-4", "tool_name": "Write",
@@ -258,6 +285,54 @@ class AnAllowLeavesTheToolGatesToCursor(unittest.TestCase):
                         self.assertEqual(out, {})
                     else:
                         self.assertEqual((out["permission"], out["user_message"]), ("deny", "ACS blocked this tool call: policy"))
+
+
+class JsonStringToolInputOnPreToolUse(unittest.TestCase):
+    """Cursor can send preToolUse tool_input as a JSON string; it is parsed rather than raising and failing open."""
+
+    def _run_pretool(self, tool_name: str, tool_input: object) -> tuple[dict, list[dict], str]:
+        from acs.examples.destructive_bash import matches_destructive_bash
+        from acs.testing.harness import ProgrammableGuardian
+
+        seen_payloads: list[dict] = []
+        with ProgrammableGuardian() as g, tempfile.TemporaryDirectory() as root:
+            def evaluate(req: dict) -> dict:
+                payload = req["params"]["payload"]
+                seen_payloads.append(payload)
+                cmd = payload.get("arguments", {}).get("command", {}).get("value", "")
+                if isinstance(cmd, str) and matches_destructive_bash(cmd):
+                    return {"decision": "deny", "reasoning": f"destructive Bash pattern in: {cmd}"}
+                return {"decision": "allow"}
+
+            g.handlers["steps/toolCallRequest"] = evaluate
+            env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
+            env.update(signing_env(), ACS_GUARDIAN_URL=g.url(), ACS_HANDSHAKE_CACHE=f"{root}/handshake",
+                       ACS_SESSION_STATE_DIR=f"{root}/state", ACS_DEFAULT_DENY="0")
+            proc = subprocess.run(
+                [sys.executable, str(ADAPTER), "preToolUse"],
+                input=json.dumps({"conversation_id": "conv-json-str", "workspace_roots": ["/tmp"],
+                                  "tool_name": tool_name, "tool_input": tool_input}),
+                capture_output=True, text=True, env=env, timeout=15,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return json.loads(proc.stdout), seen_payloads, proc.stderr
+
+    def test_json_string_tool_input_is_parsed_and_evaluated(self) -> None:
+        out, seen, err = self._run_pretool("Read", json.dumps({"file_path": "/tmp/x"}))
+        self.assertEqual(out, {})
+        self.assertEqual(seen[0]["arguments"], {"file_path": {"value": "/tmp/x"}})
+        self.assertNotIn("adapter_exception", err)
+
+        out, seen, err = self._run_pretool("Bash", json.dumps({"command": "rm -rf /home/user"}))
+        self.assertEqual(out["permission"], "deny")
+        self.assertIn("destructive", out["user_message"].lower())
+        self.assertEqual(seen[0]["arguments"], {"command": {"value": "rm -rf /home/user"}})
+
+        out, seen, err = self._run_pretool("Read", "not-json-at-all")
+        self.assertEqual(out, {})
+        self.assertEqual(seen[0]["arguments"], {"raw_params": {"value": "not-json-at-all"}})
+        self.assertNotIn("adapter_exception", err)
+        self.assertNotIn("fail_open_bypass", err)
 
 
 class TheKillSwitchAllowsExplicitly(unittest.TestCase):

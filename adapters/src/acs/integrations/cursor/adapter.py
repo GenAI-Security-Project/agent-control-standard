@@ -202,9 +202,13 @@ def _tool_use_request_id(tool_call_id: str | None) -> str | None:
 
 
 def _payload_pretool(event: dict[str, Any]) -> dict[str, Any]:
+    args = _parse_json_field(event.get("tool_input") or event.get("arguments"))
+    if not isinstance(args, dict):
+        # Unparseable params go as one opaque argument, so the Guardian still sees them.
+        args = {"raw_params": args} if args is not None else {}
     return {
         "tool": {"name": event.get("tool_name") or event.get("tool", "")},
-        "arguments": _wrap_arguments(event.get("tool_input") or event.get("arguments") or {}),
+        "arguments": _wrap_arguments(args),
     }
 
 
@@ -653,7 +657,8 @@ def translate_response(acs_response: dict[str, Any], event_name: str,
                        original_input: dict | None = None, tool_name: str = "",
                        tool_output: Any = None) -> dict[str, Any]:
     decision = normalize_decision(acs_response.get("result"))
-    original_input = original_input or {}
+    parsed_input = _parse_json_field(original_input)
+    original_input = parsed_input if isinstance(parsed_input, dict) else {}
 
     # A decision outside the five dispositions denies under either posture (issue #32).
     if not decision.known:

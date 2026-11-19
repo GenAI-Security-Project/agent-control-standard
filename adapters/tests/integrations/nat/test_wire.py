@@ -121,5 +121,21 @@ class WiredPosture(unittest.TestCase):
         self.assertIs(ACSMiddlewareConfig(guardian_url="http://127.0.0.1:8787/acs").default_deny, True)
 
 
+class MissingNatExtraRaisesImportError(unittest.TestCase):
+    def test_missing_ruamel_raises_import_error_not_system_exit(self) -> None:
+        import importlib.util
+        import sys
+        from unittest import mock
+
+        wire_path = Path(__file__).resolve().parents[3] / "src" / "acs" / "integrations" / "nat" / "wire.py"
+        spec = importlib.util.spec_from_file_location("acs._test_nat_wire_missing_extra", wire_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        with mock.patch.dict(sys.modules, {"ruamel": None, "ruamel.yaml": None, "ruamel.yaml.comments": None}):
+            with self.assertRaises(ImportError) as ctx:
+                spec.loader.exec_module(module)
+        self.assertIn("ruamel.yaml", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,24 @@ class LoadSessionState(unittest.TestCase):
                     Path(path).write_bytes(content)
                     self.assertEqual(load_session_state("session"), {})
 
+    def test_load_acquires_the_sidecar_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(_store, "_SESSION_STATE_DIR", Path(d)):
+            path = _store._session_state_path("session", workspace=None)
+            _store.save_session_state("session", {"turn_id": "t-1"})
+            locked_paths: list[Path] = []
+            real_locked = _store._locked
+
+            @ _store.contextlib.contextmanager
+            def tracking_locked(target: Path):
+                locked_paths.append(target)
+                with real_locked(target):
+                    yield
+
+            with mock.patch.object(_store, "_locked", side_effect=tracking_locked):
+                self.assertEqual(load_session_state("session"), {"turn_id": "t-1"})
+            self.assertEqual(locked_paths, [path])
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -68,6 +86,7 @@ class ConcurrentUpdates(unittest.TestCase):
         self._run("""
             for i in range(25):
                 _store.record_step("session", f"step-{worker}-{i}")
+                _store.load_session_state("session")
             if worker == 0:
                 _store.open_turn("session", "turn-0")
         """)

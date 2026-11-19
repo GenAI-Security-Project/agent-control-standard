@@ -46,7 +46,6 @@ see them.
 from __future__ import annotations
 
 import argparse
-import datetime
 import difflib
 import io
 import shutil
@@ -55,15 +54,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from acs.integrations._settings_file import _backup_path
+
 try:
     from ruamel.yaml import YAML
     from ruamel.yaml.comments import CommentedMap, CommentedSeq
-except ImportError:
-    sys.stderr.write(
-        "wire.py needs `ruamel.yaml` for comment-preserving YAML round-trip.\n"
-        "Install the NAT extra: pip install 'acs-adapters[nat]'\n"
-    )
-    sys.exit(2)
+except ImportError as exc:
+    raise ImportError(
+        "wire.py needs `ruamel.yaml` for comment-preserving YAML round-trip. "
+        "Install the NAT extra: pip install 'acs-adapters[nat]'"
+    ) from exc
 
 
 WIRE_MARKER = "acs-adapter-wired"
@@ -440,9 +440,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{yaml_path}: nothing to unwire (no `{WIRE_MARKER}` markers found).")
             return 0
         if args.write:
-            backup = yaml_path.with_suffix(
-                yaml_path.suffix + ".bak."
-                + datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
+            backup = _backup_path(yaml_path)
             shutil.copyfile(yaml_path, backup)
             yaml_path.write_text(after_text)
             print(f"unwired {len(removed)} line(s) from {yaml_path}")
@@ -470,9 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.write:
-        backup = yaml_path.with_suffix(
-            yaml_path.suffix + ".bak."
-            + datetime.datetime.now().strftime("%Y%m%dT%H%M%S"))
+        backup = _backup_path(yaml_path)
         shutil.copyfile(yaml_path, backup)
         yaml_path.write_text(after_text)
         print(f"wired {len(changes)} attachment point(s) in {yaml_path}")

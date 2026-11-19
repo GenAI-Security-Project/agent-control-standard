@@ -40,10 +40,7 @@ def _session_state_path(session_id: str, *, workspace: str | None = None) -> Pat
     return _SESSION_STATE_DIR / f"{digest}.json"
 
 
-def load_session_state(session_id: str, *, workspace: str | None = None) -> dict:
-    if not session_id:
-        return {}
-    path = _session_state_path(session_id, workspace=workspace)
+def _load_unlocked(path: Path) -> dict:
     try:
         with open(path) as f:
             state = json.load(f)
@@ -51,6 +48,27 @@ def load_session_state(session_id: str, *, workspace: str | None = None) -> dict
         # Any parse failure counts, including RecursionError from deep nesting.
         return {}
     return state if isinstance(state, dict) else {}
+
+
+def _ensure_state_dir() -> None:
+    _SESSION_STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # mkdir(exist_ok=True) does not chmod an existing dir — enforce explicitly
+    try:
+        os.chmod(_SESSION_STATE_DIR, 0o700)
+    except OSError:
+        pass
+
+
+def load_session_state(session_id: str, *, workspace: str | None = None) -> dict:
+    if not session_id:
+        return {}
+    path = _session_state_path(session_id, workspace=workspace)
+    try:
+        _ensure_state_dir()
+        with _locked(path):
+            return _load_unlocked(path)
+    except OSError:
+        return {}
 
 
 def save_session_state(session_id: str, state: dict, *, workspace: str | None = None) -> None:
@@ -75,14 +93,9 @@ def update_session_state(session_id: str, change: Callable[[dict], T], *,
         return None
     path = _session_state_path(session_id, workspace=workspace)
     try:
-        _SESSION_STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
-        # mkdir(exist_ok=True) does not chmod an existing dir — enforce explicitly
-        try:
-            os.chmod(_SESSION_STATE_DIR, 0o700)
-        except OSError:
-            pass
+        _ensure_state_dir()
         with _locked(path):
-            state = load_session_state(session_id, workspace=workspace)
+            state = _load_unlocked(path)
             result = change(state)
             _write(path, state)
             return result

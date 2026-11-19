@@ -51,6 +51,17 @@ def _redacted(text: str) -> str:
         return _redact_command(text)
 
 
+def _backup_path(target: Path) -> Path:
+    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S_%f")
+    base = f"{target.suffix}.bak.{ts}"
+    backup = target.with_suffix(base)
+    seq = 1
+    while backup.exists():
+        backup = target.with_suffix(f"{base}.{seq}")
+        seq += 1
+    return backup
+
+
 def write_atomically(path: Path, content: str) -> Path | None:
     """Replace the file atomically and return the 0600 backup, which holds no inline secret, or None; a symlink stays a symlink, and the mode stays unless an inline secret makes it 0600."""
     target = Path(os.path.realpath(path))
@@ -58,8 +69,7 @@ def write_atomically(path: Path, content: str) -> Path | None:
     mode = 0o600
     if target.exists():
         mode = stat.S_IMODE(target.stat().st_mode)
-        ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
-        backup = target.with_suffix(target.suffix + f".bak.{ts}")
+        backup = _backup_path(target)
         _write(backup, _redacted(target.read_text()), 0o600)
     if _INLINE_SECRET in content:
         mode = 0o600
