@@ -127,8 +127,7 @@
         "on_decision_failure": {
           "type": "string",
           "enum": ["proceed", "deny"],
-          "default": "proceed",
-          "description": "Posture the Observed Agent applies on a decision failure: no usable decision within the negotiated timeout, whether the Guardian is silent, the transport fails, or an error response carries no decision (Specification 6.4). 'proceed' (default) is fail-open, so a slow, erroring, or unreachable Guardian does not halt production; 'deny' is fail-closed. Every decision failure MUST be recorded as an audit event, fail-open or fail-closed (Specification 6.4). A decision that arrives within the timeout MUST be honored regardless of this posture."
+          "description": "A failure posture the Guardian requires (Specification 6.4). 'deny' makes the Observed Agent fail closed on a decision failure even when its own deployment opted into 'proceed'. 'proceed', like an absent field, leaves the Observed Agent's own posture in force, which is 'deny' unless its deployment opts into 'proceed': the Guardian can make the posture stricter, never looser. A refusal blocks the step whatever the posture, and a decision that arrives within the timeout MUST be honored."
         },
         "approver_types_supported": {
           "type": "array",
