@@ -88,7 +88,6 @@ def test_main_exit_codes(tmp_path: Path) -> None:
     assert pins.main(["--model-log", str(tmp_path / "missing.jsonl"), "--data", str(data)]) == 2
 
 
-
 EMPTY_LOGS = {
     "empty": "",
     "blank": "\n  \n",
@@ -108,6 +107,7 @@ def test_main_fails_on_a_log_that_pins_no_tools(tmp_path: Path, log: str, capsys
     assert pins.main(["--model-log", str(model_log), "--data", str(data)]) == 2
     assert "pins no tools" in capsys.readouterr().err
     assert data.read_text() == before
+
 
 # Interface pins. The policy reads these stack interfaces, so each test fails when the gateway or the Guardian
 # changes one and the pack would silently stop matching.

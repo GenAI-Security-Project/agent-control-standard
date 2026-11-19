@@ -27,11 +27,13 @@ recipients_malformed if {
 }
 
 deny_codes contains "external_recipient" if {
+	tool_call
 	tool_name == "finmail__send_email"
 	recipients_malformed
 }
 
 deny_codes contains "external_recipient" if {
+	tool_call
 	tool_name == "finmail__send_email"
 	some field in recipient_fields
 	some address in arg(field)

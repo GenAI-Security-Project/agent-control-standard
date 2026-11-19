@@ -60,3 +60,11 @@ test_malformed_recipients_deny if {
 test_null_copy_list_allowed if {
 	verdict_for({"to": ["admin@ns_user_abc.finbot"], "cc": null, "bcc": null}) == {"decision": "allow"}
 }
+
+# The deny rules read the call's recipient arguments, so they judge the call only. A result step carries the tool's
+# output, and a stray arguments object on one must not turn it into a denial of a call the pack already allowed.
+test_result_with_external_recipient_allows if {
+	inp := object.union(send({"to": ["collector@exfil.example"]}), {"method": "steps/toolCallResult"})
+	v := finbot.verdict with input as inp with data.finbot_lab.tools as tools
+	v == {"decision": "allow"}
+}
