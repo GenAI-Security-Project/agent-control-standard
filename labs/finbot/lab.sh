@@ -289,6 +289,12 @@ case $verb in
             say "NOT YET: run ./lab.sh init first. It creates the lab's secrets and keys."
             exit 1
         fi
+        if [ -z "$(env_value LAB_CLIENT_TOKEN)" ] || [ ! -f state/secrets/client.token ]; then
+            # compose defaults the variable to empty, so a hand-edited or copied .env would start FinBot with no key
+            # and every model call would get a 401. init --force writes both again and leaves openai.key alone.
+            say "NOT YET: FinBot's client token is missing from labs/finbot/.env or state/secrets/client.token. Run ./lab.sh init --force to write it again. That replaces the lab's keys and keeps your model key."
+            exit 1
+        fi
         if [ "$(env_value ACS_UPSTREAM)" = openai ] && [ ! -f state/secrets/openai.key ]; then
             say "NOT YET: the openai upstream needs your model key in labs/finbot/state/secrets/openai.key (mode 0600). Put it back, or run ./lab.sh upstream replay."
             exit 2

@@ -30,8 +30,9 @@ def bundle(tmp_path: Path) -> Path:
         (root / name).write_text("services: {}\n", encoding="utf-8")
     secrets = root / "state" / "secrets"
     secrets.mkdir(parents=True)
-    for name in ("hmac.key", "guardian.key", "admin.token", "approver.token"):
+    for name in ("hmac.key", "guardian.key", "admin.token", "approver.token", "client.token"):
         (secrets / name).write_text("x\n", encoding="utf-8")
+    (root / ".env").write_text("LAB_CLIENT_TOKEN=x\n", encoding="utf-8")
     (root / "state" / "image-source").write_text("pulled\n", encoding="utf-8")
     return root
 
@@ -361,7 +362,7 @@ def test_claims_refuses_a_path_with_a_colon(bundle, tmp_path):
 
 
 def test_up_refuses_the_openai_upstream_without_the_key(bundle):
-    (bundle / ".env").write_text("ACS_UPSTREAM=openai\n", encoding="utf-8")
+    (bundle / ".env").write_text("LAB_CLIENT_TOKEN=x\nACS_UPSTREAM=openai\n", encoding="utf-8")
     result, lines = run(bundle, "up")
     assert result.returncode == 2
     assert "NOT YET:" in result.stdout and "./lab.sh upstream replay" in result.stdout
@@ -384,3 +385,18 @@ def test_reset_keeping_the_key_keeps_the_upstream(bundle):
     result, lines = run(bundle, "reset")
     assert result.returncode == 0, result.stderr
     assert not [c for c in compose_calls(lines) if "_set" in c]
+
+
+@pytest.mark.parametrize("lose", ["env line", "empty value", "token file"])
+def test_up_refuses_without_the_client_token(bundle, lose):
+    # Without it FinBot starts with an empty key and every model call gets a 401, so up says so before starting.
+    if lose == "env line":
+        (bundle / ".env").write_text("ACS_MODE=enforce\n", encoding="utf-8")
+    elif lose == "empty value":
+        (bundle / ".env").write_text("LAB_CLIENT_TOKEN=\n", encoding="utf-8")
+    else:
+        (bundle / "state" / "secrets" / "client.token").unlink()
+    result, lines = run(bundle, "up")
+    assert result.returncode == 1
+    assert "NOT YET:" in result.stdout and "./lab.sh init --force" in result.stdout
+    assert compose_calls(lines) == []
