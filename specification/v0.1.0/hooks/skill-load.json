@@ -53,6 +53,39 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "The skill's declared capability manifest, echoed from registration so the Guardian can apply load-time policy without re-fetching the component."
+    },
+    "attestation": {
+      "type": "object",
+      "description": "Optional prior registry, publisher, or scanner attestation for the loaded skill artifact, allowing enterprise policy to evaluate registry or scanner verdicts at load time without running a scanner inside the Guardian.",
+      "properties": {
+        "publisher": {
+          "type": "string",
+          "description": "Publisher identity attested by the registry or signing authority."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Integrity digest of the artifact covered by this attestation."
+        },
+        "scanner": {
+          "type": "string",
+          "description": "Identifier of the scanner or verification service that produced the verdict."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"],
+          "description": "Scanner or registry verdict for the skill artifact."
+        },
+        "registry_uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI of the registry entry or attestation record."
+        },
+        "attested_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the attestation or scan verdict was issued."
+        }
+      }
     }
   }
 }

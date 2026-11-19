@@ -263,9 +263,9 @@ State the Guardian Agent maintains across a session. The Guardian commits the ch
 
 The chain root is established by the first ContextEntry the Guardian writes for a `session_id`, with `previous_hash: null`. This entry is normally produced by `sessionStart`; deployments that do not emit `sessionStart` MAY allow the Guardian to implicitly initialize the chain at the first content-bearing hook, but this is discouraged because it leaves no place to attach session-level identity, policy, or Intent before content enters.
 
-**SessionContext:** `session_id`, `chain_hash` (rolling SHA-256), `entries` (append-only `ContextEntry`), `provenance_summary`, `intent` (optional).
+**SessionContext:** Schema: [`session-context.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/session-context.json). Required: `session_id`, `chain_hash` (rolling lowercase-hex SHA-256), `entries` (append-only `ContextEntry` array), `provenance_summary`. Optional: `intent` (`$ref` to `hooks/session-start.json#/$defs/Intent`).
 
-The SessionContext container is intentionally not schematized in v0.1. The wire-visible commitment (`chain_hash`) and the structurally-interesting children (`ContextEntry`, `ProvenanceSummary`, `Intent`) are each defined as portable schemas with normative computation rules; the container that holds them is server-side state and remains implementation-defined. Cross-Guardian interoperability is achieved through the standardized wire artifacts, not through a standardized container format.
+`session-context.json` defines the canonical container shape for audit export, archival, and cross-Guardian state transfer while leaving `additionalProperties: true` so Guardians can attach implementation-specific runtime state alongside the standard members (`ContextEntry`, `ProvenanceSummary`, `Intent`).
 
 ### 8.1 ContextEntry
 
@@ -425,7 +425,7 @@ OPTIONAL for v0.1.0. Deterministic-only deployments are fully conformant.
 
 **Request payload.** Standard ACS envelope with `method: "system/ping"` and `payload: { "echo": "<optional string>" }`.
 
-**Response.** Standard ACS decision envelope with `decision: "allow"` and a `payload` object carrying `{ "status": "ok", "echo": "<request.echo>", "server_timestamp": "<iso-8601>" }`.
+**Response.** Standard ACS decision envelope conforming to `$defs/PingResult` in [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json) with `decision: "allow"` and a `payload` object (`$defs/PingPayload`) carrying `{ "status": "ok", "echo": "<request.echo>", "server_timestamp": "<iso-8601>" }`.
 
 **Normative rules:**
 

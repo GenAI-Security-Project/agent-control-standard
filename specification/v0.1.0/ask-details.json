@@ -31,6 +31,10 @@
     },
     "question": { "type": "string" },
     "context": { "type": "string" },
+    "lang": {
+      "type": "string",
+      "description": "Optional BCP 47 (RFC 5646) language tag for question and context text (e.g., 'en', 'fr-CA')."
+    },
     "options": {
       "type": "array",
       "items": { "type": "string" }

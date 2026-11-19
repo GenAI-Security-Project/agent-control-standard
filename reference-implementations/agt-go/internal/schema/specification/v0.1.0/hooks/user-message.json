@@ -15,10 +15,32 @@
         "properties": {
           "type": { "type": "string", "enum": ["text", "image", "audio", "file"] },
           "value": {},
+          "lang": {
+            "type": "string",
+            "description": "Optional BCP 47 (RFC 5646) language tag for this content part (e.g., 'en', 'fr-CA')."
+          },
           "provenance": {
             "$ref": "../provenance.json",
             "description": "OPTIONAL in the base schema; REQUIRED on every content item under provenance_producer: deterministic (ACS-Provenance). Validate against user-message.acs-provenance.json when the profile is claimed. See Specification section 7."
           }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ContentPart": {
+      "type": "object",
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "type": "string", "enum": ["text", "image", "audio", "file"] },
+        "value": {},
+        "lang": {
+          "type": "string",
+          "description": "Optional BCP 47 (RFC 5646) language tag for this content part (e.g., 'en', 'fr-CA')."
+        },
+        "provenance": {
+          "$ref": "../provenance.json",
+          "description": "OPTIONAL in the base schema; REQUIRED on every content item under provenance_producer: deterministic (ACS-Provenance). Validate against user-message.acs-provenance.json when the profile is claimed. See Specification section 7."
         }
       }
     }

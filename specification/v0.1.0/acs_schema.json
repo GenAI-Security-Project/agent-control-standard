@@ -12,6 +12,7 @@
     "Provenance":           { "$ref": "../v0.1.0/provenance.json" },
     "ProvenanceSummary":    { "$ref": "../v0.1.0/provenance-summary.json" },
     "ContextEntry":         { "$ref": "../v0.1.0/context-entry.json" },
+    "SessionContext":       { "$ref": "../v0.1.0/session-context.json" },
     "AskDetails":           { "$ref": "../v0.1.0/ask-details.json" },
     "DeferDetails":         { "$ref": "../v0.1.0/defer-details.json" },
     "Modifications":        { "$ref": "../v0.1.0/modifications.json" },

@@ -59,6 +59,39 @@
     "registration_provenance": {
       "$ref": "../provenance.json",
       "description": "How the skill entered the available set. origin distinguishes a framework-bundled skill ('system') from a marketplace install ('user_input') or a runtime-fetched one ('tool_output'). source_id SHOULD carry the publisher or marketplace identity. A Guardian MAY require a signed provenance and deny unsigned or untrusted-origin skills."
+    },
+    "attestation": {
+      "type": "object",
+      "description": "Optional prior registry, publisher, or scanner attestation for the skill artifact, allowing enterprise policy to evaluate pre-registration scan verdicts or registry approvals without running a scanner inside the Guardian.",
+      "properties": {
+        "publisher": {
+          "type": "string",
+          "description": "Publisher identity attested by the registry or signing authority."
+        },
+        "digest": {
+          "type": "string",
+          "description": "Integrity digest of the artifact covered by this attestation."
+        },
+        "scanner": {
+          "type": "string",
+          "description": "Identifier of the scanner or verification service that produced the verdict."
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "warn", "fail"],
+          "description": "Scanner or registry verdict for the skill artifact."
+        },
+        "registry_uri": {
+          "type": "string",
+          "format": "uri",
+          "description": "URI of the registry entry or attestation record."
+        },
+        "attested_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when the attestation or scan verdict was issued."
+        }
+      }
     }
   }
 }

@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/session-context.json",
+  "title": "ACS SessionContext",
+  "description": "Portable container schema for a Guardian Agent's per-session state (Specification 8). Standardizes session_id, chain_hash, entries, provenance_summary, and optional intent for audit export, archival, and cross-Guardian verification while leaving additionalProperties open so Guardians can attach implementation-specific runtime state.",
+  "type": "object",
+  "required": ["session_id", "chain_hash", "entries", "provenance_summary"],
+  "additionalProperties": true,
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unique identifier for the session."
+    },
+    "chain_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Rolling lowercase-hex SHA-256 head of the session's ContextEntry audit chain (Specification 8.2 and 8.6)."
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "context-entry.json"
+      },
+      "description": "Append-only sequence of ContextEntry records in the session's audit chain."
+    },
+    "provenance_summary": {
+      "type": "object",
+      "$ref": "provenance-summary.json",
+      "description": "Cumulative session-level provenance summary across entries observed in the session (Specification 8.3)."
+    },
+    "intent": {
+      "$ref": "hooks/session-start.json#/$defs/Intent",
+      "description": "Optional canonical session Intent established at sessionStart or the first agentTrigger and extended only via ASK intent_extension grants (Specification 8.4 and 9.1)."
+    }
+  }
+}

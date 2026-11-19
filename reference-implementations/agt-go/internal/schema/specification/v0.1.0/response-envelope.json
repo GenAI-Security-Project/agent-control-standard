@@ -45,6 +45,10 @@
           "type": "string",
           "description": "Human-renderable explanation of the verdict. REQUIRED on 'deny', 'modify', 'ask', and 'defer' (these decisions affect or interrupt the agent's action and the operator/end-user needs an explanation). RECOMMENDED on 'allow' when the deployment expects user-visible audit trails. This is the single explanation field — it serves both end-user display and audit/agent-internal consumption; deployments that want different text for those audiences SHOULD compose them client-side from reasoning + policy_data + reason_codes rather than expecting separate fields here."
         },
+        "lang": {
+          "type": "string",
+          "description": "Optional BCP 47 (RFC 5646) language tag for reasoning text (e.g., 'en', 'fr-CA')."
+        },
         "reason_codes": {
           "type": "array",
           "items": { "type": "string" },
@@ -84,7 +88,7 @@
         "defer_details": { "$ref": "defer-details.json" },
         "payload": {
           "type": "object",
-          "description": "Method-specific response data. Used by system/* methods (e.g., system/ping returns { status, echo, server_timestamp }) and other methods that carry structured data alongside the decision. Not used by standard Instrument hooks — those communicate via modifications, ask_details, or defer_details."
+          "description": "Method-specific response data. Used by system/* methods (e.g., system/ping returns a #/$defs/PingPayload object with { status, echo, server_timestamp }; see #/$defs/PingResult) and other methods that carry structured data alongside the decision. Not used by standard Instrument hooks — those communicate via modifications, ask_details, or defer_details."
         },
         "chain_hash": {
           "type": "string",
@@ -115,6 +119,29 @@
         { "if": { "properties": { "decision": { "const": "modify" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "modifications"] } },
         { "if": { "properties": { "decision": { "const": "ask" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "ask_details"] } },
         { "if": { "properties": { "decision": { "const": "defer" } }, "required": ["decision"] }, "then": { "required": ["reasoning", "defer_details"] } }
+      ]
+    },
+    "PingPayload": {
+      "type": "object",
+      "description": "Response payload for system/ping (Specification 13).",
+      "required": ["status", "echo", "server_timestamp"],
+      "additionalProperties": false,
+      "properties": {
+        "status": { "const": "ok" },
+        "echo": { "type": "string" },
+        "server_timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "PingResult": {
+      "description": "Narrowed AcsResult subschema for system/ping responses (Specification 13).",
+      "allOf": [
+        { "$ref": "#/$defs/AcsResult" },
+        {
+          "properties": {
+            "payload": { "$ref": "#/$defs/PingPayload" }
+          },
+          "required": ["payload"]
+        }
       ]
     },
     "JsonRpcError": {
