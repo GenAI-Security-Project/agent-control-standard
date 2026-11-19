@@ -1,6 +1,6 @@
 """Holds the FinBot lab's text to its claims ledger (issue #587, LAB-14).
 
-Version 1.8.0. Owner: ACS lab maintainers.
+Version 1.9.0. Owner: ACS lab maintainers.
 
 The ledger (CLAIMS.md) is Markdown for people with four fenced machine blocks. This module parses it and
 scans a tree. It loads by path, so the root test suite and the lab wrapper can both run it. Markdown is rendered
@@ -43,10 +43,12 @@ PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
 # A backticked token in an Evidence cell that names a file or directory in the repository: a relative path, at any
 # depth, ending in a slash or a known file suffix. A token like ACS_RESPONSE_SIGNING names no path. A token that holds
 # a slash but is neither, such as acs-lab-keys/1, is skipped, and the sign gate says so.
-EVIDENCE_TOKEN = re.compile(r"`([^`\s]+)`")
+EVIDENCE_TOKEN = re.compile(r"`([^`]+)`")
 # A line number, a line range or an anchor after a cited path points into the file, so it goes before the check.
 EVIDENCE_POINTER = re.compile(r"(?::\d+(?:-\d+)?|#[^/]*)$")
-CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-]+(?:/[A-Za-z0-9_.@+~-]+)*/?")
+# A space may sit inside a part, as in docs/my file.md, but never at either end of one.
+CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?"
+                        r"(?:/[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?)*/?")
 PATH_SUFFIXES = frozenset({".py", ".md", ".json", ".txt", ".toml", ".yml", ".yaml", ".lock", ".rego", ".sh", ".js",
                            ".html", ".css", ".go", ".mod", ".sum", ".ts", ".tsx", ".mjs", ".rs", ".ini", ".cfg",
                            ".proto", ".xml", ".csv"})
@@ -292,7 +294,20 @@ class Finding:
 # rendered one way and matched another.
 MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
 HTML_SUFFIXES = frozenset({".html", ".htm"})
+# GitHub shows these as prose too, but the check has no renderer for them, so they are read as plain text, one line
+# at a time, like a .txt file. So is a README with no suffix.
+PLAIN_SUFFIXES = frozenset({".txt", ".rst", ".adoc", ".mdx"})
 SCANNED = MARKDOWN_SUFFIXES | HTML_SUFFIXES | {".txt"}
+
+
+def _reader(path: Path) -> str | None:
+    """The suffix whose reader scans this file, or None for a file that isn't prose."""
+    suffix = path.suffix.lower()
+    if suffix in MARKDOWN_SUFFIXES | HTML_SUFFIXES:
+        return suffix
+    if suffix in PLAIN_SUFFIXES or path.name.upper() == "README":
+        return ".txt"
+    return None
 COMMENT = re.compile(r"<!--(.*?)-->", re.S)
 MARKER = re.compile(r"claim:([A-Za-z]+-\d+)")
 TAG = re.compile(r"</?[A-Za-z][^>]*>")
@@ -757,16 +772,21 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
 
 
 def _decode(raw: bytes) -> str | None:
-    """The text of a prose file, or None when it can't be text: NUL bytes and no byte order mark."""
+    """The text of a prose file, or None when it isn't UTF-8 and no byte order mark names its encoding."""
     for bom, codec in BOMS:
         if raw.startswith(bom):
             try:
                 return raw[len(bom):].decode(codec)
             except UnicodeDecodeError:
                 return None
-    if b"\x00" in raw[:SNIFF_BYTES]:
+    # Strict UTF-8 and a NUL test over the whole file (MAX_BYTES bounds it), so a Windows-1252 or UTF-16 file without
+    # a mark is named rather than read as text with holes in it.
+    if b"\x00" in raw:
         return None
-    return raw.decode("utf-8", errors="replace")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Finding], int, list[Finding]]:
@@ -789,12 +809,16 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
         dirnames.sort()
         for name in list(dirnames):
             rel = (Path(dirpath) / name).relative_to(root).as_posix()
-            if (Path(dirpath) / name).is_symlink() and not any(rx.match(rel + "/") for rx in excluded):
+            if any(rx.match(rel + "/") for rx in excluded):
+                # The ledger excludes it, so the walk never enters it, and nothing under it can fail the gate.
+                dirnames.remove(name)
+            elif (Path(dirpath) / name).is_symlink():
                 skips.append(Finding(rel, 0, "symlink", "a directory symlink, never followed"))
         for name in sorted(filenames):
             path = Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
-            if path.suffix.lower() not in SCANNED:
+            suffix = _reader(path)
+            if suffix is None:
                 continue
             if any(rx.match(rel) for rx in excluded):
                 continue
@@ -822,10 +846,9 @@ def _scan(root: Path, ledger: Ledger, ledger_path: Path | None) -> tuple[list[Fi
                 continue
             text = _decode(raw)
             if text is None:
-                skips.append(Finding(rel, 0, "undecodable", "not text: NUL bytes and no UTF byte order mark"))
+                skips.append(Finding(rel, 0, "undecodable", "not UTF-8 text, and no byte order mark names another"))
                 continue
             scanned += 1
-            suffix = path.suffix.lower()
             for unit in _units(text, suffix):
                 for kind, shown in _check(unit, suffix, ledger, banned, triggers, excused):
                     findings.append(Finding(rel, unit.line, kind, escape_text(shown.strip()[:SNIPPET_CHARS])))
@@ -853,6 +876,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="fail while the sign-off is empty or stale or any claim row is unconfirmed")
     parser.add_argument("--digest", action="store_true", help="print the digest the sign-off row records, then exit")
     args = parser.parse_args(argv)
+    try:
+        return _run(args)
+    except Exception as e:  # noqa: BLE001 - any crash must read as "can't check", never as the findings code 1.
+        print(f"ERROR: the check stopped: {type(e).__name__}: {escape_text(str(e))}", file=sys.stderr)
+        return 2
+
+
+def _run(args: argparse.Namespace) -> int:
+    """main's body after argument parsing, so a crash anywhere in it, the ledger load included, exits 2."""
     ledger_path = Path(args.ledger) if args.ledger else Path(__file__).resolve().parents[1] / "CLAIMS.md"
     try:
         if args.digest:
@@ -869,11 +901,7 @@ def main(argv: list[str] | None = None) -> int:
     if markdown_it is None:
         print(f"ERROR: {RENDERER_MISSING}", file=sys.stderr)
         return 2
-    try:
-        return _report(root, ledger, ledger_path, args.require_signed)
-    except Exception as e:  # noqa: BLE001 - any crash must read as "can't check", never as the findings code 1.
-        print(f"ERROR: the check stopped: {type(e).__name__}: {escape_text(str(e))}", file=sys.stderr)
-        return 2
+    return _report(root, ledger, ledger_path, args.require_signed)
 
 
 def _report(root: Path, ledger: Ledger, ledger_path: Path, require_signed: bool) -> int:
@@ -898,7 +926,9 @@ def _report(root: Path, ledger: Ledger, ledger_path: Path, require_signed: bool)
         print(f"NOT YET: {f.path}:{f.line} {f.kind} {f.text}")
     if any(f.kind == "unledgered" for f in findings):
         print(MARKER_HINT)
-    stop = any(f.kind in FATAL_SKIPS for f in skips) or (require_signed and bool(skips))
+    # An unlistable scan root means nothing was read, so it fails like a root that doesn't exist.
+    stop = any(f.kind in FATAL_SKIPS or (f.kind == "unlistable" and f.path == ".") for f in skips) \
+        or (require_signed and bool(skips))
     if not findings and not stop:
         print(f"DONE: lab text holds to the ledger ({scanned} files)")
     for f in skips:

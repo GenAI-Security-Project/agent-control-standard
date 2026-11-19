@@ -1,6 +1,6 @@
 """Tests for the FinBot lab claims ledger and the check that holds lab text to it (issue #587, LAB-14).
 
-Version 1.5.0. Owner: ACS lab maintainers.
+Version 1.6.0. Owner: ACS lab maintainers.
 """
 
 import concurrent.futures
@@ -209,7 +209,11 @@ def test_scan_outside_repo_skips_binaries(tree):
         "blob.txt": b"ACS-Core conformant\x00\x01",
         "latin.md": "Caf\xe9 is ACS-Core conformant\n".encode("latin-1"),
     })
-    assert [f.path for f in findings] == ["latin.md"]
+    # Round 2 of the final review: a prose file that isn't UTF-8 is named as undecodable, not read with holes.
+    assert findings == []
+    root, ledger = tree
+    skips = lab_claims._scan(root, lab_claims.load_ledger(ledger), None)[2]
+    assert sorted((f.path, f.kind) for f in skips) == [("blob.txt", "undecodable"), ("latin.md", "undecodable")]
 
 
 def test_symlink_not_followed(tree):
@@ -2030,3 +2034,85 @@ def test_r7_pointer_reaches_past_a_long_code_block(tree):
     # The bounded search starts its window after the previous unit, so a long code block doesn't hide the next line.
     body = "Intro.\n\n```\n" + "x = 1\n" * 300 + "```\n\nThe lab is ACS-Core conformant.\n"
     assert [(f.kind, f.line) for f in _scan(tree, {"a.md": body})] == [("banned", 306)]
+
+
+# ---------------------------------------------------------------- Final review, round 2
+
+def test_r8_a_windows_1252_file_is_named_and_fails(tree, capsys):
+    root, _ = tree
+    (root / "a.md").write_bytes("The lab is production–ready.\n".encode("cp1252"))
+    assert _main(tree) == 2
+    out = capsys.readouterr().out
+    assert "SKIPPED: a.md undecodable" in out and "DONE" not in out
+
+
+def test_r8_nul_bytes_after_the_first_8_kib_fail_the_run(tree, capsys):
+    root, _ = tree
+    head = ("Plain words here. " * 600).encode("utf-8")
+    assert len(head) > lab_claims.SNIFF_BYTES
+    (root / "a.md").write_bytes(head + OVERCLAIM.encode("utf-16-le"))
+    assert _main(tree) == 2
+    assert "SKIPPED: a.md undecodable" in capsys.readouterr().out
+
+
+def test_r9_a_crash_while_the_ledger_loads_exits_2(tree, capsys, monkeypatch):
+    def boom(path):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(lab_claims, "load_ledger", boom)
+    assert _main(tree) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR:") and len(err.strip().splitlines()) == 1
+
+
+def test_r10_an_unlistable_scan_root_exits_2(tree, capsys):
+    root, _ = tree
+    (root / "a.md").write_text(OVERCLAIM, encoding="utf-8")
+    root.chmod(0o311)
+    try:
+        if os.access(root, os.R_OK):
+            pytest.skip("running as a user who can list any directory")
+        assert _main(tree) == 2
+        out = capsys.readouterr().out
+        assert "SKIPPED: . unlistable" in out and "DONE" not in out
+    finally:
+        root.chmod(0o755)
+
+
+def test_r11_an_excluded_directory_is_never_entered(tree, capsys):
+    root, _ = tree
+    (root / "state" / "secrets").mkdir(parents=True)
+    (root / "state" / "secrets" / "a.md").write_text(OVERCLAIM, encoding="utf-8")
+    (root / "state" / "secrets").chmod(0)
+    try:
+        if os.access(root / "state" / "secrets", os.R_OK):
+            pytest.skip("running as a user who can list any directory")
+        assert _main(tree) == 0
+        assert "SKIPPED" not in capsys.readouterr().out
+        assert _main(tree, "--require-signed") == 1
+    finally:
+        (root / "state" / "secrets").chmod(0o755)
+
+
+@pytest.mark.parametrize("name", ["README", "guide.rst", "guide.adoc", "guide.mdx"])
+def test_r12_other_prose_names_are_scanned_as_plain_text(tree, name):
+    findings = _scan(tree, {name: OVERCLAIM})
+    assert [(f.path, f.kind) for f in findings] == [(name, "banned")]
+
+
+def test_r12_a_suffixless_file_that_is_not_a_readme_is_not_scanned(tree):
+    assert _scan(tree, {"Makefile": OVERCLAIM, "LICENSE": OVERCLAIM}) == []
+
+
+def test_r13_an_evidence_path_with_a_space_is_checked(tree, capsys):
+    paths, _ = lab_claims._evidence("| C-01 | x | `docs/my file.md` and `my notes.txt` | y |\n")
+    assert paths == (("C-01", "docs/my file.md"), ("C-01", "my notes.txt"))
+    root, _ = tree
+    ledger = _evidence_ledger(tree, "`docs/no such file.md` (gone).")
+    assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
+    assert "missing_evidence C-15 docs/no such file.md" in capsys.readouterr().out
+
+
+def test_ledger_header_says_test_directories_are_never_scanned():
+    head = " ".join(LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0].split())
+    assert "directories named `tests` or `test` are never scanned" in head.lower()
