@@ -38,8 +38,9 @@
     "timeout_seconds": { "type": "integer", "minimum": 1 },
     "timeout_disposition": {
       "type": "string",
-      "enum": ["allow", "deny"],
-      "default": "deny"
+      "enum": ["deny"],
+      "default": "deny",
+      "description": "What an ASK resolves to when timeout_seconds elapse with no approval. The only value is deny: the Observed Agent never proceeds on an ASK on its own (Specification 9)."
     },
     "intent_extension": {
       "type": "object",
