@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "acs-gateway"
+version = "0.1.0"
+description = "An OpenAI Responses API gateway that makes an unmodified client an ACS Observed Agent"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+# Exact pins: each release is at least seven days old as of 2026-11-16 (COMMON-BRIEF rule 4).
+dependencies = [
+    "acs-adapters",
+    "starlette==1.10.0",
+    "httpx==0.28.1",
+    "uvicorn==0.54.0",
+]
+
+[project.scripts]
+acs-gateway = "acs_gateway.cli:main"
+
+[dependency-groups]
+test = ["pytest==9.2.0", "import-linter==2.15"]
+
+[tool.uv]
+default-groups = ["test"]
+# Resolve only releases at least seven days old (D-027), as of 2026-11-16.
+exclude-newer = "2026-11-09T00:00:00Z"
+# Every package this lockfile shares with adapters/uv.lock resolves to the adapters' version, so the gateway runs
+# on the same acs-adapters dependency set its tests and CI exercise.
+constraint-dependencies = [
+    "anyio==4.15.1",
+    "arrow==1.4.0",
+    "attrs==26.1.0",
+    "certifi==2026.10.23",
+    "click==8.5.0",
+    "colorama==0.4.6",
+    "fqdn==1.6.0",
+    "grimp==3.18",
+    "h11==0.16.0",
+    "httpcore==1.0.9",
+    "httpx==0.28.1",
+    "idna==3.20",
+    "import-linter==2.15",
+    "iniconfig==2.3.1",
+    "isoduration==20.11.0",
+    "jsonpointer==3.6",
+    "jsonschema==4.26.0",
+    "jsonschema-specifications==2025.9.1",
+    "lark==1.3.1",
+    "markdown-it-py==4.2.0",
+    "mdurl==0.1.2",
+    "packaging==26.3",
+    "pluggy==1.7.0",
+    "pygments==2.21.0",
+    "pytest==9.2.0",
+    "python-dateutil==3.0.0",
+    "referencing==0.37.0",
+    "rfc3339-validator==0.1.4",
+    "rfc3986-validator==0.1.1",
+    "rfc3987-syntax==1.1.0",
+    "rfc8785==0.1.4",
+    "rich==14.3.4",
+    "rpds-py==2026.9.1",
+    "six==1.17.0",
+    "starlette==1.10.0",
+    "typing-extensions==4.16.0",
+    "tzdata==2026.6",
+    "uri-template==1.3.0",
+    "uvicorn==0.54.0",
+    "webcolors==25.10.0",
+]
+
+# The gateway builds on the adapters in this repository, never on a published copy.
+[tool.uv.sources]
+acs-adapters = { path = "..", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_gateway"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# starlette 1.10 prefers httpx2 for its TestClient. httpx is the approved dependency, so the notice is expected.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
+
+# The gateway is an Observed Agent, so like acs.client it imports no Guardian, example or test code. CI runs this with
+# `uv run lint-imports`.
+[tool.importlinter]
+root_packages = ["acs_gateway", "acs"]
+
+[[tool.importlinter.contracts]]
+name = "The gateway imports no Guardian, example or test code"
+type = "forbidden"
+source_modules = ["acs_gateway"]
+forbidden_modules = ["acs.guardian", "acs.examples", "acs.testing"]

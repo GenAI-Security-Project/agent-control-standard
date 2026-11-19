@@ -29,6 +29,16 @@ icacls $env:ACS_HMAC_SECRET_FILE /inheritance:r /grant:r "${env:USERNAME}:R"
 
 Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every process that starts with the opt-in set prints a warning to stderr; the refusal stays the default.
 
+## ML-DSA-65 signing: the `pqc` extra
+
+ML-DSA-65 signing and keyring verification (issue #574) live behind the `pqc` extra, which installs `cryptography` 50. Nothing installs or imports it by default, so an install without the extra signs and verifies HMAC-SHA256 exactly as before. [`docs/signing.md`](docs/signing.md) covers the API, the ML-DSA variant, and the context string.
+
+```bash
+uv sync --locked --extra pqc --group test
+```
+
+The `pqc` and `nat` extras can't be installed together, and that is a lab convention. `nvidia-nat-core` pins `cryptography` below 47, and ML-DSA-65 needs a newer release, so `pyproject.toml` declares the two extras as conflicting. Issue #543 (NeMo Relay migration) replaces the NAT dependency and would remove the conflict. Until then a NAT deployment signs with HMAC-SHA256 only. CI tests the extra in its own `tests-pqc` job.
+
 ## ACS v0.1.0 emission-conformance check
 
 **What this proves — and what it does not.** This suite proves **emission conformance**: the reference adapters, driven through their real production entry points, emit schema-valid, signed ACS v0.1.0 Core traffic and honor the decisions it tests. It is **not** a requirement-by-requirement audit of every ACS-Core MUST — `docs/spec/conformance.md` and the sections it cites contain far more normative requirements (handshake/negotiation edge cases, full decision semantics, two-sided live payload validation, hook-completeness, Wrapped MCP) than are checked here. A full ACS-Core deployment-conformance claim also spans the Guardian, the framework wiring, and production configuration — not the adapter alone. That larger program is tracked in issue #33 (requirement ledger + behavioral tests); do not read a green run here as "ACS-Core conformant."
@@ -54,7 +64,7 @@ uv run python run_conformance.py claude cursor nat
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client` and `package` checks run once for every command, regardless of the platform selection.
 
-It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only the manual Cursor GUI procedure and the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`; a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
+It prints every skip by name and reason. It fails on any failure and on any skip that isn't on the exact allowlist. The allowlist names three kinds of skip. The first is the manual Cursor GUI procedure. The second is the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`. The third is the two ML-DSA test modules. Each skips as a whole without the `pqc` extra, so both always skip in the nat environment. A dependency-gated test that skips anywhere else is a failure, never a pass. NAT is the example: with `nvidia-nat-core` installed, a skipped NAT test fails the run. `--strict` also fails on the allowlisted skips, for a fully provisioned gate.
 
 Under the hood it drives two complementary layers:
 
@@ -245,8 +255,9 @@ adapters/
 │   ├── guardian/example_guardian.py  # the example Guardian: wire handling, replay, skew and the session chain
 │   ├── examples/destructive_bash.py  # the example Guardian's toy policy
 │   └── testing/                    # CaptureGuardian and the shared test harness
-├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/
+├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/, interop/ (Go ML-DSA check)
 ├── docs/<framework>/               # README, mapping.md, example config, example payloads
+├── docs/signing.md                 # ML-DSA-65 signing, the keyring, the variant and the context
 └── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
 ```
 
