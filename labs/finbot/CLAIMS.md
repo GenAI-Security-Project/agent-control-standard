@@ -28,12 +28,13 @@ A claim marker is an HTML comment such as `<!-- claim:C-03 -->`. It goes in the 
 | C-14 | In enforce mode the lab runs default deny while `handshake.json` still defaults `on_decision_failure` to `proceed`. D-036 decided deny, and the specification change is pending (issue #32). | `specification/v0.1.0/handshake.json` (default `proceed`). `adapters/src/acs/guardian/example_guardian.py` (the ServerHello posture). | A lab run that reads the specification alone would see the opposite default. |
 | C-15 | The lab proves nothing about interoperability with any other implementation. | No second implementation runs in the lab. | None beyond the claim itself. |
 | C-16 | The lab supports macOS and Linux only. Windows is untested. | Rock, 2026-11-17. | A Windows machine may work. Nobody on the build team checked. |
+| C-17 | FinBot can't bypass the Guardian. It never talks to the Guardian, the Guardian lives on a network FinBot can't reach, and FinBot reaches the model only through the gateway, which requires this lab's client token. | Unconfirmed: the gateway's client-token gate (`ClientTokenGate` in adapters/gateway/src/acs_gateway/app.py) and the lab compose networks (LAB-15) aren't on this tree, so neither can be read here. | A blocked action is visible to the agent that tried it, as with any enforcement point. The Guardian decides only the steps the gateway sends it, the two governed hooks in C-06. |
 
 ## Not claimed
 
 | Id | The lab doesn't claim | Why |
 |---|---|---|
-| N-01 | That the agent can't tell a control exists. | It can infer one from failed actions and the neutral deny line. |
+| N-01 | That the control is hidden from the agent. | Hiding it isn't the goal. Any control that blocks an action is visible to the agent it stops, through the failed action and the neutral deny line. What the lab claims is that the agent can't bypass it (C-17). |
 | N-02 | That requests are attributable. | Requests stay on HMAC inside the trust boundary by design. |
 | N-03 | That key publication or revocation is solved. | The key document is a lab convention until issue #460. |
 | N-04 | That signing proves the record is complete, or that the gateway honored a deny. | A signature covers one decision. It doesn't cover decisions that never reached the Guardian. |
@@ -51,7 +52,7 @@ A claim marker is an HTML comment such as `<!-- claim:C-03 -->`. It goes in the 
 
 Say each of these wherever the lab is shown.
 
-- The neutral deny line is the one artifact the agent sees when a control acts. It is a fixed sentence, and the agent can infer a control from it.
+- The neutral deny line is the one artifact the agent sees when a control acts. It is a fixed sentence. Like any enforcement point, a block is visible to the agent it stops, and the agent still can't get around it.
 - Replay serves recorded branches only. Any other branch gets a fixed neutral reply.
 - A clip is the kept take after N attempts, with N stated on the clip.
 
@@ -71,6 +72,7 @@ FIPS validated
 FIPS-validated
 can't tell a control exists
 invisible to the agent
+hidden from the agent
 attributable
 revocation is solved
 proves the record is complete
@@ -95,7 +97,7 @@ runs under Windows
 Each Not claimed row names the banned phrases it excuses, as `N-NN: phrase | phrase`. Every Not claimed row needs a line here, and every phrase must be on the banned list above.
 
 ```claims-not-claimed
-N-01: can't tell a control exists | invisible to the agent
+N-01: can't tell a control exists | invisible to the agent | hidden from the agent
 N-02: attributable
 N-03: revocation is solved
 N-04: proves the record is complete | prove the record is complete

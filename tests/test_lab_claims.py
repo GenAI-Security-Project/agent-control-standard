@@ -65,7 +65,7 @@ SECTION_12_CAN_SAY = [
     "build team's machines",
 ]
 SECTION_12_CANT_SAY = [
-    "can't tell a control exists", "attributable", "revocation is solved", "record is complete",
+    "hidden from the agent", "attributable", "revocation is solved", "record is complete",
     "downgrade is fully prevented", "ACS-Core conformant", "stops a given attack", "reproduces a live model",
     "0.2.0 is released", "Agent Governance Toolkit", "ACS-Crypto", "outside the build team",
 ]
@@ -270,7 +270,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-07", "C-08", "C-11", "C-12")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-07", "C-08", "C-11", "C-12", "C-17")
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -1980,10 +1980,10 @@ def test_r4_evidence_paths_match_case_exactly(tmp_path):
 def test_r5_a_claim_row_without_a_leading_pipe_is_read(tree):
     _, ledger = tree
     text = ledger.read_text(encoding="utf-8").replace(
-        "| C-16 |", "C-17 | A claim. | Unconfirmed: nothing yet. | None. |\n| C-16 |", 1)
+        "| C-16 |", "C-18 | A claim. | Unconfirmed: nothing yet. | None. |\n| C-16 |", 1)
     ledger.write_text(text, encoding="utf-8")
     parsed = lab_claims.load_ledger(ledger)
-    assert "C-17" in parsed.ids and "C-17" in parsed.unconfirmed
+    assert "C-18" in parsed.ids and "C-18" in parsed.unconfirmed
 
 
 def test_r5_a_row_inside_a_fenced_example_is_not_an_id(tree):
@@ -2116,3 +2116,38 @@ def test_r13_an_evidence_path_with_a_space_is_checked(tree, capsys):
 def test_ledger_header_says_test_directories_are_never_scanned():
     head = " ".join(LEDGER.read_text(encoding="utf-8").split("## Claims", 1)[0].split())
     assert "directories named `tests` or `test` are never scanned" in head.lower()
+
+
+# ---------------------------------------------------------------- Ledger bypass reword
+
+
+def test_c17_claims_the_agent_cannot_bypass_the_guardian(tree):
+    _, ledger = tree
+    parsed = lab_claims.load_ledger(ledger)
+    assert "C-17" in parsed.ids and "C-17" in parsed.unconfirmed
+    rows = {r[0]: r for r in _rows(_section("Claims"))}
+    assert rows["C-17"][1].startswith("FinBot can't bypass the Guardian.")
+    assert "ClientTokenGate" in rows["C-17"][2] and "Unconfirmed:" in rows["C-17"][2]
+    assert "hooks in C-06" in rows["C-17"][3]
+
+
+def test_n01_leads_with_the_bypass_claim_not_hiding():
+    rows = {r[0]: r for r in _rows(_section("Not claimed"))}
+    assert rows["N-01"][1] == "That the control is hidden from the agent."
+    assert "can't bypass it (C-17)" in rows["N-01"][2]
+
+
+def test_hidden_from_the_agent_is_banned_and_excused_only_by_n01(tree):
+    line = "The control is hidden from the agent.{}\n"
+    assert "banned" in _kinds(_scan(tree, {"a.md": line.format("")}))
+    assert "banned" in _kinds(_scan(tree, {"b.md": line.format(" <!-- claim:N-02 -->")}))
+    assert [f for f in _scan(tree, {"c.md": line.format(" <!-- claim:N-01 -->")}) if f.path == "c.md"] == []
+    # The two earlier N-01 phrases stay excused.
+    kept = "It is invisible to the agent. <!-- claim:N-01 -->\n"
+    assert [f for f in _scan(tree, {"d.md": kept}) if f.path == "d.md"] == []
+
+
+def test_disclosure_says_a_block_is_visible_and_not_a_bypass():
+    text = _section("Disclosures")
+    assert "Like any enforcement point, a block is visible to the agent it stops" in text
+    assert "can infer a control" not in text
