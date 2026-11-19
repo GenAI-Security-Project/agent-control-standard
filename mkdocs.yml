@@ -78,6 +78,7 @@ nav:
     - Core concepts: topics/core_concepts.md
     - ACS in Action: topics/ACS_in_action_example.md
     - Decision Log: decisions/index.md
+    - Signature benchmark: topics/signature-benchmark.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md
@@ -143,7 +144,8 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         # The class is deliberately NOT `mermaid`. mkdocs-material scans for that

@@ -116,9 +116,19 @@ Error binding rests on the JSON-RPC `id` alone, on both paths, as D-029 sets. A 
 
 One ML-DSA key signs every session, and a response names no session, so keyring verification binds a response only by its JSON-RPC `id` and `result.request_id`. An attacker who sits on the path to the Guardian and is also an authenticated client of the same Guardian can copy a victim's ids into its own request. It can then relay the Guardian's signed answer to the victim, and that answer verifies.
 
-HMAC prevents this, because each session's key is derived from its `session_id`, so an answer signed for one session fails in another. A single ML-DSA key gives no such separation. Closing the gap needs the signed response to carry the session, or a hash of the request it answers. Specification section 10 says a response carries no `session_id`, so that is a wire change for the specification, not a library fix.
+HMAC prevents this, because each session's key is derived from its `session_id`, so an answer signed for one session fails in another. A single ML-DSA key gives no such separation. Closing the gap needs the signed response to carry the session, or a hash of the request it answers. Specification section 10 says a response carries no `session_id`, so that is a wire change for the specification, not a library fix. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) is the closest tracking issue.
 
-Until then, the connection to the Guardian must use TLS, which keeps an attacker off the path.
+The limit holds without the lab convention below and is closed with it. Without the convention, the connection to the Guardian must use TLS, which keeps an attacker off the path.
+
+#### Lab convention: the request hash
+
+In ML-DSA response mode (issue #576), every response the example Guardian signs carries `x_acs_lab_request_sha256`: the lowercase hex SHA-256 of the request's section 10 signed input, the JCS bytes of the request envelope without its `signature`. A result carries it in `result`, and an error carries it in `error.data`, the ServerHello and the session refusal included. It sits inside the signed bytes, so it can't be changed without breaking the signature.
+
+That one value binds the response to the request's session, `request_id`, timestamp and content. A relayed answer names the attacker's request, not the victim's, so it fails.
+
+`acs.core.verify_with_keyring(..., require_request_digest=True)` requires the field and compares it with `acs.core.request_sha256(request)`. `acs.client` always passes it when `response_keys` is set, on the step exchange and the handshake. A missing or different hash leaves the response unverified, so the step blocks as `signature_invalid`. The default is False, so a caller of `verify_with_keyring` that doesn't ask still has the limit above. The HMAC path never reads the field.
+
+The field is a lab convention, not part of the specification.
 
 ### The handshake
 
@@ -133,6 +143,24 @@ Binding by id is a known limit. It ties a ServerHello to one ClientHello, not to
 `acs.client.verify_signature(response, keyring=keyring, expected_key_id="lab-guardian-1", request=request)` verifies a response by keyring, and core enforces the key pin and the request binding. Without `keyring`, `verify_signature` applies the HMAC rules exactly as before.
 
 The ML-DSA and keyring names (`Keyring`, `VerificationKey`, `ML_DSA_65`, `WIRE_ALGORITHMS`, and the signing names) stay out of `acs.core.__all__`, so `from acs.core import *` never loads `cryptography`. They resolve on access when the extra is installed. Without it, access raises AttributeError naming the `pqc` extra, so `hasattr(acs.core, "Keyring")` is False.
+
+## Verifying a Guardian's decisions
+
+The example Guardian can sign every response with its own ML-DSA-65 key (issue #576), as `docs/guardian/README.md` describes under "Decision signing". `acs.client` verifies those responses with the Guardian's key document alone. The response key comes from the key document by key_id (issue #308, RFC 8725 section 3.1). The envelope's algorithm never selects it, and D-026 applies per key_id: an exact match, no fallback.
+
+`acs.client.response_keys_from_env(os.environ)` reads `ACS_RESPONSE_ALGORITHMS`, `ACS_GUARDIAN_KEYS`, and the optional pin `ACS_GUARDIAN_KEY_ID`. Unset, blank, or `HMAC-SHA256` returns None, which is today's HMAC path, and needs no extra. `ML-DSA-65` loads the key document. Any other value is a ValueError, a list of two included, because accepting HMAC beside ML-DSA-65 would let anyone holding the shared secret forge a decision. It takes exactly one value until issue #316 settles verifier rules. `Config.from_env` never reads these settings, so the Claude Code, Cursor, and NAT adapters are unchanged.
+
+`acs.client.load_response_keys(path, key_id=None)` and `acs.client.parse_key_document(document, key_id=..., now=...)` return a `ResponseKeys` that holds a keyring with exactly one key. Every entry in the document is checked: the format `acs-lab-keys/1`, the algorithm `ML-DSA-65`, canonical base64 of a 1,952 byte public key, a `fingerprint` that matches that key, and RFC 3339 UTC times. A key is live when `not_before <= now < not_after` and no entry in `revoked` names it at or before now. With a pin, the pinned key must be live. Without one, the document must hold exactly one live key, so two live keys are refused, never resolved by order. An optional `ACS_GUARDIAN_KEY_FINGERPRINT` (the `fingerprint` argument) must then equal the chosen key's fingerprint exactly, so a document someone rewrote can't swap the key. The file goes through `acs.client.read_trusted_file`, the one reader for secret and trusted files, with the `not_writable_by_others` rule and a 1 MiB cap. Without a fingerprint pin, the document and its directory must also be owned by the running user or root, as a secret is, so a document someone else placed is refused. With the pin, no owner is checked, because the pin already ties the document to the operator. `adapters/README.md` lists what that reader checks. Any problem raises `KeyDocumentError`.
+
+`ResponseKeys` keeps the chosen key's `not_before`, `not_after`, and `revoked_at`, and `is_live(now)` answers for any moment. Every verification checks it again, so a key that expires, or reaches its `revoked_at`, while the process runs stops verifying then, and each answer blocks as `signature_invalid`. A revocation published after startup takes effect when the document is loaded again. The format is a lab convention until issue #460 settles key publication.
+
+`round_trip`, `exchange`, and `open_session` take two optional arguments. `response_keys` verifies every answer under the pinned key, as the answer to the request it answers (D-029), with the request hash above. A failure keeps its existing cause, `response_signature_invalid`, `error_signature_invalid`, or `server_hello_signature_invalid`, so it blocks the step as `signature_invalid` whatever the posture (D-025, D-040). An unsigned -32004 still reads as `key_id_rejected`. With keys, the ClientHello offers `x_acs_lab_response_algorithms`, and a verified ServerHello that doesn't select the same algorithm refuses the session as `response_algorithm_not_negotiated`. A verified handshake refusal keeps its `error.data.reason`. A stored session decision is reused under either mode, and its first step then fails closed if the Guardian signs in the other mode.
+
+`on_wire(direction, envelope)` receives a copy of the signed request before it is sent ("req") and of every decoded answer before it is classified ("resp"), so a transcript holds refusals, errors, and tampered answers as they arrived. No "resp" call means no answer arrived, and the outcome's cause says why. A callback that raises refuses the step as `on_wire_failed`, an observed-agent error, and on "req" nothing is sent. A callback failure during the handshake refuses that attempt only and is never stored, so the next hook retries. With a callback set, a request over the body cap is refused before "req" fires, because it is never sent.
+
+A stored session decision is reused with no call, since nothing crosses the wire. A transcript of a session whose decision was stored by an earlier hook therefore has no ClientHello or ServerHello. The gateway follow-up that wires `on_wire` should record that the session was resumed, or open each session in the process that writes its transcript.
+
+To check a whole session afterwards, chain included, from the gateway's transcript and the key document alone, see [acs-verify](acs-verify.md) (issue #584).
 
 ## Lab conventions
 

@@ -40,7 +40,7 @@ Installing the package puts `acs-cursor-hook`, `acs-cursor-wire` and `acs-exampl
 Both the adapter and the Guardian read this file. Mode 0600 is enforced by the adapter — anything looser and it refuses to start.
 
 ```bash
-mkdir -p ~/.acs
+mkdir -p -m 700 ~/.acs
 openssl rand -hex 32 > ~/.acs/hmac.key
 chmod 600 ~/.acs/hmac.key
 ```
@@ -354,7 +354,7 @@ These hooks are emitted only when Cursor's `hooks.json` wires them to the adapte
 | Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `acs-cursor-wire --write`. |
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
 | Every tool call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and a step with no usable decision is denied unless the hook sets `ACS_DEFAULT_DENY=0`. Check the Guardian process is running. |
-| Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
+| Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. The file's directory must also be readable by the adapter, not only traversable: a 0711 directory fails with `its directory ... cannot be opened` (`SecretFileUnreadableError`). Fix: `chmod a+r` on that directory. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time. |
 | Guardian returns `-32600 Invalid Request` for `metadata.session_id` | Session ID wasn't coerced to a UUID. Cursor sends conversation_ids that aren't UUIDs; the adapter coerces them via uuid5. If you see this error, file a bug — the coercion is unconditional in `_session_id`. |

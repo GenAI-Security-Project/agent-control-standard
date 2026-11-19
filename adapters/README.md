@@ -29,6 +29,20 @@ icacls $env:ACS_HMAC_SECRET_FILE /inheritance:r /grant:r "${env:USERNAME}:R"
 
 Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every process that starts with the opt-in set prints a warning to stderr; the refusal stays the default.
 
+## Secret and trusted files
+
+`acs.client.read_trusted_file` is the one reader for every secret or trusted file: `ACS_HMAC_SECRET_FILE`, the example Guardian's ML-DSA-65 seed (`ACS_GUARDIAN_SIGNING_KEY_FILE`), and its key document (`ACS_GUARDIAN_KEYS`). It opens the file's directory once and the file inside it, without following a symlink and without blocking on a FIFO, and checks those descriptors, never the path a second time.
+
+- It must be a regular file.
+- For a secret, the file and its directory must be owned by the user the process runs as, or by root. The key document follows the same owner rule unless `ACS_GUARDIAN_KEY_FINGERPRINT` pins its key. With the pin set, a client running as another user, as in a container that reads the Guardian's document, may read a document it doesn't own, since the pin already catches a swapped key. Without either, the client refuses to start and names both fixes.
+- Its directory must not be world-writable, unless the directory is sticky, as `/tmp` is. A group-writable directory is fine, since `mkdir` under the common umask 002 gives 0775. Directories above it aren't checked.
+- A secret must be owner-only (0600 or 0400). A key document may be readable by anyone, but no group or other may write it.
+- The HMAC secret is read up to 64 KiB, the seed up to 65 bytes, and the key document up to 1 MiB. A larger file is refused as unreadable, and for the HMAC secret that is audited like a file that can't be opened.
+
+What changed in this round: a group-writable directory, such as the 0775 that `mkdir` gives under umask 002, now passes. The reader opens the directory once and takes every directory check from that open directory, so a path through a symlink and `..` is checked where the kernel resolves it. For a secret, a directory another user owns is now refused. Move such a secret into a directory you own, for example one made with `mkdir -p -m 700 ~/.acs`.
+
+Windows has no owner, group, or other bits, so only the symlink and regular-file checks run there, and a secret also needs the opt-in below.
+
 ## ML-DSA-65 signing: the `pqc` extra
 
 ML-DSA-65 signing and keyring verification (issue #574) live behind the `pqc` extra, which installs `cryptography` 50. Nothing installs or imports it by default, so an install without the extra signs and verifies HMAC-SHA256 exactly as before. [`docs/signing.md`](docs/signing.md) covers the API, the ML-DSA variant, and the context string.

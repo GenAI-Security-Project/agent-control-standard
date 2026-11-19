@@ -21,12 +21,21 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from acs.guardian._chain import PING_METHOD, chains_method
 from acs.guardian._limits import depth_exceeds
 from acs.guardian._logging import log_value
 from acs.guardian._policy_backend import POLICY_BACKEND_ENV, policy_backend_name
+from acs.guardian._response_signing import (
+    ML_DSA_65,
+    RESPONSE_SIGNING_ENV,
+    response_signing_name,
+    response_signing_problem,
+)
+from acs.client import _key_document
 from acs.client import load_key_id, load_signing_material, sign_envelope, verify_signature
 from acs.client._exchange import _MAX_SAFE_INTEGER
 from acs.examples.destructive_bash import DESTRUCTIVE_SCAN_MAX_LEN, matches_destructive_bash
@@ -35,10 +44,13 @@ from acs.core import (
     ACS_VERSION,
     DEFAULT_SKEW_WINDOW_MS,
     MAX_REQUEST_BODY_BYTES,
+    REQUEST_DIGEST_FIELD,
+    NoSignedInput,
     derive_session_key,
     iso8601_now,
     jcs_canonicalize,
     parse_iso8601,
+    request_sha256,
 )
 
 import datetime
@@ -133,6 +145,100 @@ OPA_CONFIG: Any = None
 # Read once, at import, and never again: a later change to the environment can't switch a running Guardian's
 # policy backend on or off. main() loads the settings for this name into OPA_CONFIG, or refuses to start.
 POLICY_BACKEND_NAME = policy_backend_name()
+
+
+# Lab convention (issue #576, key publication until issue #460): ACS_RESPONSE_SIGNING=ML-DSA-65 signs every
+# response with the Guardian's decision key. Read once, at import, like the policy backend name. main() loads the
+# key into DECISION_SIGNER, and acs.guardian.decision_keys, with cryptography, is imported only on that path.
+RESPONSE_SIGNING_NAME = response_signing_name()
+DECISION_SIGNER: Any = None
+# The refusal reason for a ClientHello that offers no algorithm this Guardian signs responses with. A lab
+# convention until issue #316 settles verifier rules. The error table has no closer code than -32000.
+UNSUPPORTED_SIGNATURE_ALGORITHM = "unsupported_signature_algorithm"
+
+
+class SigningUnavailable(RuntimeError):
+    """ML-DSA-65 is on but the decision key can't sign now. handle_request answers the -32603 floor for it."""
+
+
+# The default for "the caller passed no request". None can't mean that, since a body of JSON null parses to None
+# and must get the unsigned -32600 like any other body that isn't an object (final review I1).
+NO_REQUEST: Any = object()
+
+
+class RefusalLatch:
+    """Counts refusals and says whether this one starts an episode, so a dead key logs one line, not one per request.
+
+    A successful signature ends the episode, so the next time the key dies the log says so again (review round 4 CR9).
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._open = False
+        self.count = 0
+
+    def record(self) -> bool:
+        with self._lock:
+            self.count += 1
+            starts, self._open = not self._open, True
+            return starts
+
+    def reset(self) -> None:
+        # A plain bool read first, so a live key's every signature takes no lock.
+        if self._open:
+            with self._lock:
+                self._open = False
+
+
+# Unauthenticated requests reach signing too, so a log line per refusal would let anyone flood the log (CR3-5).
+DEAD_KEY_REFUSALS = RefusalLatch()
+
+
+def _sign_response(envelope: dict, session_id: str, request: Any = NO_REQUEST) -> dict:
+    """Sign a response in place: with the decision key when ML-DSA-65 is on, else HMAC under the session key.
+
+    One ML-DSA key signs every session and section 10 gives a response no session_id, so an answer that matched only
+    by ids could be relayed from one session to another. Each ML-DSA-signed answer therefore carries the hash of the
+    request's signed input, in result or in error.data, inside the signed bytes. A lab convention, and issue #13 is
+    the closest tracking issue. The caller passes the request it answers. Without one, ML-DSA signing raises
+    SigningUnavailable, so the floor answers instead of an answer without the hash (review CR4).
+    """
+    if RESPONSE_SIGNING_NAME == ML_DSA_65:
+        if request is NO_REQUEST:
+            raise SigningUnavailable("an ML-DSA-65 answer needs the request it answers")
+        try:
+            digest = request_sha256(request)
+        except (NoSignedInput, *CANONICALIZATION_ERRORS):
+            # The request has no signed input (a body or params that aren't an object, or nothing JCS can encode), so
+            # no client signed it and no hash can name it. An error to it goes unsigned, as the README lists for a
+            # request with no readable session, and as HMAC mode answers it (review CR3-1, final review I1). This runs
+            # before the key checks, so the answer never depends on the key's state. A decision never reaches here,
+            # since only a signed request gets one. Any other exception is a bug and propagates to the floor (CR4).
+            if "error" in envelope:
+                return envelope
+            raise SigningUnavailable("a decision for a request with no signed input") from None
+        if DECISION_SIGNER is None:
+            # Named at import but never loaded, as when a caller serves handle_request without main(). Falling back
+            # to HMAC would hand clients a signature their key document can't verify, so the floor answers.
+            raise SigningUnavailable("ACS_RESPONSE_SIGNING=ML-DSA-65 but no decision key was loaded")
+        if not DECISION_SIGNER.keys.is_live(_key_document.utcnow()):
+            # Past not_after, before not_before, or revoked since startup (review R-I1). A signature no client
+            # accepts would read as tampering, so the floor answers and the log says why, once.
+            if DEAD_KEY_REFUSALS.record():
+                sys.stderr.write(f"[guardian] decision key {DECISION_SIGNER.keys.key_id} is not live "
+                                 "(outside its validity window or revoked). Refusing to sign every response "
+                                 "until the key is live again\n")
+                sys.stderr.flush()
+            raise SigningUnavailable("the decision key is not live")
+        if "result" in envelope:
+            envelope["result"] = {**envelope["result"], REQUEST_DIGEST_FIELD: digest}
+        else:
+            envelope["error"]["data"] = {**(envelope["error"].get("data") or {}), REQUEST_DIGEST_FIELD: digest}
+        from acs.core import sign_with_signing_key
+        signed = sign_with_signing_key(envelope, DECISION_SIGNER.signing_key)
+        DEAD_KEY_REFUSALS.reset()
+        return signed
+    return sign_envelope(envelope, session_id=session_id)
 
 
 def _policy_backend_named() -> bool:
@@ -350,12 +456,14 @@ def append_to_chain(session_id: str, method: str, request_id: str,
 
 
 class GuardianError(Exception):
-    def __init__(self, code: int, message: str, *, signed: bool = True) -> None:
+    def __init__(self, code: int, message: str, *, signed: bool = True, data: dict | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         # §10: the error for a key_id no configured secret matches is unsigned.
         self.signed = signed
+        # JSON-RPC error.data, sent only when set, so every error without it is unchanged.
+        self.data = data
 
 
 def check_replay(session_id: str, request_id: str) -> None:
@@ -445,6 +553,18 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
     transport = next((t for t in ("http", "https") if t in offered), None)
     if transport is None:
         raise GuardianError(-32602, f"Invalid params: no offered transport this Guardian serves in {offered}")
+    if RESPONSE_SIGNING_NAME == ML_DSA_65:
+        # A client that can only verify HMAC would accept a forgery from anyone holding the shared secret, so the
+        # session is refused (lab convention, issue #316). With the mode off the field is ignored, as handshake.json
+        # says for unknown fields.
+        algorithms = client_hello.get("x_acs_lab_response_algorithms")
+        if not isinstance(algorithms, list) or ML_DSA_65 not in algorithms:
+            shown = algorithms if isinstance(algorithms, str) else json.dumps(algorithms, default=repr)
+            sys.stderr.write(f"[guardian] handshake refused: {UNSUPPORTED_SIGNATURE_ALGORITHM} "
+                             f"offered={log_value(shown, 60)}\n")
+            sys.stderr.flush()
+            raise GuardianError(-32000, f"SESSION_REFUSED: {UNSUPPORTED_SIGNATURE_ALGORITHM}",
+                                data={"reason": UNSUPPORTED_SIGNATURE_ALGORITHM})
     server_hello = {
         "negotiated_version": ACS_VERSION,
         "methods_evaluated": client_hello.get("methods_implemented") or [],
@@ -456,6 +576,9 @@ def evaluate_handshake(params: dict, request_id: str) -> dict:
         "policy_requires_provenance": False,
         "profiles_accepted": [p for p in client_hello.get("profiles_supported") or [] if p == "acs-core"],
     }
+    if RESPONSE_SIGNING_NAME == ML_DSA_65:
+        # signature_algorithms_supported still governs requests, which stay on HMAC (lab convention, issue #316).
+        server_hello["x_acs_lab_response_algorithm"] = ML_DSA_65
     # handle_request wraps and signs this direct ServerHello as result.
     return server_hello
 
@@ -663,12 +786,18 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             "reason_codes": ["unknown_method"]}
 
 
-def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True) -> dict:
-    """A JSON-RPC error, signed whenever the session key is derivable, since Baseline integrity covers errors."""
+def _error_envelope(request_id, session_id: str, code: int, message: str, *, signed: bool = True,
+                    data: dict | None = None, request: Any = NO_REQUEST) -> dict:
+    """A JSON-RPC error, signed whenever the session key is derivable, since Baseline integrity covers errors.
+
+    The decision key needs no session, so with ML-DSA-65 on every error is signed except an unsigned one by name.
+    """
     envelope = {"jsonrpc": "2.0", "id": request_id,
                 "error": {"code": code, "message": message}}
-    if signed and session_id:
-        sign_envelope(envelope, session_id=session_id)
+    if data is not None:
+        envelope["error"]["data"] = data
+    if signed and (session_id or RESPONSE_SIGNING_NAME == ML_DSA_65):
+        _sign_response(envelope, session_id, request)
     return envelope
 
 
@@ -770,9 +899,10 @@ def _handle(request: Any, read: RequestRead) -> tuple[int, dict]:
     """
     try:
         return 200, _answer(request, read)
-    except CANONICALIZATION_ERRORS as e:
-        # Signing itself failed, as for a session_id JCS can't encode. A direct caller gets the same unsigned floor
-        # envelope do_POST sends, so handle_request never raises for one, and it is logged the same way.
+    except (*CANONICALIZATION_ERRORS, SigningUnavailable) as e:
+        # Signing itself failed, as for a session_id JCS can't encode, or a decision key that can't sign now. A direct
+        # caller gets the same unsigned floor envelope do_POST sends, so handle_request never raises for one, and it
+        # is logged the same way.
         _log_internal_error(e)
         return 500, internal_error_envelope(read.id)
 
@@ -804,17 +934,40 @@ def _answer(request: dict, read: RequestRead) -> dict:
     if _foreign_key_id(request):
         return _error_envelope(read.id, "", -32004, "SIGNATURE_INVALID: unknown key_id", signed=False)
     if read.problem:
-        return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}")
+        return _error_envelope(read.id, read.session_id, -32600, f"Invalid Request: {read.problem}", request=request)
     if depth_exceeds(request, MAX_REQUEST_DEPTH):
         return _error_envelope(read.id, read.session_id, -32600,
-                               f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels")
+                               f"Invalid Request: the envelope nests deeper than {MAX_REQUEST_DEPTH} levels",
+                               request=request)
     try:
         return _handle_request(request, read)
     except CANONICALIZATION_ERRORS as e:
         # Last resort, after the depth bound. If even this error can't be signed, _handle returns the -32603 floor.
         cause = " (it exceeds the recursion limit)" if isinstance(e, RecursionError) else ""
         return _error_envelope(read.id, read.session_id, -32600,
-                               f"Invalid Request: the envelope could not be canonicalized{cause}")
+                               f"Invalid Request: the envelope could not be canonicalized{cause}", request=request)
+
+
+def _answer_unchained(request: dict, read: RequestRead) -> dict:
+    """system/ping and handshake/hello, the two methods the Guardian answers without a chain entry."""
+    method, request_id, params = read.method, read.id, read.params
+    session_id, acs_request_id = read.session_id, read.request_id
+
+    # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
+    if method == PING_METHOD:
+        result = evaluate_ping(params, acs_request_id)
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+    # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
+    try:
+        check_signature(request, session_id)
+        result = evaluate_handshake(params, acs_request_id)
+    except GuardianError as e:
+        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, data=e.data,
+                               request=request)
+    envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
+    _sign_response(envelope, session_id, request)
+    return envelope
 
 
 def _handle_request(request: dict, read: RequestRead) -> dict:
@@ -822,34 +975,20 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
     session_id, acs_request_id = read.session_id, read.request_id
     timestamp = params.get("timestamp", "")
 
-    # system/ping is the only unsigned method (§13), so liveness probes survive a key outage.
-    if method == "system/ping":
-        result = evaluate_ping(params, acs_request_id)
-        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        return envelope
+    # Ping and the handshake are answered without a chain entry. acs-verify reads the same predicate (issue #584).
+    if not chains_method(method):
+        return _answer_unchained(request, read)
 
-
-    # Validated before policy; ping and handshake have their own payload shapes.
-    if (_SPEC_VALIDATION_AVAILABLE
-            and method not in ("system/ping", "handshake/hello")):
+    # Validated before policy. Ping and handshake, which have their own payload shapes, never reach this.
+    if _SPEC_VALIDATION_AVAILABLE:
         errors = list(_REQUEST_ENVELOPE_VALIDATOR.iter_errors(request))
         if errors:
             paths = "; ".join(
                 f"{'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
                 for e in errors[:5]
             )
-            return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}")
-
-    if method == "handshake/hello":
-        # The handshake is signed too (§10): the session key is known before negotiation, and the chain roots at sessionStart.
-        try:
-            check_signature(request, session_id)
-            result = evaluate_handshake(params, acs_request_id)
-        except GuardianError as e:
-            return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
-        envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
-        sign_envelope(envelope, session_id=session_id)
-        return envelope
+            return _error_envelope(request_id, session_id, -32600, f"Invalid Request: envelope failed schema: {paths}",
+                                   request=request)
 
     try:
         check_signature(request, session_id)
@@ -857,7 +996,7 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
         check_replay(session_id, acs_request_id)
         check_nonce(session_id, params.get("nonce", ""))
     except GuardianError as e:
-        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed)
+        return _error_envelope(request_id, session_id, e.code, e.message, signed=e.signed, request=request)
 
     payload_canonical = jcs_canonicalize(params).decode("utf-8")
     chain_hash = append_to_chain(session_id, method, acs_request_id, payload_canonical, timestamp)
@@ -865,9 +1004,9 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
     try:
         result = evaluate_step(method, params, acs_request_id, chain_hash)
     except GuardianError as e:
-        return _error_envelope(request_id, session_id, e.code, e.message)
+        return _error_envelope(request_id, session_id, e.code, e.message, request=request)
 
-    return _signed_step_response(request_id, session_id, result)
+    return _signed_step_response(request_id, session_id, result, request=request)
 
 
 # Fixed ASCII. The fallback holds only this, constants, and the request_id and chain_hash the Guardian already
@@ -875,13 +1014,13 @@ def _handle_request(request: dict, read: RequestRead) -> dict:
 UNSIGNABLE_REASONING = "The Guardian could not sign its decision for this step, so the step is denied."
 
 
-def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dict:
+def _signed_step_response(request_id: Any, session_id: str, result: dict, request: Any = NO_REQUEST) -> dict:
     """Sign a step's decision. One JCS can't canonicalize (a lone surrogate, an integer beyond 2^53, a non-finite
     float, or nesting past the recursion limit) is answered with a signed deny instead of a dropped connection,
     which a proceed posture would run."""
     envelope = {"jsonrpc": "2.0", "id": request_id, "result": result}
     try:
-        sign_envelope(envelope, session_id=session_id)
+        _sign_response(envelope, session_id, request)
         return envelope
     except CANONICALIZATION_ERRORS:
         # Only a canonicalization failure is relabeled, recursion depth included. Any other error is a bug and
@@ -890,7 +1029,7 @@ def _signed_step_response(request_id: Any, session_id: str, result: dict) -> dic
         envelope = {"jsonrpc": "2.0", "id": request_id,
                     "result": {**fallback, "decision": "deny", "reasoning": UNSIGNABLE_REASONING,
                                "reason_codes": ["response_not_signable"]}}
-        sign_envelope(envelope, session_id=session_id)
+        _sign_response(envelope, session_id, request)
         return envelope
 
 
@@ -978,6 +1117,27 @@ class GuardianHandler(http.server.BaseHTTPRequestHandler):
             sys.stderr.flush()
         self._respond(status, response)
 
+    def do_GET(self) -> None:  # noqa: N802
+        """GET /keys serves the key document when ML-DSA-65 response signing is on (lab convention, issue #460).
+
+        With the mode off, GET answers 501 on every path, as BaseHTTPRequestHandler does with no do_GET. The body is
+        the document as loaded at startup, so a file changed later never reaches a client the running key can't serve.
+        """
+        if DECISION_SIGNER is None:
+            self.send_error(501, f"Unsupported method ({self.command!r})")
+            return
+        if urllib.parse.urlsplit(self.path).path != "/keys":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = json.dumps(DECISION_SIGNER.keys.document).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def _read_body(self, length: int) -> bytes:
         """Read the body within one deadline for the whole read, so a client dripping one byte per interval
         can't hold this thread past BODY_READ_SECONDS. A short body ends at EOF and fails to parse later."""
@@ -1047,6 +1207,30 @@ def main() -> int:
             return 1
         OPA_CONFIG = opa_backend.load_config()
 
+    global DECISION_SIGNER
+    if response_signing_name() != RESPONSE_SIGNING_NAME:
+        # Read once, at import, like the policy backend name, so a later value would be silently ignored.
+        sys.stderr.write(f"[guardian] REFUSING TO START: {RESPONSE_SIGNING_ENV} changed after import "
+                         f"(was {RESPONSE_SIGNING_NAME!r}, now {response_signing_name()!r}). Restart the process "
+                         "with the setting you want.\n")
+        return 1
+    signing_problem = response_signing_problem(RESPONSE_SIGNING_NAME)
+    if signing_problem:
+        sys.stderr.write(f"[guardian] REFUSING TO START: {signing_problem}\n")
+        return 1
+    if RESPONSE_SIGNING_NAME == ML_DSA_65:
+        try:
+            import acs.core
+            if not acs.core.ml_dsa_available():
+                raise RuntimeError("this OpenSSL backend has no ML-DSA-65")
+            from acs.guardian.decision_keys import load_decision_signer
+            DECISION_SIGNER = load_decision_signer(os.environ)
+        except Exception as e:  # noqa: BLE001
+            # A missing pqc extra, an OpenSSL without ML-DSA, or a key its document doesn't vouch for. Each would
+            # leave a Guardian that can't sign, so it never starts.
+            sys.stderr.write(f"[guardian] REFUSING TO START: {RESPONSE_SIGNING_ENV}={ML_DSA_65}: {e}\n")
+            return 1
+
     class ReusableServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         allow_reuse_address = True
         daemon_threads = True
@@ -1062,6 +1246,10 @@ def main() -> int:
             opa_url = opa_backend.redact_url(OPA_CONFIG.url)
             sys.stderr.write(f"[guardian] tool calls and tool results go to OPA at {opa_url} "
                              "(lab convention, issue #531)\n")
+        if DECISION_SIGNER is not None:
+            # The fingerprint an operator compares with the key document out of band.
+            sys.stderr.write(f"[guardian] decision signing {ML_DSA_65} key_id={DECISION_SIGNER.keys.key_id} "
+                             f"fingerprint={DECISION_SIGNER.fingerprint} (lab convention, issue #460)\n")
         sys.stderr.flush()
         try:
             httpd.serve_forever()

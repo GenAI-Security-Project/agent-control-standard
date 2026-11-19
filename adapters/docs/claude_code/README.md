@@ -40,7 +40,7 @@ Installing the package puts `acs-claude-code-hook`, `acs-claude-code-wire` and `
 Both the adapter and the Guardian read this file. Mode 0600 is enforced by the adapter — anything looser and it refuses to start.
 
 ```bash
-mkdir -p ~/.acs
+mkdir -p -m 700 ~/.acs
 openssl rand -hex 32 > ~/.acs/hmac.key
 chmod 600 ~/.acs/hmac.key
 ```
@@ -310,7 +310,7 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 |---|---|
 | Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your settings.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
 | Every hook gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and a step with no usable decision is denied unless the hook sets `ACS_DEFAULT_DENY=0`. Check the Guardian process is running. |
-| Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
+| Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. The file's directory must also be readable by the adapter, not only traversable: a 0711 directory fails with `its directory ... cannot be opened` (`SecretFileUnreadableError`). Fix: `chmod a+r` on that directory. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time (`sudo sntp -sS time.apple.com` on macOS). |
 | Guardian returns `-32600 Invalid Request` for `metadata.session_id` | Session ID isn't a UUID. Real Claude Code always sends UUIDs; if you're hand-crafting envelopes for testing, fix the fixture. |
