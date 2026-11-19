@@ -44,7 +44,7 @@
     },
     "intent": {
       "type": "object",
-      "description": "Optional natural-language framing of why the tool is being called",
+      "description": "Optional natural-language framing of why this single tool invocation is being called ({description, goal}). Records the agent's self-reported rationale for one tool call; distinct from session Intent (sessionStart, agentTrigger, subagentStart) and never trusted as session authorization.",
       "properties": {
         "description": { "type": "string" },
         "goal": { "type": "string" }

@@ -130,7 +130,7 @@ The same wire format supports four published agent-security architectures and th
 
 ### IBAC â€” Intent-based authorization
 
-User's committed Intent: `["summarize Project X"]`. The agent attempts `email.send` to a recipient outside that capability list. IBAC denies because the action is not in `Intent.parsed`. The user can extend `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) if deployment policy permits.
+User's committed `Intent.raw` goal string: `"Summarize Q3 board deck and email highlights to team@acme.com"`, from which the parser derives `Intent.parsed` `{tool, operation, resource}` entries. The agent attempts `email.send` to `manager@example.com`, a recipient outside that derived capability list. IBAC denies because the action is not in `Intent.parsed`. The user can extend `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) if deployment policy permits.
 
 ```json
 {
@@ -142,9 +142,13 @@ User's committed Intent: `["summarize Project X"]`. The agent attempts `email.se
   ],
   "policy_data": {
     "ibac": {
-      "requested_capability": { "tool": "email.send", "resource": "manager@example.com" },
-      "intent_parsed": ["summarize.read"],
-      "closest_match_in_intent": null
+      "intent_raw": "Summarize Q3 board deck and email highlights to team@acme.com",
+      "requested_capability": { "tool": "email.send", "operation": "send", "resource": "manager@example.com" },
+      "intent_parsed": [
+        { "tool": "docs.read", "operation": "summarize", "resource": "q3-board-deck" },
+        { "tool": "email.send", "operation": "send", "resource": "team@acme.com" }
+      ],
+      "closest_match_in_intent": { "tool": "email.send", "operation": "send", "resource": "team@acme.com" }
     }
   },
   "cited_provenance_ids": ["p1"]
@@ -238,7 +242,10 @@ In multi-paradigm deployments a single decision MAY cite all firing paradigms â€
     { "policy_id": "acme-fides", "policy_version": "v1", "rule_id": "p-t-blocks-untrusted-derivation" }
   ],
   "policy_data": {
-    "ibac": { "requested_capability": { "tool": "email.send" }, "intent_parsed": ["summarize.read"] },
+    "ibac": {
+      "requested_capability": { "tool": "email.send", "operation": "send", "resource": "manager@example.com" },
+      "intent_parsed": [{ "tool": "docs.read", "operation": "summarize", "resource": "q3-board-deck" }]
+    },
     "fides": { "p_t_passed": false, "violating_argument_path": ["body"] }
   },
   "cited_provenance_ids": ["p1", "p2", "p3"]
