@@ -1481,7 +1481,8 @@ class ClientTokenGate:
 
     A request passes only with `Authorization: Bearer <token>`, compared in constant time. Anything else gets the
     Responses API's own 401 before the gateway reads the body, so a refused call reaches no upstream, never has the
-    model key swapped in, and leaves no model input line. The refusal is audited without the header's value.
+    model key swapped in, and leaves no model input line. The refusal is audited without the header's value. Only
+    lifespan passes untouched. A websocket is refused, token or not, and any other scope type gets nothing.
     """
 
     def __init__(self, app: Any, token: str) -> None:
@@ -1489,8 +1490,15 @@ class ClientTokenGate:
         self.expected = f"Bearer {token}".encode("utf-8")
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
+        if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # Fail closed on every other scope (final review m-4). No route serves a websocket today, so refusing here
+            # keeps one added later from going ungated. Closing before accept makes the server answer 403.
+            if scope["type"] == "websocket":
+                _audit("client_unauthorized", cause="websocket", path=scope.get("path"))
+                await send({"type": "websocket.close", "code": 1008})
             return
         given = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
         # One header, exactly the expected bytes. compare_digest runs in time that doesn't depend on where they differ.

@@ -133,3 +133,46 @@ def test_a_bad_token_file_stops_startup(monkeypatch, capsys, tmp_path, text, mod
                          ACS_GATEWAY_CLIENT_TOKEN_FILE=str(secret(tmp_path, "client.token", text, mode)))
     assert code == 2
     assert why in err and text not in err
+
+
+def drive_gate(scope: dict) -> tuple[list, list]:
+    """Runs ClientTokenGate on a raw ASGI scope. Returns the scopes the inner app saw and the messages sent back."""
+    import asyncio
+
+    from acs_gateway.app import ClientTokenGate
+
+    reached: list = []
+    sent: list = []
+
+    async def inner(scope, receive, send):
+        reached.append(scope["type"])
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(ClientTokenGate(inner, TOKEN)(scope, receive, send))
+    return reached, sent
+
+
+@pytest.mark.parametrize("headers", [[], [(b"authorization", f"Bearer {TOKEN}".encode())]])
+def test_the_gate_refuses_a_websocket_even_with_the_token(audit, headers):
+    # The router has no websocket route today. The gate refuses the scope itself, so one added later is never ungated.
+    reached, sent = drive_gate({"type": "websocket", "path": "/v1/responses", "headers": headers})
+    assert reached == []
+    assert [m["type"] for m in sent] == ["websocket.close"]
+    [event] = [e for e in audit() if e["acs_audit_event"] == "client_unauthorized"]
+    assert event["cause"] == "websocket"
+    assert TOKEN not in json.dumps(audit())
+
+
+def test_the_gate_refuses_an_unknown_scope_type():
+    reached, sent = drive_gate({"type": "webtransport", "path": "/", "headers": []})
+    assert reached == [] and sent == []
+
+
+def test_the_gate_passes_lifespan_through():
+    reached, _ = drive_gate({"type": "lifespan"})
+    assert reached == ["lifespan"]
