@@ -126,10 +126,11 @@ def test_capture_off_contradicting_capture_mode_is_refused(tmp_path):
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "gateway.lab"])
 def test_a_key_file_refuses_a_model_port_off_loopback(tmp_path, host):
-    """Security scan F1 and F2: the model port takes no client credential, so with a key file anyone who reaches it
-    spends the operator's key. The key file is allowed only on a loopback listener."""
-    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST"):
+    """Security scan F1 and F2: off loopback, more than this host's processes can reach the model port, so the key file
+    needs the operator's explicit opt-in. The message says the client token still gates who spends the key."""
+    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST") as raised:
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host)
+    assert "every client holding the client token that can reach the model port" in str(raised.value)
 
 
 @pytest.mark.parametrize("host", ["", "127.0.0.1", "127.0.0.2", "::1", "localhost"])
@@ -169,6 +170,6 @@ def test_a_shared_key_says_so_once_at_startup(tmp_path, capfd):
                           ACS_UPSTREAM_KEY_SHARED="1", **TOKEN_ENV))
     err = capfd.readouterr().err
     assert err.count("\n") == 1
-    assert "every client that can reach the model port" in err and KEY not in err
+    assert "every client holding the client token that can reach the model port" in err and KEY not in err
     UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, **TOKEN_ENV))
     assert capfd.readouterr().err == ""

@@ -187,8 +187,8 @@ class GatewayConfig:
             # binds every address on a container network that only the lab's containers and the host itself can reach,
             # and says so with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
             raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got "
-                             f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client that can reach "
-                             "the model port may spend the key")
+                             f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client holding the "
+                             "client token that can reach the model port may spend the key")
         client_token = env.get("ACS_GATEWAY_CLIENT_TOKEN_FILE", "").strip()
         if key_file is not None and not client_token:
             # With a key file, whoever reaches the model port spends the operator's key: on a Linux host that is any
