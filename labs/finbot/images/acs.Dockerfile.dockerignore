@@ -16,3 +16,6 @@
 **/node_modules
 site
 _site
+# Tests ship with the bundle, never in the image.
+labs/finbot/cli/tests
+labs/finbot/viewer/tests

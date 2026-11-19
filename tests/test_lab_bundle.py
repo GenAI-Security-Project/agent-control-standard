@@ -608,3 +608,41 @@ def test_redis_keeps_only_the_capabilities_its_user_drop_needs():
     assert redis["cap_drop"] == ["ALL"]
     assert sorted(redis.get("cap_add", [])) == ["SETGID", "SETUID"]
     assert redis["security_opt"] == ["no-new-privileges:true"]
+
+
+DOCKERFILE = BUNDLE / "images" / "acs.Dockerfile"
+# The bundle paths the image runs from. policy/, replay/ and state/ reach the containers by bind mount, never the image.
+IMAGE_SOURCES = {"labs/finbot/cli", "labs/finbot/vie[w]er", "labs/finbot/images/entrypoint.sh",
+                 "labs/finbot/images/claims-requirements.txt"}
+
+
+def _stages() -> list[str]:
+    return re.split(r"(?m)^FROM ", DOCKERFILE.read_text(encoding="utf-8"))[1:]
+
+
+def test_image_copies_only_the_bundle_paths_it_runs():
+    # A whole-bundle COPY puts state/ and every key into a layer whenever the builder skips the dockerignore.
+    sources = set()
+    for line in DOCKERFILE.read_text(encoding="utf-8").splitlines():
+        words = line.split()
+        if words[:1] == ["COPY"] and not any(w.startswith("--from") for w in words):
+            sources.update(w for w in words[1:-1] if w.startswith("labs/"))
+    assert sources == IMAGE_SOURCES
+
+
+def test_build_stage_fails_on_state_or_a_key_and_nothing_scrubs():
+    build, final = _stages()
+    assert "/opt/lab" in build.split("COPY labs/finbot/cli", 1)[1]
+    # A continued RUN: every line that ends in a backslash, then the last line.
+    check = re.search(r"RUN (?:[^\n]*\\\n)*[^\n]*", build.split("COPY labs/finbot/vie[w]er", 1)[1])
+    assert check, "no RUN after the lab COPY in the build stage"
+    for needle in ("/opt/lab/state", "*.key", "exit 1"):
+        assert needle in check.group(0), needle
+    assert "COPY --from=build /opt/lab /opt/lab" in final
+    assert "rm -rf" not in DOCKERFILE.read_text(encoding="utf-8")
+
+
+def test_dockerignore_keeps_tests_out_of_the_copied_paths():
+    rules = _rules(BUNDLE / "images" / "acs.Dockerfile.dockerignore")
+    for pattern in ("labs/finbot/cli/tests", "labs/finbot/viewer/tests"):
+        assert pattern in rules, pattern

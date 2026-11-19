@@ -39,6 +39,17 @@ COPY labs/finbot/images/claims-requirements.txt /src/claims-requirements.txt
 RUN uv pip install --python /opt/acs/adapters/.venv/bin/python --require-hashes --no-deps --only-binary :all: \
         -r /src/claims-requirements.txt
 
+# The lab's own files: only the paths the image runs from, never the whole bundle, so no builder can put state/, .env
+# or a key into a layer even when it ignores the dockerignore. policy/, replay/ and state/ reach the containers by
+# bind mount. The viewer's glob matches nothing until LAB-13's viewer is in the tree, and BuildKit allows that.
+COPY labs/finbot/cli /opt/lab/cli
+COPY labs/finbot/vie[w]er /opt/lab/viewer
+COPY docs/topics/signature-benchmark.md /opt/lab/docs/signature-benchmark.md
+# The guard for the paths above: the build fails, instead of deleting anything, when a secret came along.
+RUN if [ -e /opt/lab/state ] || [ -n "$(find /opt/lab \( -name '*.key' -o -name '*.token' -o -name '.env' \) -print)" ]; then \
+        echo "a lab secret or state/ reached /opt/lab" >&2; exit 1; \
+    fi
+
 FROM python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
 
 LABEL org.opencontainers.image.title="acs-lab-runtime" \
@@ -47,17 +58,14 @@ LABEL org.opencontainers.image.title="acs-lab-runtime" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 COPY --from=build /opt/acs /opt/acs
-# The lab's own files. The dockerignore beside this file keeps state/, .env, keys and tokens out.
-COPY labs/finbot /opt/lab
-COPY docs/topics/signature-benchmark.md /opt/lab/docs/signature-benchmark.md
+COPY --from=build /opt/lab /opt/lab
 COPY labs/finbot/images/entrypoint.sh /usr/local/bin/lab-entrypoint
 
 # A CRLF entrypoint fails here, at build time, rather than at the first container start.
 RUN if grep -q "$(printf '\r')" /usr/local/bin/lab-entrypoint; then \
         echo "lab-entrypoint has CRLF line endings" >&2; exit 1; \
     fi \
- && chmod 0755 /usr/local/bin/lab-entrypoint \
- && rm -rf /opt/lab/state /opt/lab/images/tests /opt/lab/cli/tests
+ && chmod 0755 /usr/local/bin/lab-entrypoint
 
 ENV PATH="/opt/acs/adapters/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
