@@ -177,6 +177,10 @@ describe("acs-hook — the negotiated posture, end to end", () => {
     const out = await runShim(payload("rm -rf /"), env);
     const hook = expectQuietDecision(out);
     expect(hook.permissionDecision).toBe("allow");
+    // The reason says the Guardian is unreachable and steps go through
+    // unchecked. It must not reach the model as additional context, where an
+    // injected agent could read it and time its next calls (PR #475 review).
+    expect(hook.additionalContext).toBeUndefined();
     // Byte-for-byte what the v3 runbook of the standalone repository
     // (github.com/afogel/ACS_reference_implementation, docs/demos/v3-runbook.md) captures
     // for this step. The

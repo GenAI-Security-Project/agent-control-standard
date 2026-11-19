@@ -147,11 +147,10 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
   it("renders an allow that carries reasoning with that reasoning attached", async () => {
     // The shape an observe-only upstream signal produces: an ACS allow with a
     // synthesized explanation and non-empty policy_references. The
-    // explanation travels to the host; the references do not, and the
-    // explanation is the only thing distinguishing this from a plain allow
-    // in the transcript a human reads. The case that actually pays for this
-    // is a fail-open proceed, whose reason is written by applyFailurePosture
-    // and needs somewhere to go.
+    // explanation travels to the host; the references do not. Claude Code
+    // writes an allow's permissionDecisionReason only to its debug log, and
+    // the request gate puts no allow reasoning in additionalContext: a
+    // fail-open proceed's reasoning says the Guardian is unreachable.
     expect(
       await renderedBy(
         {
@@ -179,6 +178,7 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
         permissionDecisionReason: "blocked by policy",
+        additionalContext: "blocked by policy",
       },
     });
   });
@@ -237,6 +237,7 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
         permissionDecisionReason: "waiting on an out-of-band approval",
+        additionalContext: "waiting on an out-of-band approval",
       },
     });
   });
@@ -262,6 +263,7 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
         permissionDecisionReason: "redaction_applied",
+        additionalContext: "redaction_applied",
         updatedInput: { command: "echo [REDACTED]" },
       },
     });
