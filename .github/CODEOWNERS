@@ -13,7 +13,7 @@
 # here, because an entry without write access does nothing.
 
 # Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
 
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -38,8 +38,8 @@
 /GOVERNANCE.md  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /project.owasp.yaml @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @artmaro @Lrd0036 @e2hln @almogbhl
+/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @artmaro @Lrd0036 @e2hln @almogbhl
 /tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @almogbhl
 /overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
