@@ -306,6 +306,10 @@ def main(argv: list[str] | None = None) -> int:
     except PaintLogRefused as e:
         sys.stderr.write(f"acs-viewer: {e}. Unset it, or name a regular file the viewer can append to\n")
         return 2
+    if paint:
+        # The viewer holds one descriptor from start, so a deleted or replaced file takes later paints with it.
+        sys.stderr.write("acs-viewer: the paint log is open by descriptor. If you delete or replace it, later paints "
+                         "are lost, so restart the viewer after touching it\n")
     sys.stdout.write(f"ACS_VIEWER_LISTENING port={httpd.server_address[1]}\n")
     sys.stdout.flush()
     serve(httpd)

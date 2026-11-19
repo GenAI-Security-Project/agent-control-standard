@@ -368,6 +368,26 @@ def test_main_refuses_to_start_with_a_bad_paint_log(tmp_path, monkeypatch, capsy
     assert "ACS_VIEWER_PAINT_LOG" in capsys.readouterr().err
 
 
+def test_main_notes_the_paint_log_restart_rule_on_stderr(tmp_path, monkeypatch, capsys, logs, static_dir):
+    monkeypatch.setenv("ACS_TRANSCRIPT_DIR", str(logs.transcript_dir))
+    monkeypatch.setenv("ACS_VIEWER_PAINT_LOG", str(tmp_path / "paint.log"))
+    monkeypatch.setattr(viewer_server, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(viewer_server, "serve", lambda httpd: httpd.server_close())
+    assert viewer_server.main(["--port", "0"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err.count("restart the viewer") == 1 and captured.err.count("\n") == 1
+    assert captured.out.count("\n") == 1
+
+
+def test_main_prints_no_paint_note_when_the_paint_log_is_unset(monkeypatch, capsys, logs, static_dir):
+    monkeypatch.setenv("ACS_TRANSCRIPT_DIR", str(logs.transcript_dir))
+    monkeypatch.delenv("ACS_VIEWER_PAINT_LOG", raising=False)
+    monkeypatch.setattr(viewer_server, "STATIC_DIR", static_dir)
+    monkeypatch.setattr(viewer_server, "serve", lambda httpd: httpd.server_close())
+    assert viewer_server.main(["--port", "0"]) == 0
+    assert "restart the viewer" not in capsys.readouterr().err
+
+
 def test_a_paint_never_takes_the_model_lock(start, tmp_path):
     # Hold the lock every poll needs. A paint still lands at once, since it writes under a lock of its own.
     log = tmp_path / "paint.jsonl"
