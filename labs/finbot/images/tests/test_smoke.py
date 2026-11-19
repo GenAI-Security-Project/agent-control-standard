@@ -29,6 +29,9 @@ FAKE_DOCKER = """#!/bin/sh
 printf '%s' "$*" | tr '\\n' ' ' >> "$FAKE_DOCKER_LOG"
 printf '\\n' >> "$FAKE_DOCKER_LOG"
 case "$*" in
+    *"exec -T redis wget"*)
+        printf '%s\n' "${FAKE_NO_TOKEN_REPLY:-}"
+        exit 1 ;;
     *OPENAI_BASE_URL*)
         printf '%s' "${FAKE_MODEL_REPLY:-}"
         exit "${FAKE_MODEL_RC:-0}" ;;
@@ -61,12 +64,13 @@ def bundle(tmp_path: Path) -> Path:
     return root
 
 
-def run_smoke(bundle: Path, reachable: str = "acs-gateway", reply: str = "",
-              reply_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str]]:
+def run_smoke(bundle: Path, reachable: str = "acs-gateway", reply: str = "", reply_rc: int = 0,
+              no_token_reply: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
     log = bundle.parent / "docker.log"
     log.write_text("", encoding="utf-8")
     env = {**os.environ, "PATH": f"{bundle.parent / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(log),
-           "FAKE_REACHABLE": reachable, "FAKE_MODEL_REPLY": reply, "FAKE_MODEL_RC": str(reply_rc)}
+           "FAKE_REACHABLE": reachable, "FAKE_MODEL_REPLY": reply, "FAKE_MODEL_RC": str(reply_rc),
+           "FAKE_NO_TOKEN_REPLY": no_token_reply}
     result = subprocess.run(["sh", str(bundle / "images" / "smoke.sh")], env=env, capture_output=True, text=True,
                             timeout=60)
     return result, log.read_text(encoding="utf-8").splitlines()
@@ -229,3 +233,22 @@ def test_stale_model_input_and_transcript_fail_the_smoke(bundle):
     result, _ = run_smoke(bundle, reply=MISS_ANSWER)
     assert _line(result, "model input log").startswith("NOT YET:")
     assert _line(result, "transcript").startswith("NOT YET:")
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review R8: the model port refuses a caller without the per-lab client token
+# ---------------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize(("answer", "verdict"), [
+    ("wget: server returned error: HTTP/1.1 401 Unauthorized", "DONE:"),
+    ("wget: server returned error: HTTP/1.1 500 Internal Server Error", "NOT YET:"),
+    ("wget: can't connect to remote host: Connection refused", "NOT YET:"),
+    ("", "NOT YET:"),
+])
+def test_a_call_from_another_container_without_the_token_must_get_401(bundle, answer, verdict):
+    result, calls = run_smoke(bundle, reply=MISS_ANSWER, no_token_reply=answer)
+    probe = [c for c in calls if "exec -T redis wget" in c]
+    assert len(probe) == 1 and "http://acs-gateway:8080/v1/responses" in probe[0], calls
+    assert "authorization" not in probe[0].lower()
+    assert _line(result, "without the client token").startswith(verdict)

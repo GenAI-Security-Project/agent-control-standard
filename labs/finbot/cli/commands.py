@@ -50,7 +50,10 @@ SETTINGS: dict[str, dict[str, dict[str, str | None]]] = {
 }
 DEFAULTS = {"ACS_LAB_MODE": "enforce", "ACS_UPSTREAM": "replay", "ACS_RESPONSE_SIGNING": "ML-DSA-65",
             "ACS_RESPONSE_ALGORITHMS": "ML-DSA-65"}
-SECRET_FILES = ("hmac.key", "guardian.key", "admin.token", "approver.token")
+SECRET_FILES = ("hmac.key", "guardian.key", "admin.token", "approver.token", "client.token")
+# FinBot's bearer for the gateway's model port (final review R8). init writes it to state/secrets for the gateway and
+# to .env, where compose passes it to FinBot as OPENAI_API_KEY.
+CLIENT_TOKEN = "LAB_CLIENT_TOKEN"
 # The attendee's own model key, pasted in by hand for `lab upstream openai`. lab init can't make it again, so lab reset
 # keeps it unless told otherwise.
 MODEL_KEY = "openai.key"
@@ -90,7 +93,8 @@ def update_env(changes: dict[str, str | None], *, only_missing: bool = False) ->
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".env.")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("".join(f"{line}\n" for line in kept))
-    os.chmod(tmp, 0o644)
+    # Owner-only, since .env holds FinBot's client token. compose and the lab CLI read it as the attendee.
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
 
 
@@ -106,7 +110,8 @@ def _write_secret(path: Path, text: str) -> None:
 
 
 def cmd_init(args: list[str]) -> int:
-    """Creates state/, the HMAC secret, the admin and approver tokens, the Guardian key and key document, and .env."""
+    """Creates state/, the HMAC secret, the admin, approver and client tokens, the Guardian key and key document,
+    and .env."""
     force = "--force" in args
     unknown = [a for a in args if a != "--force"]
     if unknown:
@@ -133,6 +138,8 @@ def cmd_init(args: list[str]) -> int:
     _write_secret(secrets_dir / "hmac.key", secrets.token_hex(32) + "\n")
     _write_secret(secrets_dir / "admin.token", secrets.token_hex(32) + "\n")
     _write_secret(secrets_dir / "approver.token", secrets.token_hex(32) + "\n")
+    client_token = secrets.token_hex(32)
+    _write_secret(secrets_dir / "client.token", client_token + "\n")
 
     # The generator refuses an existing directory, so it writes into a fresh one beside the secrets, on the same
     # filesystem, and each file moves into place with a rename.
@@ -154,6 +161,8 @@ def cmd_init(args: list[str]) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
 
     update_env(dict(DEFAULTS), only_missing=True)
+    # Always replaced: reset keeps .env, and a token left from the last lab would no longer match the gateway's.
+    update_env({CLIENT_TOKEN: client_token})
     report.done(f"lab initialized. Guardian decision key {GUARDIAN_KEY_ID}, fingerprint {fingerprint}")
     report.info("Compare that fingerprint with what acs-verify --expect-fingerprint is given. Next: ./lab.sh up")
     return report.EXIT_PASS

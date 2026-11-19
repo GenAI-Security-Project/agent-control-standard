@@ -58,7 +58,8 @@ PORTS = {"finbot": ("LAB_PORT_FINBOT", 8000), "acs-gateway": ("LAB_PORT_APPROVER
 # network. The lab may differ from it in exactly the four A.3 settings.
 FINBOT_OWN_ENV = {"REDIS_URL": "redis://redis:6379", "DATABASE_URL": "${DATABASE_URL:-sqlite://data/finbot.db}",
                   "POSTGRES_HOST": "postgres"}
-FINBOT_LAB_SETTINGS = {"OPENAI_BASE_URL": "http://acs-gateway:8080/v1", "OPENAI_API_KEY": "lab-dummy",
+# OPENAI_API_KEY is the per-lab client token the gateway's model port requires (final review R8), from .env.
+FINBOT_LAB_SETTINGS = {"OPENAI_BASE_URL": "http://acs-gateway:8080/v1", "OPENAI_API_KEY": "${LAB_CLIENT_TOKEN:-}",
                        "LLM_TIMEOUT": "360", "WEB_CONCURRENCY": "1"}
 ACS_SERVICES = ("acs-gateway", "acs-guardian", "acs-viewer", "lab")
 
@@ -205,7 +206,7 @@ def test_admin_port_binds_only_the_fixed_acs_net_address():
 
 def test_secrets_only_where_a2_says():
     # The lab CLI holds the whole bundle mount, which it needs to write state/, so it gets no compose secret.
-    expected = {"acs-gateway": {"acs-hmac", "acs-admin-token", "acs-approver-token"},
+    expected = {"acs-gateway": {"acs-hmac", "acs-admin-token", "acs-approver-token", "acs-client-token"},
                 "acs-guardian": {"acs-hmac", "acs-guardian-key"}}
     for name, service in _services().items():
         assert set(service.get("secrets", [])) == expected.get(name, set()), name
@@ -216,7 +217,8 @@ def test_secrets_only_where_a2_says():
     files = {name: s["file"] for name, s in _compose()["secrets"].items()}
     assert files == {"acs-hmac": "./state/secrets/hmac.key", "acs-guardian-key": "./state/secrets/guardian.key",
                      "acs-admin-token": "./state/secrets/admin.token",
-                     "acs-approver-token": "./state/secrets/approver.token"}
+                     "acs-approver-token": "./state/secrets/approver.token",
+                     "acs-client-token": "./state/secrets/client.token"}
 
 
 def test_lab_secrets_name_every_mounted_secret():
@@ -278,7 +280,8 @@ def test_no_secret_in_environment():
                 if not secretish.search(key) or key in ("ACS_HMAC_KEY_ID", "ACS_GUARDIAN_KEY_ID"):
                     continue
                 if (name, key) == ("finbot", "OPENAI_API_KEY"):
-                    assert value == "lab-dummy"
+                    # Interpolated from the owner-only .env by compose, never written into this file.
+                    assert value == "${LAB_CLIENT_TOKEN:-}"
                     continue
                 if key == "ACS_UPSTREAM_KEY_SHARED":
                     continue
@@ -651,3 +654,16 @@ def test_dockerignore_keeps_tests_out_of_the_copied_paths():
     rules = _rules(BUNDLE / "images" / "acs.Dockerfile.dockerignore")
     for pattern in ("labs/finbot/cli/tests", "labs/finbot/viewer/tests"):
         assert pattern in rules, pattern
+
+
+
+def test_the_gateway_requires_the_client_token_in_both_upstreams():
+    # The model port refuses any caller without the per-lab token, in replay as in live (final review R8).
+    for path in (COMPOSE, COMPOSE_OPENAI):
+        env = _env(_services(path)["acs-gateway"])
+        if path == COMPOSE_OPENAI:
+            env = {**_env(_services()["acs-gateway"]), **env}
+        assert env["ACS_GATEWAY_CLIENT_TOKEN_FILE"] == "/run/acs/client.token", path.name
+        assert "acs-client-token:client.token" in env["LAB_SECRETS"].split(), path.name
+    assert "client token" in COMPOSE_OPENAI.read_text(encoding="utf-8")
+    assert "every local user" not in COMPOSE_OPENAI.read_text(encoding="utf-8").lower()

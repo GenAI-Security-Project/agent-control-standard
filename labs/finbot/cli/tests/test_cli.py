@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -100,8 +101,11 @@ def test_init_prints_fingerprint(bundle, capsys):
 def test_init_writes_defaults_and_keeps_overrides(bundle, capsys):
     (bundle / ".env").write_text("LAB_PORT_FINBOT=8001\n", encoding="utf-8")
     assert lab("init", capsys=capsys)[0] == 0
-    assert env_file(bundle) == {"LAB_PORT_FINBOT": "8001", "ACS_LAB_MODE": "enforce", "ACS_UPSTREAM": "replay",
-                                "ACS_RESPONSE_SIGNING": "ML-DSA-65", "ACS_RESPONSE_ALGORITHMS": "ML-DSA-65"}
+    values = env_file(bundle)
+    token = values.pop("LAB_CLIENT_TOKEN")
+    assert token == (bundle / "state" / "secrets" / "client.token").read_text(encoding="utf-8").strip()
+    assert values == {"LAB_PORT_FINBOT": "8001", "ACS_LAB_MODE": "enforce", "ACS_UPSTREAM": "replay",
+                      "ACS_RESPONSE_SIGNING": "ML-DSA-65", "ACS_RESPONSE_ALGORITHMS": "ML-DSA-65"}
 
 
 def test_init_key_generator_failure_exits_2(bundle, capsys, monkeypatch):
@@ -322,3 +326,42 @@ def test_wipe_rejects_unknown_arguments(bundle, capsys):
     code, out = lab("_wipe", "--everything", capsys=capsys)
     assert code == report.EXIT_BROKEN and out.startswith("NOT YET:")
     assert (secrets / "hmac.key").exists() and (secrets / "openai.key").exists()
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review R8: the model port's per-lab client token
+# ---------------------------------------------------------------------------------------------------------------------
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_init_writes_the_client_token_owner_only_and_hands_it_to_finbot(bundle, capsys):
+    assert lab("init", capsys=capsys)[0] == 0
+    path = bundle / "state" / "secrets" / "client.token"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    token = path.read_text(encoding="utf-8").strip()
+    # 256 random bits as hex, the gateway's minimum of 32 bytes for a listener secret.
+    assert len(token) == 64 and int(token, 16) >= 0
+    # FinBot's OPENAI_API_KEY comes from .env, which now holds a secret, so .env is owner-only too.
+    assert env_file(bundle)["LAB_CLIENT_TOKEN"] == token
+    assert stat.S_IMODE((bundle / ".env").stat().st_mode) == 0o600
+
+
+def test_every_init_makes_a_new_client_token(bundle, capsys):
+    # reset wipes state/ but keeps .env, so the next init must replace the token .env still holds.
+    assert lab("init", capsys=capsys)[0] == 0
+    first = env_file(bundle)["LAB_CLIENT_TOKEN"]
+    shutil.rmtree(bundle / "state")
+    assert lab("init", capsys=capsys)[0] == 0
+    second = env_file(bundle)["LAB_CLIENT_TOKEN"]
+    assert second != first
+    assert second == (bundle / "state" / "secrets" / "client.token").read_text(encoding="utf-8").strip()
+    assert lab("init", "--force", capsys=capsys)[0] == 0
+    assert env_file(bundle)["LAB_CLIENT_TOKEN"] not in (first, second)
+
+
+def test_init_refuses_when_only_the_client_token_exists(bundle, capsys):
+    assert lab("init", capsys=capsys)[0] == 0
+    for name in ("hmac.key", "guardian.key", "admin.token", "approver.token"):
+        (bundle / "state" / "secrets" / name).unlink()
+    code, out = lab("init", capsys=capsys)
+    assert code == report.EXIT_NOT_YET and "client.token" in out

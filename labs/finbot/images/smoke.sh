@@ -229,6 +229,15 @@ else
     fail "the call left no new transcript"
 fi
 
+# The model port takes only FinBot's per-lab client token (final review R8). redis shares finbot-net and holds no
+# token, so its busybox wget, with no Authorization header, must get the gateway's 401, not an answer and not an error.
+no_token=$(in_service redis wget -q -O /dev/null --post-data '{}' --header 'Content-Type: application/json' \
+           http://acs-gateway:8080/v1/responses 2>&1 || true)
+case $no_token in
+    *" 401 "*) pass "a call to the model port without the client token gets 401" ;;
+    *) fail "a call to the model port without the client token didn't get 401: $no_token" ;;
+esac
+
 if curl -fsS "http://127.0.0.1:${finbot_port:-8000}/healthz" >/dev/null 2>&1; then
     pass "FinBot answers on 127.0.0.1:${finbot_port:-8000}"
 else

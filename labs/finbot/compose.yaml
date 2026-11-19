@@ -54,7 +54,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite://data/finbot.db}
       POSTGRES_HOST: postgres
       OPENAI_BASE_URL: http://acs-gateway:8080/v1
-      OPENAI_API_KEY: lab-dummy
+      # The per-lab client token the gateway's model port requires. lab init writes it to the owner-only .env.
+      OPENAI_API_KEY: ${LAB_CLIENT_TOKEN:-}
       LLM_TIMEOUT: "360"
       WEB_CONCURRENCY: "1"
     ports:
@@ -104,7 +105,7 @@ services:
     environment:
       LAB_UID: ${LAB_UID:-10001}
       LAB_GID: ${LAB_GID:-10001}
-      LAB_SECRETS: "acs-hmac:hmac.key acs-admin-token:admin.token acs-approver-token:approver.token"
+      LAB_SECRETS: "acs-hmac:hmac.key acs-admin-token:admin.token acs-approver-token:approver.token acs-client-token:client.token"
       LAB_STATE_DIRS: /run/acs-state
       ACS_LAB_MODE: ${ACS_LAB_MODE:-enforce}
       # Replay answers from recordings with no network and no key. compose.openai.yaml switches to OpenAI.
@@ -127,6 +128,8 @@ services:
       ACS_HANDSHAKE_CACHE: /run/acs-state/handshakes
       ACS_GATEWAY_HOST: 0.0.0.0
       ACS_GATEWAY_PORT: "8080"
+      # Every call to the model port needs this bearer, so only FinBot can use it, in replay as in live.
+      ACS_GATEWAY_CLIENT_TOKEN_FILE: /run/acs/client.token
       # The admin port binds only the gateway's fixed acs-net address, so FinBot's network can't reach it.
       ACS_GATEWAY_ADMIN_HOST: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
       ACS_GATEWAY_ADMIN_PORT: "8091"
@@ -142,6 +145,7 @@ services:
       - acs-hmac
       - acs-admin-token
       - acs-approver-token
+      - acs-client-token
     tmpfs:
       # The entrypoint's secret copies stay in memory, out of the container's writable layer.
       - /run/acs
@@ -327,6 +331,8 @@ secrets:
     file: ./state/secrets/admin.token
   acs-approver-token:
     file: ./state/secrets/approver.token
+  acs-client-token:
+    file: ./state/secrets/client.token
 
 volumes:
   finbot-data: {}
