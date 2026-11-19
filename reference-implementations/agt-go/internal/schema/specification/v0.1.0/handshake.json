@@ -62,6 +62,14 @@
             "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
           },
           "description": "Conformance profiles this Observed Agent implements. 'acs-core' is the mandatory baseline and SHOULD always be included. Other profiles are optional and independently claimable. See Section 4 (Conformance Profiles) for definitions."
+        },
+        "supports_modify": {
+          "type": "boolean",
+          "description": "Declares whether the Observed Agent can apply a MODIFY disposition to hook payloads. When false, the Guardian substitutes DENY (or ALLOW at postCompact) with reason_codes: ['modify_unsupported'] and records an audit event (Specification 6.5). When omitted, capability may be determined by out-of-band deployment configuration."
+        },
+        "supports_ask": {
+          "type": "boolean",
+          "description": "Declares whether the Observed Agent can route an ASK disposition to an approver. When false, the Guardian substitutes DEFER or DENY with reason_codes: ['approver_unavailable'] and records an audit event (Specification 9.2). When omitted, capability may be determined by out-of-band deployment configuration."
         }
       }
     },
@@ -151,8 +159,8 @@
           "type": "object",
           "description": "Trace-pillar negotiation. Deployments claiming ACS-Trace MUST emit Trace events under at least one of OTel or OCSF for every supported ACS step. Deployments not claiming ACS-Trace SHOULD still emit Trace events where feasible.",
           "properties": {
-            "otel_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OTel spans per the Section 3.15 mapping." },
-            "ocsf_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OCSF events per the Section 3.15 mapping." },
+            "otel_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OTel spans per the Section 15 mapping." },
+            "ocsf_enabled": { "type": "boolean", "description": "Guardian (or its co-deployed Trace sink) emits OCSF events per the Section 15 mapping." },
             "otel_collector_endpoint": { "type": "string", "format": "uri", "description": "Optional OTLP endpoint the Observed Agent MAY send spans to directly (when the deployment splits trace emission across both sides)." }
           }
         },

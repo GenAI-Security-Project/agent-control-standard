@@ -43,6 +43,8 @@ type ClientHello struct {
 	ProvenanceProducer   string            `json:"provenance_producer"`
 	WrappedProtocols     []WrappedProtocol `json:"wrapped_protocols,omitzero"`
 	ProfilesSupported    []string          `json:"profiles_supported,omitzero"`
+	SupportsModify       *bool             `json:"supports_modify,omitzero"`
+	SupportsAsk          *bool             `json:"supports_ask,omitzero"`
 }
 
 // WrappedProtocol is a sub-protocol an Observed Agent tunnels over ACS,
