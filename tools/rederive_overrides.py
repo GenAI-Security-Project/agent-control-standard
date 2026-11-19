@@ -1,7 +1,7 @@
 """Keep the theme partial overrides reproducible across a mkdocs-material bump.
 
 Each override in overrides/partials/ is an installed Material partial plus a small
-change. Three files under overrides/.upstream/partials/ record it: a byte copy of the
+change. Two files under overrides/.upstream/partials/ record it: a byte copy of the
 installed partial, and the unified diff from that copy to the override. MkDocs skips
 dot directories, so none of this is published.
 
@@ -63,6 +63,7 @@ def render_deltas(deltas: dict[str, str]) -> str:
 
 
 def _tofile(diff_text: str) -> str:
+    targets: list[str] = []
     for line in diff_text.splitlines():
         if line.startswith("+++ "):
             name = line[4:].split("\t", 1)[0].strip()
@@ -70,8 +71,12 @@ def _tofile(diff_text: str) -> str:
             # bare file name. A diff is reviewed as text, and a path here would not be.
             if name != Path(name).name or name in ("", ".", ".."):
                 raise SystemExit(f"refusing diff target {name!r}: not a bare file name")
-            return name
-    raise SystemExit("diff has no +++ line")
+            targets.append(name)
+    if not targets:
+        raise SystemExit("diff has no +++ line")
+    if len(targets) > 1:
+        raise SystemExit(f"refusing multi-target diff: {targets!r}")
+    return targets[0]
 
 
 def apply_diff(upstream: Path, diff: Path, out: Path) -> None:
@@ -93,7 +98,10 @@ def apply_diff(upstream: Path, diff: Path, out: Path) -> None:
         env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(tmp).parent))
         for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
             env.pop(name, None)
-        for args in (["git", "apply", "--check", str(diff.resolve())], ["git", "apply", str(diff.resolve())]):
+        for args in (
+            ["git", "-c", "core.autocrlf=false", "apply", "--check", str(diff.resolve())],
+            ["git", "-c", "core.autocrlf=false", "apply", str(diff.resolve())],
+        ):
             result = subprocess.run(args, cwd=tmp, env=env, capture_output=True, text=True)
             if result.returncode != 0:
                 raise SystemExit(f"git apply refused {diff.name} on {upstream}:\n{result.stderr.strip()}")
@@ -123,7 +131,7 @@ def _record(root: Path, installed: Path | None) -> int:
             print(f"copied the installed partial to {UPSTREAM / name}")
         override = (root / OVERRIDES / name).read_text(encoding="utf-8")
         diff = record_diff(copy.read_text(encoding="utf-8"), override, name)
-        (root / UPSTREAM / f"{name}.diff").write_text(diff, encoding="utf-8")
+        (root / UPSTREAM / f"{name}.diff").write_text(diff, encoding="utf-8", newline="\n")
         print(f"recorded {UPSTREAM / name}.diff")
     return 0
 
@@ -160,12 +168,17 @@ def _bump(root: Path, installed: Path | None, accepted: str | None) -> int:
             apply_diff(installed_partial(name, installed), root / UPSTREAM / f"{name}.diff", out)
             built[name] = out.read_text(encoding="utf-8")
         for name in PARTIALS:
+            delta_path = root / UPSTREAM / f"{name}.delta"
             if deltas[name]:
-                (root / UPSTREAM / f"{name}.delta").write_text(deltas[name], encoding="utf-8")
+                delta_path.write_text(deltas[name], encoding="utf-8", newline="\n")
+            else:
+                delta_path.unlink(missing_ok=True)
             shutil.copyfile(installed_partial(name, installed), root / UPSTREAM / name)
-            (root / OVERRIDES / name).write_text(built[name], encoding="utf-8")
+            (root / OVERRIDES / name).write_text(built[name], encoding="utf-8", newline="\n")
             upstream = (root / UPSTREAM / name).read_text(encoding="utf-8")
-            (root / UPSTREAM / f"{name}.diff").write_text(record_diff(upstream, built[name], name), encoding="utf-8")
+            (root / UPSTREAM / f"{name}.diff").write_text(
+                record_diff(upstream, built[name], name), encoding="utf-8", newline="\n"
+            )
             print(f"{name}: copied the installed partial to {UPSTREAM / name}")
             print(f"{name}: applied {UPSTREAM / name}.diff to {OVERRIDES / name}")
             print(f"{name}: re-recorded {UPSTREAM / name}.diff")

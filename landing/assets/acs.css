@@ -349,7 +349,7 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
   line-height: inherit;
   color: var(--acs-text-soft);
 }
-#site-nav .nav-section ul { padding-left: 0; }
+#site-nav .nav-section > ul { padding-left: 0; }
 
 /* Off screen until focused, so it costs sighted mouse users nothing and still comes
    first for a keyboard. */
@@ -529,7 +529,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
 
   #site-nav { font-size: calc(var(--acs-u) * 0.8); line-height: 1.5; }
   #site-nav ul,
-  #site-nav .nav-section ul { padding: 0; }
+  #site-nav .nav-section > ul { padding: 0; }
   #site-nav li { border-top: 1px solid var(--acs-border-strong); }
   #site-nav a,
   #site-nav summary { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
@@ -541,7 +541,7 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
   #site-nav ul ul ul a,
   #site-nav ul ul ul summary { padding-inline-start: calc(var(--acs-u) * 2.4); }
   #site-nav ul ul summary a { padding: 0; }
-  #site-nav .nav-section ul a { padding-inline-start: calc(var(--acs-u) * 0.8); }
+  #site-nav .nav-section > ul > li > a { padding-inline-start: calc(var(--acs-u) * 0.8); }
   #site-nav summary::after {
     width: calc(var(--acs-u) * 1.2);
     height: calc(var(--acs-u) * 1.2);
@@ -567,9 +567,13 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
     box-shadow: 0 calc(var(--acs-u) * 0.2) calc(var(--acs-u) * 0.5) rgba(0, 0, 0, 0.2), 0 0 1px rgba(0, 0, 0, 0.35);
     transform: translateX(-100%);
     visibility: hidden;
-    transition: transform 0.25s ease, visibility 0.25s;
   }
-  .has-drawer .nav-open .sidebar { transform: none; visibility: visible; }
+  .has-drawer .nav-open { overflow: hidden; }
+  .has-drawer .nav-open .sidebar {
+    transform: none;
+    visibility: visible;
+    transition: transform 0.25s ease;
+  }
   /* The docs scrim. A tap on it lands on the body, which the drawer script reads as a
      tap outside the panel. */
   .has-drawer .nav-open::after {

@@ -307,6 +307,14 @@ def test_docs_walk_raises_on_a_row_with_no_pick_and_on_two_links():
         walk_docs(pane(two_labels), DOCS_BASE)
     with pytest.raises(WalkError, match="Navigation"):
         walk_docs("<nav><ul><li><a href='x'>x</a></li></ul></nav>", DOCS_BASE)
+    with pytest.raises(WalkError, match="no rows"):
+        walk_docs(pane(""), DOCS_BASE)
+    with pytest.raises(WalkError, match="no rows"):
+        walk_landing('<nav aria-label="Navigation"><ul></ul></nav>', LANDING_ROOT)
+    with pytest.raises(WalkError, match="md-nav__item under ul.md-nav__list"):
+        walk_docs('<nav aria-label="Navigation"><div><li class="md-nav__item"><a href="x/" class="md-nav__link">x</a></li></div></nav>', DOCS_BASE)
+    with pytest.raises(WalkError, match="not under a ul"):
+        walk_landing('<nav aria-label="Navigation"><div><li><a href="x/">x</a></li></div></nav>', LANDING_ROOT)
 
 
 def test_landing_walk_home_summary_link_is_one_group_row():
@@ -362,6 +370,8 @@ def test_open_labels_and_ancestors_agree_on_a_nested_page():
     rows = walk_docs(markup, IDENTITY_BASE)
     active = rows.index((3, "Overview", IDENTITY_BASE, False, False))
     assert docs_open_labels(markup) == frozenset(ancestor_labels(rows, active))
+    checked_section = EXTERNAL_SECTION_ROW.replace('id="__nav_ext"', 'id="__nav_ext" checked', 1)
+    assert docs_open_labels(pane(IDENTITY_ROWS + checked_section)) == frozenset(ancestor_labels(rows, active))
     assert landing_open_labels(LANDING_PANE) == frozenset({"Home"})
     assert aria_current_links(LANDING_PANE) == [("a", "./")]
     assert aria_current_links(markup) == []
@@ -387,7 +397,8 @@ def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
     labels = [row[1] for row in walk_docs(pane(IDENTITY_ROWS + HOME_CONTAINER_ROW + EXTERNAL_SECTION_ROW), IDENTITY_BASE)]
     labels += [row[1] for row in walk_landing(LANDING_PANE, LANDING_ROOT)]
     assert all(TITLE.fullmatch(label) for label in labels)
-    for bad in ("Trace & Inspect", "<code>hooks</code>", "a > b", "", "Title\n", "a\nb"):
+    for bad in ("Trace & Inspect", "<code>hooks</code>", "a > b", "", "Title\n", "a\nb",
+                "Title\r", "a\rb", "a\tb", "a\x00b", "a\x1fb", "a\x7fb", "a\x80b"):
         assert not TITLE.fullmatch(bad)
         assert not TITLE.match(bad)
 
@@ -406,13 +417,16 @@ def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
         assert EXTERNAL_URL.match(good)
     for bad in ("http://github.com/x", "https://github.com.evil.example/", "https://evilgithub.com/",
                 "https://github.com@evil.example/", "https://owasp.slack.com.evil.example",
-                "https://GITHUB.com/x", "https://example.org/", "https://github.com\n"):
-        # A prefix pattern, so match() is the call. The \Z tail still refuses a newline.
+                "https://GITHUB.com/x", "https://example.org/", "https://github.com\n",
+                "https://github.com/x\n", "https://github.com/x y", 'https://github.com/x"y',
+                "https://github.com/\\evil", "https://github.com/@evil", "https://github.com/a:b"):
         assert not EXTERNAL_URL.match(bad)
+        assert not EXTERNAL_URL.fullmatch(bad)
 
     for good in ("README.md", "concepts/README.md", "spec/trace/OCSF/implementation_examples.md", "topics/faq.md"):
         assert DOC_PATH.fullmatch(good)
-    for bad in ("/README.md", "../README.md", "a/../b.md", "a/..", "x.html", "a b.md", "a\\b.md", "x.md\n"):
+    for bad in ("/README.md", "../README.md", "a/../b.md", "a/..", "./README.md", "a/./b.md",
+                "a//b.md", "x.html", "a b.md", "a\\b.md", "x.md\n"):
         assert not DOC_PATH.fullmatch(bad)
         assert not DOC_PATH.match(bad)
     assert REPO_URL == "https://github.com/GenAI-Security-Project/agent-control-standard"

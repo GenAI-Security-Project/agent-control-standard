@@ -8,9 +8,9 @@
 # leadership roster in GOVERNANCE.md. The project leads are @rocklambros,
 # @afogel, and @bar-capsule.
 #
-# @artmaro holds write access. @Lrd0036 accepted write access and his entries are live.
-# Workstream leads without write access stay in GOVERNANCE.md and are not listed
-# here, because an entry without write access does nothing.
+# @artmaro holds write access. @Lrd0036 accepted write access and his entries
+# are live. Workstream leads without write access stay in GOVERNANCE.md and are
+# not listed here, because an entry without write access does nothing.
 
 # Default owners for anything not matched below.
 *                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036

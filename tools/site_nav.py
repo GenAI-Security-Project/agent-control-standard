@@ -18,6 +18,7 @@ cannot drift apart on what a title, an anchor, or an allowed URL is.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterator
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -27,13 +28,16 @@ Row = tuple[int, str, str | None, bool, bool]
 # they anchor with \A and \Z. A `$` also matches before a final newline, which would let
 # "problem\n" pass under match(). Anchoring here keeps them safe under match() or
 # fullmatch() alike, so no caller has to remember which one is safe.
-TITLE = re.compile(r"\A[^<>&\n]+\Z")
+TITLE = re.compile(r"\A[^<>&\x00-\x1f\x7f-\x9f]+\Z")
 ANCHOR = re.compile(r"\A[A-Za-z][A-Za-z0-9_-]*\Z")
 # A value is external when it matches: any scheme, or a path rooted at the host.
 EXTERNAL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:|^/")
-# A prefix check by design: the host is fixed and any path under it is allowed.
-EXTERNAL_URL = re.compile(r"\Ahttps://(github\.com|owasp\.slack\.com)(/|\Z)")
-DOC_PATH = re.compile(r"\A(?!/)(?!.*(^|/)\.\.(/|$))[A-Za-z0-9_./-]+\.md\Z")
+# The host is fixed and any RFC 3986 path, query, or fragment under it without a colon,
+# an @, or a backslash is allowed.
+EXTERNAL_URL = re.compile(
+    r"\Ahttps://(github\.com|owasp\.slack\.com)(/[A-Za-z0-9._~/?#\[\]!$&'()*+,;=%-]*)?\Z"
+)
+DOC_PATH = re.compile(r"\A(?!/)(?!.*//)(?!.*(^|/)\.\.?(/|\Z))[A-Za-z0-9_./-]+\.md\Z")
 REPO_URL = "https://github.com/GenAI-Security-Project/agent-control-standard"
 
 PANE_LABEL = "Navigation"
@@ -65,7 +69,9 @@ class _Node:
     def elements(self) -> list[_Node]:
         return [child for child in self.children if isinstance(child, _Node)]
 
-    def descendants(self, prune=lambda node: False):
+    def descendants(
+        self, prune: Callable[[_Node], bool] = lambda node: False
+    ) -> Iterator[_Node]:
         """Yield every element below this one in document order, skipping pruned subtrees."""
         for child in self.elements():
             if prune(child):
@@ -173,14 +179,24 @@ def _docs_items(markup: str, base: str) -> list[tuple[_Node, Row]]:
     pane = _pane(markup)
     found: list[tuple[_Node, Row]] = []
     for node in pane.descendants(prune=_is_toc):
-        if node.tag != "li" or "md-nav__item" not in node.classes:
+        if node.tag != "li":
             continue
-        if node.parent is None or node.parent.tag != "ul" or "md-nav__list" not in node.parent.classes:
-            continue
+        if (
+            "md-nav__item" not in node.classes
+            or node.parent is None
+            or node.parent.tag != "ul"
+            or "md-nav__list" not in node.parent.classes
+        ):
+            raise WalkError(
+                f"docs li is not an md-nav__item under ul.md-nav__list: "
+                f"{node.text()[:_SNIPPET]!r}"
+            )
         depth = _depth(node, pane)
         is_section = "md-nav__item--section" in node.classes
         is_group = "md-nav__item--nested" in node.classes and not is_section
         found.append((node, _row(_docs_pick(node, depth), depth, base, is_group, is_section)))
+    if not found:
+        raise WalkError("docs pane has no rows")
     return found
 
 
@@ -197,8 +213,10 @@ def _landing_items(markup: str, base: str) -> list[tuple[_Node, Row]]:
     pane = _pane(markup)
     found: list[tuple[_Node, Row]] = []
     for node in pane.descendants():
-        if node.tag != "li" or node.parent is None or node.parent.tag != "ul":
+        if node.tag != "li":
             continue
+        if node.parent is None or node.parent.tag != "ul":
+            raise WalkError(f"landing li is not under a ul: {node.text()[:_SNIPPET]!r}")
         depth = _depth(node, pane)
         details = _direct(node, {"details"})
         if details is not None:
@@ -209,6 +227,8 @@ def _landing_items(markup: str, base: str) -> list[tuple[_Node, Row]]:
         if pick is None:
             raise WalkError(f"landing row at depth {depth} has nothing to name it: {node.text()[:_SNIPPET]!r}")
         found.append((node, _row(pick, depth, base, details is not None, "nav-section" in node.classes)))
+    if not found:
+        raise WalkError("landing pane has no rows")
     return found
 
 
@@ -224,9 +244,11 @@ def _toggle(item: _Node) -> _Node | None:
 
 
 def docs_open_labels(markup: str) -> frozenset[str]:
-    """Labels of docs rows whose toggle the page renders checked."""
+    """Labels of docs group rows whose toggle the page renders checked."""
     opened = set()
     for node, row in _docs_items(markup, ""):
+        if not row[3]:
+            continue
         toggle = _toggle(node)
         if toggle is not None and "checked" in toggle.attrs:
             opened.add(row[1])

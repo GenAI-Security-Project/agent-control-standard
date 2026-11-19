@@ -464,6 +464,12 @@ def test_section_and_resource_titles_are_validated():
     resources = ({"title": "a & b", "url": site_nav.REPO_URL},)
     with raises_naming("'a & b'", site_nav.TITLE.pattern):
         render_nav(dataclasses.replace(NAV, external_resources=resources))
+    quoted_section = ({"title": 'Say "hi"', "anchor": "1bad"},)
+    with raises_naming('landing_sections anchor for Say "hi"', site_nav.ANCHOR.pattern):
+        render_nav(dataclasses.replace(NAV, landing_sections=quoted_section))
+    quoted_resource = ({"title": 'Say "hi"', "url": "https://evil.example/"},)
+    with raises_naming('external_resources url for Say "hi"', site_nav.EXTERNAL_URL.pattern):
+        render_nav(dataclasses.replace(NAV, external_resources=quoted_resource))
 
 
 @pytest.mark.parametrize("anchor", ["", "1st", "has space", 'x" onfocus="a', "problem\n", "#problem"])
@@ -599,6 +605,11 @@ def test_csp_raises_on_an_entity_in_the_style_body(body):
     """An SVG style is foreign content, decoded before the browser hashes it."""
     with pytest.raises(RenderError, match="style"):
         render_csp(f"<svg><style>{body}</style></svg><script>a</script>")
+
+
+def test_csp_raises_on_a_script_inside_the_svg():
+    with pytest.raises(RenderError, match="svg"):
+        render_csp("<svg><style>a{}</style><script>a</script></svg>")
 
 
 def test_render_succeeds_with_no_built_docs_present(tmp_path, monkeypatch):

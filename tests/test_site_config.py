@@ -139,7 +139,7 @@ def test_no_unreviewed_package_cdn_reference_in_built_javascript(built_site):
 # Any scheme a script can open a connection with. A host a script names is not proof
 # that it fetches, so each one below was read in place and recorded per file.
 _SCRIPT_URL = re.compile(r"""\b(?:https?|wss?)://([^\s/?#'"),<>]+)""", re.I)
-_HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
+_HOSTNAME = re.compile(r"^[a-z0-9.-]+(?::\d+)?$", re.I)
 
 # Licence banners, documentation links, and comments name most of these. The lunr
 # language packs all carry the same four.
@@ -187,7 +187,7 @@ def test_built_javascript_names_only_reviewed_hosts(built_site):
         for match in _SCRIPT_URL.finditer(path.read_text(encoding="utf-8", errors="replace")):
             host = match.group(1)
             if _HOSTNAME.match(host):
-                found.setdefault(rel, set()).add(host)
+                found.setdefault(rel, set()).add(host.lower())
             else:
                 runtime[rel] = runtime.get(rel, 0) + 1
     added = {rel: sorted(hosts - REVIEWED_SCRIPT_HOSTS.get(rel, set())) for rel, hosts in found.items()}

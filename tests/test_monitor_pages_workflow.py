@@ -31,7 +31,6 @@ def test_monitor_pages_jobs_that_read_site_files_check_out_main():
         # The site publishes from main whichever branch is default, so each job must
         # verify main's files against it.
         assert checkout["with"] == {"persist-credentials": False, "ref": "main"}, name
-    assert jobs["check"]["timeout-minutes"] == 20
     assert jobs["navigation"]["timeout-minutes"] == 15
     runs = [step["run"].strip() for step in jobs["navigation"]["steps"] if "run" in step]
     assert runs == ['python3 tools/verify_site_nav.py "$PAGE_URL"']

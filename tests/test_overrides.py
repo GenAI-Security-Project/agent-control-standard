@@ -1,4 +1,4 @@
-"""Guards on the two theme partial overrides that put the shared pane on the docs site.
+"""Guards on the three theme partial overrides that put the shared pane on the docs site.
 
 Each override is a copy of an installed Material partial plus a small change. The
 installed copy, the override, and the unified diff between them are all committed, so
@@ -9,6 +9,7 @@ The two rows the nav override emits by hand must equal the byte contract in
 tests/test_site_nav_walk.py, because the pane walkers were written against it.
 """
 import hashlib
+import html
 import re
 import shutil
 import subprocess
@@ -18,15 +19,12 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "tools"))
-sys.path.insert(0, str(REPO / "tests"))
 
-import rederive_overrides  # noqa: E402
-import site_nav  # noqa: E402
-from rederive_overrides import PARTIALS, UPSTREAM, apply_diff, installed_partial, record_diff  # noqa: E402
-from _docs_build import DOCS_BASE  # noqa: E402
-from render_landing import read_nav_config  # noqa: E402
-from test_site_nav_walk import EXTERNAL_SECTION_ROW, HOME_CONTAINER_ROW  # noqa: E402
+import rederive_overrides
+import site_nav
+from rederive_overrides import PARTIALS, UPSTREAM, _tofile, apply_diff, installed_partial, record_diff
+from render_landing import read_nav_config
+from test_site_nav_walk import EXTERNAL_SECTION_ROW, HOME_CONTAINER_ROW
 
 FIXTURE_ROOT = "https://example.org/agent-control-standard/"
 OVERRIDES = REPO / "overrides" / "partials"
@@ -54,8 +52,11 @@ def _expand_children(fixture: str, entries: list[tuple[str, str]]) -> str:
     child = next(line for line in fixture.splitlines() if line.lstrip().startswith('<li class="md-nav__item"><a'))
     href = re.search(r'href="([^"]+)"', child).group(1)
     title = re.search(r'<span class="md-ellipsis">([^<]+)</span>', child).group(1)
-    rows = [child.replace(f'href="{href}"', f'href="{url}"').replace(f">{title}<", f">{label}<")
-            for label, url in entries]
+    rows = [
+        child.replace(f'href="{href}"', f'href="{html.escape(url, quote=True)}"')
+        .replace(f">{title}<", f">{html.escape(label, quote=True)}<")
+        for label, url in entries
+    ]
     return fixture.replace(child, "\n".join(rows))
 
 
@@ -68,7 +69,7 @@ def test_override_rows_equal_the_task_1_fixtures(built_docs, page, root):
     markup = (built_docs / page).read_text(encoding="utf-8")
 
     home = _expand_children(HOME_CONTAINER_ROW, [(s["title"], f"{root}#{s['anchor']}") for s in NAV.landing_sections])
-    home = home.replace(f'href="{FIXTURE_ROOT}"', f'href="{root}"')
+    home = home.replace(f'href="{FIXTURE_ROOT}"', f'href="{html.escape(root, quote=True)}"')
     external = _expand_children(EXTERNAL_SECTION_ROW, [(r["title"], r["url"]) for r in NAV.external_resources])
 
     assert _collapse(_li_block(markup, "__nav_home")) == _collapse(home)
@@ -117,10 +118,9 @@ def test_override_jinja_uses_no_python_method_call():
     uses. The added lines are what this project wrote, so they are what is checked."""
     for name in PARTIALS:
         diff = (REPO / UPSTREAM / f"{name}.diff").read_text(encoding="utf-8")
-        added = [line for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++")]
-        for line in added:
-            for expression in re.findall(r"\{\{.*?\}\}|\{%.*?%\}", line):
-                assert not re.search(r"\.\w+\s*\(", expression), f"{name}: {expression}"
+        added = "\n".join(line[1:] for line in diff.splitlines() if line.startswith("+") and not line.startswith("+++"))
+        for expression in re.findall(r"\{\{.*?\}\}|\{%.*?%\}", added, re.S):
+            assert not re.search(r"\.\w+\s*\(", expression), f"{name}: {expression}"
 
 
 def _scratch_root(tmp_path: Path) -> Path:
@@ -162,16 +162,18 @@ def test_record_refuses_to_rebaseline_a_changed_upstream(tmp_path):
     root = _scratch_root(tmp_path)
     installed = _fake_installed(tmp_path)
     nav = installed / "nav.html"
-    nav.write_text(nav.read_text(encoding="utf-8") + "{#- an upstream change -#}\n", encoding="utf-8")
-    # A hand edit too, so a write of either the copy or the diff would show.
+    nav.write_text(nav.read_text(encoding="utf-8") + "{#- an upstream change -#}\n", encoding="utf-8", newline="\n")
+    # A hand edit and a missing first-use copy too, so a write of either the copy or the diff would show.
+    (root / UPSTREAM / "header.html").unlink()
     override = root / "overrides" / "partials" / "nav-item.html"
-    override.write_text(override.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    override.write_text(override.read_text(encoding="utf-8") + "\n", encoding="utf-8", newline="\n")
     before = _snapshot(root)
 
     result = _run(root, "--record", installed=installed)
     assert result.returncode == 1
     assert "nav.html" in result.stderr
     assert "--accept-delta" in result.stderr
+    assert not (root / UPSTREAM / "header.html").exists()
     assert _snapshot(root) == before
 
 
@@ -180,7 +182,7 @@ def test_record_rerecords_the_diff_from_the_committed_copy(tmp_path):
     installed = _fake_installed(tmp_path)
     override = root / "overrides" / "partials" / "nav-item.html"
     edited = override.read_text(encoding="utf-8") + "{#- a hand edit -#}\n"
-    override.write_text(edited, encoding="utf-8")
+    override.write_text(edited, encoding="utf-8", newline="\n")
     copies = {name: (root / UPSTREAM / name).read_bytes() for name in PARTIALS}
 
     result = _run(root, "--record", installed=installed)
@@ -233,7 +235,11 @@ def test_rederive_refuses_a_context_change(tmp_path):
     nav = installed / "nav.html"
     text = nav.read_text(encoding="utf-8")
     assert text.count("{% for nav_item in nav.items %}") == 1
-    nav.write_text(text.replace("{% for nav_item in nav.items %}", "{% for nav_item in nav.children %}"), encoding="utf-8")
+    nav.write_text(
+        text.replace("{% for nav_item in nav.items %}", "{% for nav_item in nav.children %}"),
+        encoding="utf-8",
+        newline="\n",
+    )
 
     first = _run(root, installed=installed)
     assert first.returncode == 2, first.stdout + first.stderr
@@ -247,6 +253,8 @@ def test_rederive_refuses_a_context_change(tmp_path):
 def test_rederive_applies_an_offset_only_change(tmp_path):
     root = _scratch_root(tmp_path)
     installed = _fake_installed(tmp_path)
+    stale_delta = root / UPSTREAM / "header.html.delta"
+    stale_delta.write_text("stale delta\n", encoding="utf-8", newline="\n")
     # A line inserted between two hunks shifts the later one without touching any
     # line a hunk carries. git apply finds it at the new offset. A line above the first
     # hunk would not do, because a hunk that starts at line 1 is anchored there.
@@ -255,7 +263,7 @@ def test_rederive_applies_an_offset_only_change(tmp_path):
     nav = installed / "nav.html"
     text = nav.read_text(encoding="utf-8")
     assert text.count(gap) == 1
-    nav.write_text(text.replace(gap, shifted), encoding="utf-8")
+    nav.write_text(text.replace(gap, shifted), encoding="utf-8", newline="\n")
 
     first = _run(root, installed=installed)
     assert first.returncode == 2
@@ -265,15 +273,23 @@ def test_rederive_applies_an_offset_only_change(tmp_path):
     assert override == (OVERRIDES / "nav.html").read_text(encoding="utf-8").replace(gap, shifted)
     assert (root / UPSTREAM / "nav.html").read_bytes() == nav.read_bytes()
     assert (root / UPSTREAM / "nav.html.delta").read_text(encoding="utf-8")
+    assert not stale_delta.exists()
     assert (root / UPSTREAM / "nav.html.diff").read_text(encoding="utf-8") == record_diff(
         nav.read_text(encoding="utf-8"), override, "nav.html")
+
+
+def test_tofile_refuses_multiple_targets():
+    with pytest.raises(SystemExit, match="multi-target"):
+        _tofile("--- a\n+++ nav.html\n--- b\n+++ header.html\n")
+    with pytest.raises(SystemExit, match="not a bare file name"):
+        _tofile("--- a\n+++ nav.html\n--- b\n+++ ../evil.html\n")
 
 
 def test_rederive_refuses_an_unaccepted_delta_and_writes_nothing(tmp_path):
     root = _scratch_root(tmp_path)
     installed = _fake_installed(tmp_path)
     item = installed / "nav-item.html"
-    item.write_text(item.read_text(encoding="utf-8") + "{#- appended upstream -#}\n", encoding="utf-8")
+    item.write_text(item.read_text(encoding="utf-8") + "{#- appended upstream -#}\n", encoding="utf-8", newline="\n")
     before = _snapshot(root)
 
     absent = _run(root, installed=installed)

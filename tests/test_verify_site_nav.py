@@ -176,6 +176,18 @@ def test_main_gives_a_landing_page_without_the_landmark_the_full_window(monkeypa
     assert len(sleeps) == verify_site_nav.ATTEMPTS - 1
 
 
+def test_main_gives_the_full_window_when_both_landmarks_are_missing(monkeypatch):
+    # On the first deploy that adds the pane, both the cached 200 landing page and the
+    # 404 page can lack the landmark in the same pass until the deploy settles.
+    _serve(monkeypatch, _site(front=(200, "<html><body>old landing</body></html>"), missing=(404, GITHUB_404)))
+    monkeypatch.setenv("GITHUB_RUN_ID", "7")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    sleeps: list[float] = []
+    assert verify_site_nav.main(["verify_site_nav.py", BASE], sleep=sleeps.append) == 1
+    assert len(sleeps) == verify_site_nav.ATTEMPTS - 1
+
+
 def test_main_passes_once_a_stale_landing_page_expires(monkeypatch):
     stale = _site(front=(200, "<html><body>old landing</body></html>"))
     served = iter([stale, stale, stale, _site()])

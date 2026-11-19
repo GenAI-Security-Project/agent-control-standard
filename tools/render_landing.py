@@ -238,15 +238,14 @@ def _external_url(value: object, entry: str) -> str:
         raise _invalid(entry, value, "is not a URL string")
     if URL_NOISE.search(value):
         raise _invalid(entry, value, "contains a tab or line break, which a browser deletes before parsing")
-    # EXTERNAL_URL is a prefix check by design, so match rather than fullmatch.
-    if not EXTERNAL_URL.match(value):
-        raise _invalid(entry, value, f"is not a URL matching {EXTERNAL_URL.pattern}")
-    if "\\" in value or "@" in value or ":" in value[len(SCHEME):]:
+    if value.startswith(SCHEME) and ("\\" in value or "@" in value or ":" in value[len(SCHEME):]):
         # A backslash reads as a slash and @ ends userinfo, so either can move the host
         # away from the one the prefix matched. A port or a second scheme has no use here.
         raise _invalid(entry, value, "contains a backslash, an @, or a colon after the scheme")
     if not URL_CHARS.match(value):
         raise _invalid(entry, value, f"contains a character outside {URL_CHARS.pattern}")
+    if not EXTERNAL_URL.fullmatch(value):
+        raise _invalid(entry, value, f"is not a URL matching {EXTERNAL_URL.pattern}")
     return html.escape(value, quote=True)
 
 
@@ -273,6 +272,8 @@ def _nav_items(entries, trail: str) -> str:
         label = _title(title, f"nav title under {trail}")
         where = f"{trail} > {title}"
         if isinstance(value, list):
+            if not value:
+                raise _invalid(f"nav entry {where}", value, "is an empty group")
             children = _nav_items(value, where)
             out.append(f"<li><details><summary>{label}</summary><ul>\n{children}</ul></details></li>\n")
         elif isinstance(value, str):
@@ -296,15 +297,17 @@ def render_nav(config: NavConfig) -> str:
     """
     sections = []
     for item in config.landing_sections:
-        title = _title(_field(item, "title", "landing_sections entry"), "landing_sections title")
-        anchor = _anchor(_field(item, "anchor", f"landing_sections entry {title}"),
-                         f"landing_sections anchor for {title}")
+        raw_title = _field(item, "title", "landing_sections entry")
+        title = _title(raw_title, "landing_sections title")
+        anchor = _anchor(_field(item, "anchor", f"landing_sections entry {raw_title}"),
+                         f"landing_sections anchor for {raw_title}")
         sections.append(f'<li><a href="#{anchor}">{title}</a></li>\n')
     resources = []
     for item in config.external_resources:
-        title = _title(_field(item, "title", "external_resources entry"), "external_resources title")
-        url = _external_url(_field(item, "url", f"external_resources entry {title}"),
-                            f"external_resources url for {title}")
+        raw_title = _field(item, "title", "external_resources entry")
+        title = _title(raw_title, "external_resources title")
+        url = _external_url(_field(item, "url", f"external_resources entry {raw_title}"),
+                            f"external_resources url for {raw_title}")
         resources.append(f'<li><a href="{url}">{title}</a></li>\n')
     return (
         '<nav id="site-nav" aria-label="Navigation"><ul>\n'
@@ -390,6 +393,8 @@ def render_csp(page: str) -> str:
     The page's other resources are its own files, so 'self' covers them. A meta policy
     cannot carry frame-ancestors or reporting, so this contains injection and no more.
     """
+    if re.search(r"<svg\b[^>]*>(?:(?!</svg>).)*<script\b", page, re.I | re.S):
+        raise RenderError("an inline script inside <svg> is foreign content, so its hash cannot be computed from source")
     bodies = _inline_bodies(page)
     scripts = [body for tag, body in bodies if tag == "script"]
     styles = [body for tag, body in bodies if tag == "style"]
@@ -430,25 +435,25 @@ def render(
         raise RenderError(f"template is missing placeholder: {', '.join(missing)}")
 
     version, count = _schema_facts(source)
-    out = template.replace("<!--ACS:SPEC_VERSION-->", html.escape(version))
-    out = out.replace("<!--ACS:RELEASE_VERSION-->", html.escape(release_version(version_text)))
-    out = out.replace("<!--ACS:SCHEMA_COUNT-->", str(count))
-    out = out.replace("<!--ACS:SCHEMA_HREF-->", html.escape(f"schema/{version}/acs_schema.json"))
-    out = out.replace(
-        "<!--ACS:PRIORITY_SCOPE-->", render_priority_scope(parse_priority_scope(contributing))
-    )
-    # Inlining is required: an SVG loaded through <img> cannot read the page's CSS
-    # custom properties, so the diagram would ignore the theme.
-    out = out.replace("<!--ACS:STARBURST-->", starburst)
-    out = out.replace("<!--ACS:NAV-->", render_nav(nav))
-    # The header repeats the docs header, so its text comes from the keys the theme reads.
-    # A literal here is how the wordmark came to say something the docs did not.
-    out = out.replace("<!--ACS:SITE_NAME-->", _title(nav.site_name, "site_name"))
-    out = out.replace("<!--ACS:REPO_NAME-->", _title(nav.repo_name, "repo_name"))
-    out = out.replace("<!--ACS:REPO_URL-->", _external_url(nav.repo_url, "repo_url"))
+    # Inlining the diagram is required: an SVG loaded through <img> cannot read the
+    # page's CSS custom properties, so the diagram would ignore the theme. The header
+    # repeats the docs header, so its text comes from the keys the theme reads.
+    values = {
+        "<!--ACS:SPEC_VERSION-->": html.escape(version),
+        "<!--ACS:RELEASE_VERSION-->": html.escape(release_version(version_text)),
+        "<!--ACS:SCHEMA_COUNT-->": str(count),
+        "<!--ACS:SCHEMA_HREF-->": html.escape(f"schema/{version}/acs_schema.json"),
+        "<!--ACS:PRIORITY_SCOPE-->": render_priority_scope(parse_priority_scope(contributing)),
+        "<!--ACS:STARBURST-->": starburst,
+        "<!--ACS:NAV-->": render_nav(nav),
+        "<!--ACS:SITE_NAME-->": _title(nav.site_name, "site_name"),
+        "<!--ACS:REPO_NAME-->": _title(nav.repo_name, "repo_name"),
+        "<!--ACS:REPO_URL-->": _external_url(nav.repo_url, "repo_url"),
+    }
+    out = PLACEHOLDER.sub(lambda match: values.get(match.group(0), match.group(0)), template)
     # Last, so the hashes cover the bodies as they ship. The placeholder is a comment,
     # which the body scan skips.
-    out = out.replace("<!--ACS:CSP-->", render_csp(out))
+    out = out.replace("<!--ACS:CSP-->", render_csp(out), 1)
 
     survivors = PLACEHOLDER.findall(out)
     if survivors:

@@ -168,18 +168,20 @@ def main(
         try:
             outcome = inspect(base, run_nonce)
         # A read timeout or a dropped connection can surface from http.client below
-        # urllib's wrapper, so the raw exceptions are caught here too. URLError is an
-        # OSError, and TimeoutError is one as well.
-        except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+        # urllib's wrapper, so the raw exceptions are caught here too. URLError and
+        # TimeoutError are both subclasses of OSError.
+        except (http.client.HTTPException, OSError) as error:
             outcome = Outcome([f"network error: {error!r}"], retryable=True)
         if not outcome.problems:
             print(f"ok: the landing, docs, and 404 panes under {base} match")
             return 0
         print(f"attempt {attempt}/{ATTEMPTS}: " + "; ".join(p.splitlines()[0] for p in outcome.problems))
-        if outcome.default_404:
+        if outcome.retryable:
+            retry = True
+        elif outcome.default_404:
             retry = attempt < DEFAULT_404_ATTEMPTS
         else:
-            retry = outcome.retryable
+            retry = False
         if not retry or attempt == ATTEMPTS:
             break
         if clock() - started + DELAY_SECONDS > BUDGET_SECONDS:
