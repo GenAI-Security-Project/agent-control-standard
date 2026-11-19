@@ -591,3 +591,20 @@ def test_image_installs_the_claims_packages_by_hash():
     assert install, "no uv pip install step"
     for flag in ("--require-hashes", "--no-deps", "--only-binary :all:", "--python /opt/acs/adapters/.venv/bin/python"):
         assert flag in install.group(0), flag
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Final review
+# ---------------------------------------------------------------------------------------------------------------------
+
+def test_services_that_write_only_mounts_run_read_only():
+    # They write only to tmpfs mounts and ./state, so a compromised service can't change its own image files.
+    for name in ("acs-gateway", "acs-guardian", "acs-viewer", "opa"):
+        assert _services()[name].get("read_only") is True, name
+
+
+def test_redis_keeps_only_the_capabilities_its_user_drop_needs():
+    redis = _services()["redis"]
+    assert redis["cap_drop"] == ["ALL"]
+    assert sorted(redis.get("cap_add", [])) == ["SETGID", "SETUID"]
+    assert redis["security_opt"] == ["no-new-privileges:true"]

@@ -91,6 +91,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    # The image's entrypoint starts as root and drops to the redis user with su-exec, which needs only these two.
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
@@ -165,6 +168,8 @@ services:
       timeout: 5s
       retries: 30
       start_period: 10s
+    # Writes go only to the tmpfs mounts and ./state, so the image's own files stay as built.
+    read_only: true
     cap_drop: [ALL]
     cap_add: *copy-caps
     security_opt: ["no-new-privileges:true"]
@@ -220,6 +225,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+    read_only: true
     cap_drop: [ALL]
     cap_add: *copy-caps
     security_opt: ["no-new-privileges:true"]
@@ -234,6 +240,7 @@ services:
       - ./policy:/policy:ro
     networks:
       - acs-net
+    read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
@@ -263,6 +270,7 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+    read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
