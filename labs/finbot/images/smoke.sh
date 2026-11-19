@@ -33,8 +33,11 @@ approver_port=$(env_value LAB_PORT_APPROVER)
 viewer_port=$(env_value LAB_PORT_VIEWER)
 jaeger_port=$(env_value LAB_PORT_JAEGER)
 
-if [ -e state/secrets/openai.key ] || [ "$(env_value ACS_UPSTREAM)" = openai ]; then
-    fail "a model key or the openai upstream is configured. The smoke run needs replay with no key"
+# lab reset keeps the model key by default, so this line names the one command that deletes it.
+if [ -e state/secrets/openai.key ]; then
+    fail "state/secrets/openai.key holds a model key. The smoke run needs replay with no key: run ./lab.sh reset --delete-model-key, then init and up"
+elif [ "$(env_value ACS_UPSTREAM)" = openai ]; then
+    fail "the openai upstream is configured. The smoke run needs replay: run ./lab.sh upstream replay"
 else
     pass "replay upstream, no model key anywhere in the bundle"
 fi
@@ -74,7 +77,7 @@ fi
 # every run, never checked, and a change in what FinBot reaches shows in the log. "@gateway" is the container's default
 # route, which is the host on a Linux bridge network. host.docker.internal is the host on Docker Desktop.
 reach_probe='# lab-reach-record
-import socket, struct, sys
+import socket, struct, sys, threading, time
 def default_route():
     with open("/proc/net/route") as f:
         for line in f.read().splitlines()[1:]:
@@ -82,11 +85,41 @@ def default_route():
             if fields[1] == "00000000":
                 return socket.inet_ntoa(struct.pack("<L", int(fields[2], 16)))
     raise OSError("no default route")
+# The 2-second bound covers the name lookup too. getaddrinfo takes no timeout, so it runs on a daemon thread, which
+# the interpreter abandons at exit if the resolver never answers.
+def connect(host, port, bound):
+    deadline = time.monotonic() + bound
+    found = []
+    def lookup():
+        try:
+            found.append(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except OSError as e:
+            found.append(e)
+    worker = threading.Thread(target=lookup, daemon=True)
+    worker.start()
+    worker.join(bound)
+    if not found:
+        raise TimeoutError()
+    if isinstance(found[0], OSError):
+        raise found[0]
+    error = OSError("no address")
+    for family, kind, proto, _, address in found[0]:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError()
+        try:
+            with socket.socket(family, kind, proto) as sock:
+                sock.settimeout(left)
+                sock.connect(address)
+            return
+        except OSError as e:
+            error = e
+    raise error
 args = sys.argv[1:]
 for host, port in zip(args[::2], args[1::2]):
     try:
         address = default_route() if host == "@gateway" else host
-        socket.create_connection((address, int(port)), 2).close()
+        connect(address, int(port), 2)
         print(f"reaches {host}:{port}")
     except OSError as e:
         print(f"cannot reach {host}:{port} ({type(e).__name__})")'
@@ -94,7 +127,8 @@ reach_targets="acs-gateway 8090"
 for port in "${finbot_port:-8000}" "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}"; do
     reach_targets="$reach_targets host.docker.internal $port @gateway $port"
 done
-reach_targets="$reach_targets example.com 443"
+# 11434 is Ollama's default port. On Docker Desktop FinBot could send model traffic there without the gateway.
+reach_targets="$reach_targets host.docker.internal 11434 @gateway 11434 example.com 443"
 printf 'NOTE: what FinBot reaches from finbot-net, recorded and not checked (the residual the LAB-15 review accepted)\n'
 # shellcheck disable=SC2086
 if reach=$(in_service finbot python -c "$reach_probe" $reach_targets 2>&1); then

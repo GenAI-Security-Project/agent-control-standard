@@ -9,8 +9,12 @@ Run from the repository root: python3 -m pytest labs/finbot/images/tests/test_sm
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import socket
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -86,6 +90,9 @@ def test_smoke_probes_the_approver_the_host_and_the_internet_from_finbot(bundle)
         assert f"host.docker.internal:{port}" in targets, port
         assert f"@gateway:{port}" in targets, port
     assert "example.com:443" in targets
+    # A model served on the host, such as Ollama, is model traffic that never passes the gateway (LAB-15 re-review).
+    assert "host.docker.internal:11434" in targets
+    assert "@gateway:11434" in targets
 
 
 def test_smoke_writes_the_record_and_never_fails_on_it(bundle):
@@ -100,3 +107,52 @@ def test_smoke_writes_the_record_and_never_fails_on_it(bundle):
     assert [line for line in other.stdout.splitlines() if not line.startswith("NOTE:")] == \
         [line for line in lines if not line.startswith("NOTE:")]
     assert other.returncode == result.returncode
+
+
+def test_a_kept_model_key_names_the_reset_flag(bundle):
+    # lab reset keeps openai.key by default, so the run that trips on it names the one command that deletes it.
+    (bundle / "state" / "secrets").mkdir(parents=True)
+    (bundle / "state" / "secrets" / "openai.key").write_text("sk-dummy\n", encoding="utf-8")
+    result, _ = run_smoke(bundle)
+    key_lines = [line for line in result.stdout.splitlines() if "openai.key" in line]
+    assert len(key_lines) == 1 and key_lines[0].startswith("NOT YET:"), result.stdout
+    assert "./lab.sh reset --delete-model-key" in key_lines[0]
+    assert result.returncode == 1
+
+
+def _reach_probe() -> str:
+    text = SMOKE.read_text(encoding="utf-8")
+    match = re.search(r"^reach_probe='(.*?)'$", text, re.S | re.M)
+    assert match, "no reach_probe in smoke.sh"
+    return match.group(1)
+
+
+def test_the_probe_bound_covers_the_name_lookup(tmp_path):
+    # A slow resolver must not stretch the run: the 2-second bound covers the DNS lookup as well as the connect.
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    port = listener.getsockname()[1]
+    # The probe reads its targets from sys.argv[1:], so the wrapper's own first argument, the probe path, is
+    # dropped before it runs.
+    probe = tmp_path / "probe.py"
+    probe.write_text(_reach_probe(), encoding="utf-8")
+    slow = ("import runpy, socket, sys, time\n"
+            "real = socket.getaddrinfo\n"
+            "def lookup(host, *args, **kwargs):\n"
+            "    if host == 'slow.invalid':\n"
+            "        time.sleep(30)\n"
+            "    return real(host, *args, **kwargs)\n"
+            "socket.getaddrinfo = lookup\n"
+            "path = sys.argv.pop(1)\n"
+            "runpy.run_path(path, run_name='__main__')\n")
+    started = time.monotonic()
+    try:
+        done = subprocess.run([sys.executable, "-c", slow, str(probe), "slow.invalid", "443", "127.0.0.1",
+                               str(port)], capture_output=True, text=True, timeout=20)
+    finally:
+        listener.close()
+    elapsed = time.monotonic() - started
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["cannot reach slow.invalid:443 (TimeoutError)", f"reaches 127.0.0.1:{port}"]
+    assert elapsed < 6, elapsed
