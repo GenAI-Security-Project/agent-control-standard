@@ -40,7 +40,7 @@
 /mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @almogbhl
 /overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -67,7 +67,7 @@
 # so the Reference Implementation lead and three more maintainers are owners as well,
 # and those pull requests do not all wait on the same two reviewers. Every handle here
 # holds write access, because GitHub silently ignores one that does not.
-/adapters/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc @Lrd0036 @e2hln
+/adapters/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc @Lrd0036 @e2hln @almogbhl
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
