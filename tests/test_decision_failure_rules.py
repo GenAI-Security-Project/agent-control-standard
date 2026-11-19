@@ -139,3 +139,9 @@ def test_a_decision_that_arrives_after_the_timeout_changes_nothing():
     assert "a decision that arrives after the timeout leaves that outcome as it is" in conformance
     faq = (ROOT / "docs" / "topics" / "faq.md").read_text(encoding="utf-8")
     assert "keep that outcome when a decision arrives after the timeout" in faq
+
+
+def test_a_gating_hook_blocks_when_it_breaks():
+    honoring = _section("### 6.4 Honoring decisions (normative)", "### 6.5")
+    assert "A deployment SHOULD configure every hook that gates an action so that the host blocks the action when the hook fails" in honoring
+    assert '`"onFailure": "block"` in Claude Code and `"failClosed": true` in Cursor' in honoring
