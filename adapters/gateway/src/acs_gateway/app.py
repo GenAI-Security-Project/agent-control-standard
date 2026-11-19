@@ -20,6 +20,7 @@ import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.background import BackgroundTask
+from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
@@ -1475,13 +1476,44 @@ def _parse(raw: bytes) -> Any:
         return None
 
 
+class ClientTokenGate:
+    """The model port's client check (final review R8, issue #588), in front of every route.
+
+    A request passes only with `Authorization: Bearer <token>`, compared in constant time. Anything else gets the
+    Responses API's own 401 before the gateway reads the body, so a refused call reaches no upstream, never has the
+    model key swapped in, and leaves no model input line. The refusal is audited without the header's value.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode("utf-8")
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        given = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
+        # One header, exactly the expected bytes. compare_digest runs in time that doesn't depend on where they differ.
+        if len(given) == 1 and hmac.compare_digest(given[0], self.expected):
+            await self.app(scope, receive, send)
+            return
+        _audit("client_unauthorized", cause="missing" if not given else "wrong", method=scope.get("method"),
+               path=scope.get("path"))
+        response = openai_error(401, "Incorrect API key provided.", "invalid_request_error", "invalid_api_key")
+        await response(scope, receive, send)
+
+
 def create_app(config: GatewayConfig) -> Starlette:
+    # Read first, so a bad token file stops startup before anything else is built.
+    token = (load_secret_file(config.client_token_file, "ACS_GATEWAY_CLIENT_TOKEN_FILE")
+             if config.client_token_file is not None else None)
     gateway = Gateway(config)
     routes = [
         Route("/v1/responses", gateway.responses, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
         Route("/{path:path}", gateway.not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
     ]
-    app = Starlette(routes=routes, lifespan=gateway.lifespan)
+    middleware = [Middleware(ClientTokenGate, token=token)] if token is not None else []
+    app = Starlette(routes=routes, middleware=middleware, lifespan=gateway.lifespan)
     app.state.gateway = gateway
     return app
 
