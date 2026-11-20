@@ -1568,12 +1568,16 @@ def load_client_token(path: Path) -> str:
 def check_distinct_tokens(config: GatewayConfig) -> None:
     """Refuses a client token equal to the admin or approver token. The model port's client is the governed agent,
     so with the approver secret it could release its own held calls, and with the admin secret reset the epoch.
-    The error names the two settings, never the values."""
+    The error names the two settings, never the values.
+
+    Each file is read only when its listener runs, as cli.main reads it: the admin token with an admin port, the
+    approver token with an approver port in enforce. A file left set for an unused listener never stops startup."""
     if config.client_token_file is None:
         return
     client = load_client_token(config.client_token_file).encode("utf-8")
-    others = [("ACS_GATEWAY_ADMIN_TOKEN_FILE", config.admin_token_file),
-              ("ACS_GATEWAY_APPROVER_TOKEN_FILE", config.approver_token_file)]
+    approver_runs = config.mode == "enforce" and config.approver_port is not None
+    others = [("ACS_GATEWAY_ADMIN_TOKEN_FILE", config.admin_token_file if config.admin_port is not None else None),
+              ("ACS_GATEWAY_APPROVER_TOKEN_FILE", config.approver_token_file if approver_runs else None)]
     for name, path in others:
         if path is None:
             continue

@@ -178,12 +178,44 @@ def test_the_client_token_must_differ_from_the_admin_and_approver_tokens(tmp_pat
                                      "ACS_RECORDINGS_DIR": str(tmp_path), "ACS_GATEWAY_CLIENT_TOKEN_FILE": str(shared)})
     field = {"ACS_GATEWAY_ADMIN_TOKEN_FILE": "admin_token_file",
              "ACS_GATEWAY_APPROVER_TOKEN_FILE": "approver_token_file"}[other]
+    port = {"ACS_GATEWAY_ADMIN_TOKEN_FILE": {"admin_port": 18090},
+            "ACS_GATEWAY_APPROVER_TOKEN_FILE": {"approver_port": 18091, "mode": "enforce"}}[other]
     copy = secret(tmp_path, "other.token", TOKEN)
     with pytest.raises(ValueError) as raised:
-        check_distinct_tokens(replace(config, **{field: copy}))
+        check_distinct_tokens(replace(config, **{field: copy}, **port))
     assert "ACS_GATEWAY_CLIENT_TOKEN_FILE" in str(raised.value) and other in str(raised.value)
     assert TOKEN not in str(raised.value)
-    check_distinct_tokens(replace(config, **{field: secret(tmp_path, "distinct.token", "d" * 64)}))
+    check_distinct_tokens(replace(config, **{field: secret(tmp_path, "distinct.token", "d" * 64)}, **port))
+
+
+@pytest.mark.parametrize("field", ["admin_token_file", "approver_token_file"])
+def test_an_unused_admin_or_approver_token_file_is_never_read(tmp_path, field):
+    # 0.1.5 read the admin and approver token files only when their listeners run. A file left in the environment
+    # for an unused listener, missing or loose, must not stop startup now either.
+    from acs_gateway.app import check_distinct_tokens
+
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_UPSTREAM": "replay",
+                                     "ACS_RECORDINGS_DIR": str(tmp_path),
+                                     "ACS_GATEWAY_CLIENT_TOKEN_FILE": str(token_file(tmp_path))})
+    check_distinct_tokens(replace(config, **{field: tmp_path / "missing.token"}))
+    check_distinct_tokens(replace(config, **{field: secret(tmp_path, "loose.token", TOKEN, 0o644)}))
+    check_distinct_tokens(replace(config, **{field: secret(tmp_path, "same.token", TOKEN)}))
+
+
+def test_startup_ignores_a_missing_admin_token_file_without_an_admin_port(monkeypatch, capsys, tmp_path):
+    served: list = []
+
+    async def fake_serve(servers):
+        served.append(len(servers))
+        return 0
+
+    monkeypatch.setattr(cli, "_serve", fake_serve)
+    (tmp_path / "rec").mkdir()
+    code, err = run_main(monkeypatch, capsys, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"),
+                         ACS_GATEWAY_STATE_DIR=str(tmp_path), ACS_GATEWAY_CLIENT_TOKEN_FILE=str(token_file(tmp_path)),
+                         ACS_GATEWAY_ADMIN_TOKEN_FILE=str(tmp_path / "missing.token"))
+    assert code == 0, err
+    assert served == [1]
 
 
 def test_startup_refuses_an_admin_token_equal_to_the_client_token(monkeypatch, capsys, tmp_path):
