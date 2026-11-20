@@ -36,6 +36,9 @@ const sessionContextLog = process.env.ACS_SESSION_CONTEXT_LOG ?? DEFAULT_SESSION
 // passed in, like ACS_ENVELOPE_LOG: server.ts reads no env itself.
 const otelTraceFile = process.env.ACS_OTEL_FILE;
 const otelTraceEndpoint = process.env.ACS_OTEL_ENDPOINT;
+// Plain http to a host that is not loopback sends spans across the network
+// unencrypted, so the exporter refuses it unless this is exactly 1.
+const otelAllowPlaintextEndpoint = process.env.ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT === "1";
 // The proxy variables are environment too, so they are read and edited here
 // and never by the exporter. The warning judges them as the operator set
 // them, before the edit: Bun 1.3.11 ignores a runtime edit, and there the
@@ -74,6 +77,7 @@ const guardian = await startGuardian({
   sessionContextLog,
   otelTraceFile,
   otelTraceEndpoint,
+  otelAllowPlaintextEndpoint,
 });
 console.log(`Guardian listening at ${guardian.url}`);
 console.log(`Envelope log: ${envelopeLogPath}`);

@@ -176,3 +176,64 @@ describe("main.ts applies the loopback proxy exemption", () => {
     15_000,
   );
 });
+
+// Issue #283: plain http to a host that is not loopback needs an explicit
+// opt-in, and main.ts is the one place that reads it. No step is posted in
+// these tests, so the Guardian has no span to send and nothing reaches
+// 10.0.0.1.
+describe("main.ts reads the plain http opt-in", () => {
+  const ENDPOINT = "http://10.0.0.1:4318/v1/traces";
+
+  /** Starts the Guardian against ENDPOINT and returns its stderr, read until
+   * `expected` shows up or the runtime's watchdog ends the process. */
+  async function stderrUntil(expected: string, env: Record<string, string>): Promise<string> {
+    const proc = Bun.spawn([process.execPath, GUARDIAN], {
+      cwd: scratch(),
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: process.env.HOME ?? "",
+        NO_COLOR: "1",
+        ACS_GUARDIAN_PORT: "0",
+        ACS_MANIFEST_PATH: MANIFEST,
+        ACS_OTEL_ENDPOINT: ENDPOINT,
+        ...env,
+      },
+      stdout: "ignore",
+      stderr: "pipe",
+      timeout: 3_000,
+    });
+    const decoder = new TextDecoder();
+    let stderr = "";
+    for await (const chunk of proc.stderr) {
+      stderr += decoder.decode(chunk, { stream: true });
+      if (stderr.includes(expected)) {
+        proc.kill();
+      }
+    }
+    proc.kill();
+    await proc.exited;
+    return stderr;
+  }
+
+  it("refuses the endpoint on stderr when ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT is unset", async () => {
+    const refused =
+      `otel trace export to ${ENDPOINT} disabled after failure: refusing plain http to 10.0.0.1, which is not a loopback host: ` +
+      "spans would cross the network unencrypted. Use an https endpoint, or set ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 to send them anyway.";
+    expect(await stderrUntil(refused, {})).toContain(refused);
+  });
+
+  it("warns on stderr instead when ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT is 1", async () => {
+    const warning =
+      `otel trace export to ${ENDPOINT}: ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 is set, so spans go to 10.0.0.1 over plain http, unencrypted. ` +
+      "Use an https endpoint unless every hop to that host is trusted.";
+    const stderr = await stderrUntil(warning, { ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT: "1" });
+    expect(stderr).toContain(warning);
+    expect(stderr).not.toContain("refusing plain http");
+  });
+
+  it("takes only the value 1 as the opt-in", async () => {
+    expect(await stderrUntil("refusing plain http to 10.0.0.1", { ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT: "true" })).toContain(
+      "refusing plain http to 10.0.0.1, which is not a loopback host",
+    );
+  });
+});

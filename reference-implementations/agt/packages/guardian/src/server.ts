@@ -343,6 +343,11 @@ export type StartGuardianOptions = {
   /** OTLP/HTTP traces endpoint. Omitted means no span is sent. main.ts
    * threads ACS_OTEL_ENDPOINT into this. */
   otelTraceEndpoint?: string;
+  /** Lets `otelTraceEndpoint` be plain http to a host that is not loopback.
+   * Without it such an endpoint is refused and no span is sent, because the
+   * spans would cross the network unencrypted. main.ts threads
+   * ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT into this. */
+  otelAllowPlaintextEndpoint?: boolean;
   /** Overrides the trace exporter entirely, bypassing both paths above.
    * Exists so a test can read spans back in-process or stand in one that
    * fails. Not meant for production use. */
@@ -416,6 +421,7 @@ export async function startGuardian({
   sessionContextStore: sessionContextStoreOverride,
   otelTraceFile,
   otelTraceEndpoint,
+  otelAllowPlaintextEndpoint,
   traceExporter: traceExporterOverride,
 }: StartGuardianOptions): Promise<StartedGuardian> {
   // Construct the bridge once at boot, not per request -- and through the
@@ -453,6 +459,7 @@ export async function startGuardian({
       ? createOtelTraceExporter({
           filePath: otelTraceFile,
           endpoint: otelTraceEndpoint,
+          allowPlaintextEndpoint: otelAllowPlaintextEndpoint,
           methodsEvaluated: hello.methods_evaluated,
           timeoutConfig: hello.timeout_config,
           posture: hello.on_decision_failure === "deny" ? "fail_closed" : "fail_open",
