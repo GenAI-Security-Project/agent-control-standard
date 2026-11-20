@@ -60,15 +60,26 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
     "uid": "exec-123",
     "cmd_line": "tools/call:database_query"
   },
+  "enrichments": [
+    {
+      "name": "acs_provenance_origin",
+      "value": "user_input",
+      "data": { "provenance_id": "p1", "origin": "user_input", "source_id": "user-12345" }
+    },
+    {
+      "name": "acs_provenance_source_id",
+      "value": "user-12345",
+      "data": { "provenance_id": "p1", "origin": "user_input", "source_id": "user-12345" }
+    }
+  ],
   "unmapped": {
     "acs": {
+      "method": "steps/toolCallRequest",
       "request_id": "3f6c1e2a-8b4d-4c1e-9a7f-2d5b6e8c9a01",
       "session_id": "6b1f2c9e-4d7a-4e3b-8a51-9c0d2e7f1a36",
-      "step": { "id": "step-abc", "type": "toolCallRequest", "turn_id": "turn-456" },
-      "tool": { "id": "database_query", "execution_id": "exec-123", "capability": "datastore.read" },
-      "provenance": [
-        { "provenance_id": "p1", "origin": "user_input", "source_id": "user-12345" }
-      ]
+      "agent_id": "agent-123",
+      "tool": { "name": "database_query" },
+      "capability": "datastore.read"
     }
   }
 }
@@ -163,8 +174,8 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
         "format": "canonical",
         "component_count": 7,
         "components": [
-          { "type": "model", "id": "gpt-4o", "provider": "OpenAI" },
-          { "type": "mcp_server", "id": "db-mcp", "endpoint": "https://mcp.internal/db" },
+          { "type": "model", "id": "model-primary", "provider": "Example Model Co" },
+          { "type": "mcp_server", "id": "db-mcp", "endpoint": "https://mcp.example.com/db" },
           { "type": "tool", "id": "database_query", "capability": "datastore.read" }
         ]
       }
@@ -178,6 +189,6 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 - **`actor.user.type_id: 99`** is the OCSF "Other" sentinel; pair with `actor.user.type: "AI Agent"` so SIEM filters can distinguish agent identities from human ones.
 - **Native fields first.** SIEM content reads native fields, not `unmapped`. A decision event puts the join pair in `metadata.correlation_uid`, the agent and the gated action in `evidences`, and the policies in `authorizations`. The example above shows each, and the [Trace Events](./events.md#ocsf-event-classes) page has the rules, including what a late decision carries.
 - **`unmapped.acs`** carries ACS-specific facts that don't have direct OCSF equivalents in OCSF 1.9.0. On a step event it carries `request_id`, `session_id`, and facts from the request that have no OCSF attribute of their own. On a decision event it carries the fields that `join_fields` and `acs_fields` in `ocsf-mapping.json` list. Backends that index `unmapped` keep this fully searchable.
-- **Provenance** flows onto OCSF events under `unmapped.acs.provenance`. Trust classification is omitted on the wire for v0.1; backends that compute trust apply it as an enrichment step.
+- **Provenance** flows onto OCSF events as `enrichments`. The mapping requires an enrichment named `acs_provenance_origin` and allows one named `acs_provenance_source_id`. The example above carries the full Provenance object in each enrichment's `data`. Trust classification stays off the wire in specification v0.1.0, and a backend that computes trust applies it in its own enrichment step.
 
-For more worked examples — including A2A and MCP wrapped events — see [Implementation examples](./OCSF/implementation_examples.md).
+For code that builds these events from an ACS exchange, and SIEM queries that read them, see [OCSF Implementation Examples](./OCSF/implementation_examples.md).

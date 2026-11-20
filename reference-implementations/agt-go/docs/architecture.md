@@ -15,13 +15,16 @@ flowchart LR
     OH --> HA
     HA -->|"POST /acs, signed request"| G["guardian.Guardian"]
     G -.->|"signed decision"| HA
+    Hosts["Claude Code, Cursor or NAT"] -->|"hook or middleware"| PA["reference adapters in adapters/"]
+    PA -->|"POST /acs, signed request"| G
+    G -.->|"signed decision"| PA
     G --> S["Signer"]
     G --> SC["SessionContextStore"]
     G --> AL["AuditLog"]
     G --> PE["PolicyEngine"]
 ```
 
-Solid arrows are calls. The dashed arrow is the signed decision coming back.
+Solid arrows are calls. The dashed arrows are the signed decisions coming back. The Python reference adapters reach the same endpoint with no Go code of their own, as [Run with the reference adapters](adapters.md) describes.
 
 ### The four interfaces
 
@@ -272,7 +275,7 @@ sequenceDiagram
     G-->>OA: decision
 ```
 
-ACS v0.1.0 defines no wire method for the approver's answer (#175).
+ACS v0.1.0 defines no wire method for the approver's answer.
 
 ### The DEFER scenario
 
@@ -295,7 +298,7 @@ sequenceDiagram
     G-->>OA: final decision
 ```
 
-ACS v0.1.0 defines no way to tell the Observed Agent that a DEFER is resolved (#14), so the
+ACS v0.1.0 defines no way to tell the Observed Agent that a DEFER is resolved, so the
 Observed Agent sends the action again. An engine that has not resolved the case answers DEFER again. A
 session gets at most `MaxDeferrals` DEFER answers, 3 by default; the next one is DENY
 `deferral_bound_exceeded`.

@@ -20,7 +20,9 @@ flowchart LR
     DET -->|"allow / deny / modify / ask / defer"| OA
 ```
 
-## What v0.1.0 ships
+The Guardians in release 0.1.5 run the deterministic layer only. None of them ships an LLM layer.
+
+## What specification v0.1.0 defines
 
 `v0.1.0` is the specification version, which names the schema namespace, and a release can update the schemas inside it. The release number changes with each release, as the [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) record.
 
@@ -35,134 +37,9 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
 ## Trustworthy agents are
 
-??? example "Init agent with ACS"
+ACS publishes no SDK, so this page shows the wire messages themselves rather than library calls ([D-033](./decisions/index.md#d-033-remove-sdk-examples-from-the-documentation)). Every example below follows the v0.1.0 schemas and mapping files.
 
-    === "LangChain (Python)"
-
-        ```python
-        from langchain.agents import initialize_agent, Tool
-        from langchain.llms import OpenAI
-        from acs import ACSInstrument
-        
-        # Initialize LLM and tools
-        llm = OpenAI(temperature=0)
-        tools = [
-            Tool(
-                name="Search",
-                func=search_api,
-                description="Search the web for information"
-            ),
-            Tool(
-                name="Calculator", 
-                func=calculate,
-                description="Perform mathematical calculations"
-            )
-        ]
-        
-        # Create agent with ACS instrumentation
-        agent = initialize_agent(
-            tools, 
-            llm, 
-            agent="zero-shot-react-description",
-            verbose=True
-        )
-        
-        # Wrap with ACS for observability
-        acs_agent = ACSInstrument(agent)
-        ```
-
-    === "Vercel AI SDK (TypeScript)"
-
-        ```typescript
-        import { createAgent } from '@vercel/ai'
-        import { ACSInstrument } from '@acs/sdk'
-        
-        // Define tools
-        const tools = {
-          search: {
-            description: 'Search the web for information',
-            parameters: z.object({
-              query: z.string()
-            }),
-            execute: async ({ query }) => searchAPI(query)
-          },
-          calculate: {
-            description: 'Perform mathematical calculations',
-            parameters: z.object({
-              expression: z.string()
-            }),
-            execute: async ({ expression }) => evaluate(expression)
-          }
-        }
-        
-        // Create agent with ACS instrumentation
-        const agent = createAgent({
-          model: 'gpt-4',
-          tools,
-          system: 'You are a helpful assistant'
-        })
-        
-        const acsAgent = new ACSInstrument(agent)
-        ```
-
-    === "MCP"
-
-        ```json
-        {
-          "jsonrpc": "2.0",
-          "method": "agent/create",
-          "params": {
-            "name": "research-assistant",
-            "capabilities": {
-              "tools": ["search", "calculate"],
-              "models": ["claude-3-opus"],
-              "protocols": ["mcp", "acs"]
-            },
-            "acs": {
-              "instrumentation": {
-                "enabled": true,
-                "hooks": ["agentTrigger", "toolCallRequest", "message"]
-              },
-              "trace": {
-                "format": "opentelemetry",
-                "endpoint": "https://observability.example.com/v1/traces"
-              }
-            }
-          }
-        }
-        ```
-
-    === "A2A"
-
-        ```yaml
-        # Agent manifest with ACS capabilities
-        apiVersion: a2a.io/v1
-        kind: Agent
-        metadata:
-          name: research-assistant
-          namespace: production
-        spec:
-          model:
-            provider: anthropic
-            name: claude-3-opus
-          capabilities:
-            - search
-            - calculate
-          observability:
-            acs:
-              version: "1.0"
-              instrumentation:
-                hooks:
-                  - agentTrigger
-                  - toolCallRequest
-                  - message
-              trace:
-                provider: opentelemetry
-                endpoint: https://telemetry.example.com
-              inspect:
-                format: cyclonedx
-                dynamic: true
-        ```
+To watch an agent governed today, run one of the reference implementations that release 0.1.5 ships. Adapters govern Claude Code, Cursor and NVIDIA NAT through each host's own hook or middleware configuration, with no agent code changes. In its enforce mode, a gateway governs any OpenAI Responses API client. [What runs in release 0.1.5](./spec/instrument/README.md#what-runs-in-release-015) lists each one, the hooks it covers and how it fails.
 
 ### Instrumentable
 
@@ -244,7 +121,7 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
         - **Signatures.** ACS-Core requires signatures on this request and response. Remove `params.signature` from the request or `result.signature` from the response, canonicalize the remaining envelope with JCS, and encode it as UTF-8 before signing ([§10](./spec/instrument/specification.md#10-cryptographic-signatures)). The `value` fields above are placeholders. The identifiers and `chain_hash` are sample values.
         - **Chain head.** The Guardian publishes `chain_hash` on every content-bearing step, so an observer can detect a rewritten audit chain ([§8.6](./spec/instrument/specification.md#86-chain-head-publication-normative)).
         - **MODIFY support.** `modify` is SHOULD-support. A client that doesn't implement it receives `deny` with `reason_codes: ["modify_unsupported"]` instead ([§6.5](./spec/instrument/specification.md#65-modify-incapable-clients-normative)).
-        - **Protocols.** An MCP `tools/call` can travel through this same hook ([Instrument MCP](./spec/instrument/extend_mcp.md)). A2A wrapping is reserved for v0.2.
+        - **Protocols.** An MCP `tools/call` can travel through this same hook ([Instrument MCP](./spec/instrument/extend_mcp.md)). A2A wrapping is planned for specification v0.2.0.
 
 ### Traceable
 
@@ -256,125 +133,44 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
     **Standards**: [ACS Trace](./spec/trace/README.md). Extends [OpenTelemetry](./spec/trace/extend_opentelemetry.md), [OCSF](./spec/trace/extend_ocsf.md).
 
-    === "LangChain (Python)"
+    === "OpenTelemetry"
 
-        ```python
-        from opentelemetry import trace
-        from acs.trace import ACSTraceProvider
-        
-        # Configure OpenTelemetry with ACS extensions
-        tracer = trace.get_tracer(
-            "research-assistant",
-            provider=ACSTraceProvider()
-        )
-        
-        # Agent execution with automatic tracing
-        with tracer.start_as_current_span("agent_session") as span:
-            span.set_attribute("acs.session.id", "sess_123")
-            span.set_attribute("acs.agent.name", "research-assistant")
-            
-            result = await acs_agent.run("Find recent AI safety papers")
-        
-        # Trace output includes:
-        # - Complete reasoning chain
-        # - Tool calls with parameters
-        # - Model interactions
-        # - Decision points
-        ```
-        
+        This is the span a Guardian exports for the `steps/toolCallRequest` exchange in [Instrumentable](#instrumentable), in the OTLP/JSON shape that [Trace with OpenTelemetry](./spec/trace/extend_opentelemetry.md) describes. The span name and attributes come from [`trace/otel-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/otel-mapping.json). The trace and span identifiers are sample values.
+
         ```json
         {
           "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
           "spanId": "00f067aa0ba902b7",
-          "operationName": "agent_session",
-          "startTime": "2024-01-15T10:30:00Z",
-          "attributes": {
-            "acs.session.id": "sess_123",
-            "acs.agent.name": "research-assistant",
-            "acs.reasoning.steps": 3,
-            "acs.tools.called": ["web-search", "summarize"]
-          },
+          "name": "gen_ai.tool.call",
+          "kind": 1,
+          "startTimeUnixNano": "1791882900000000000",
+          "endTimeUnixNano": "1791882900042000000",
+          "attributes": [
+            { "key": "acs.session.id", "value": { "stringValue": "17a301f1-6d17-4941-8bea-92320f0773aa" } },
+            { "key": "acs.request_id", "value": { "stringValue": "c329d5a4-97ae-44c8-986d-77d1da194ab7" } },
+            { "key": "gen_ai.tool.name", "value": { "stringValue": "database_query" } },
+            { "key": "acs.capability", "value": { "stringValue": "datastore.read" } }
+          ],
           "events": [
             {
-              "name": "acs.step.reasoning",
-              "timestamp": "2024-01-15T10:30:01Z",
-              "attributes": {
-                "thought": "Need to search for recent AI safety papers",
-                "action": "tool_call",
-                "tool": "web-search"
-              }
+              "name": "acs.decision",
+              "timeUnixNano": "1791882900042000000",
+              "attributes": [
+                { "key": "acs.decision", "value": { "stringValue": "modify" } },
+                { "key": "acs.evaluator", "value": { "stringValue": "deterministic" } },
+                { "key": "acs.reasoning", "value": { "stringValue": "Narrowed the query to two columns and 100 rows. A full customer export violates the data-protection policy." } },
+                { "key": "acs.reason_codes", "value": { "arrayValue": { "values": [{ "stringValue": "pii_detected" }] } } },
+                { "key": "acs.policy.ids", "value": { "arrayValue": { "values": [{ "stringValue": "data-protection" }] } } },
+                { "key": "acs.policy.versions", "value": { "arrayValue": { "values": [{ "stringValue": "" }] } } },
+                { "key": "acs.policy.rule_ids", "value": { "arrayValue": { "values": [{ "stringValue": "limit-customer-export" }] } } },
+                { "key": "acs.chain_hash", "value": { "stringValue": "25d878e6726ecf3bd9ee823d7642bdd78f148c0db5c06a585d16bc23494e2175" } }
+              ]
             }
           ]
         }
         ```
 
-    === "Vercel AI (TypeScript)"
-
-        ```typescript
-        import { OpenTelemetryTracer } from '@acs/trace'
-        
-        // Configure tracing for TypeScript agent
-        const tracer = new OpenTelemetryTracer({
-          serviceName: 'research-assistant',
-          endpoint: 'https://telemetry.example.com'
-        })
-        
-        // Wrap agent with tracing
-        const tracedAgent = tracer.instrument(acsAgent)
-        
-        // Execute with automatic tracing
-        const result = await tracedAgent.run('Find recent AI safety papers')
-        
-        // Trace includes same comprehensive data as Python example
-        ```
-
-    === "MCP"
-
-        ```json
-        {
-          "jsonrpc": "2.0",
-          "method": "acs/trace/emit",
-          "params": {
-            "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
-            "spanId": "00f067aa0ba902b7",
-            "event": {
-              "type": "agent.execution",
-              "timestamp": "2024-01-15T10:30:00Z",
-              "attributes": {
-                "session.id": "sess_123",
-                "agent.name": "research-assistant",
-                "reasoning.steps": 3,
-                "tools.called": ["web-search", "summarize"]
-              }
-            }
-          }
-        }
-        ```
-
-    === "A2A"
-
-        ```yaml
-        # A2A trace event
-        apiVersion: a2a.io/v1
-        kind: TraceEvent
-        metadata:
-          traceId: "4bf92f3577b34da6a3ce929d0e0e4736"
-          spanId: "00f067aa0ba902b7"
-          timestamp: "2024-01-15T10:30:00Z"
-        spec:
-          eventType: agent.execution
-          agent:
-            name: research-assistant
-            session: sess_123
-          execution:
-            reasoningSteps: 3
-            toolsCalled:
-              - web-search
-              - summarize
-          observability:
-            format: opentelemetry
-            endpoint: https://telemetry.example.com
-        ```
+        The step is a span and the decision is an `acs.decision` event on it, so the verdict and the action it gates share a parent. A reader joins this span to the Observed Agent's own record on `acs.session.id` plus `acs.request_id`. `acs.policy.versions` holds `""` because the response's policy reference carries no version, which keeps the three policy arrays aligned by position. The event records what the Guardian decided. Only the Observed Agent knows what it applied, and [Trace Events](./spec/trace/events.md) gives the rule for counting a decision as enforced.
 
     === "OCSF"
 
@@ -459,283 +255,211 @@ See [Conformance Profiles](./spec/conformance.md) for what each profile requires
 
         `metadata.correlation_uid` repeats the step's pair as `<session_id>:<request_id>`, because SIEM content reads native fields, not `unmapped`. The Guardian's decision is a separate trace event with the same `correlation_uid`, so a SIEM can join the two on that one field. This example shows the step event only, with no attached provenance.
 
-    === "Real-time Streaming"
-
-        ```typescript
-        import { ACSTraceStream } from '@acs/trace'
-        
-        // Stream trace events in real-time
-        const traceStream = new ACSTraceStream(acsAgent)
-        
-        traceStream.on('event', (event) => {
-          // Log to your observability platform
-          console.log(`[${event.timestamp}] ${event.type}:`, event.data)
-          
-          // Send to security monitoring
-          if (event.severity === 'high') {
-            alertSecurityTeam(event)
-          }
-        })
-        
-        // Enable streaming
-        await traceStream.start()
-        
-        // Example output during agent execution:
-        // [2024-01-15T10:30:01Z] session.start: {id: 'sess_789', user: 'alice'}
-        // [2024-01-15T10:30:02Z] reasoning.step: {thought: 'Analyzing request...'}
-        // [2024-01-15T10:30:03Z] tool.call: {name: 'database_query', risk: 'high'}
-        // [2024-01-15T10:30:04Z] security.alert: {reason: 'Sensitive data access'}
-        ```
-
 ### Inspectable
 
 ???+ example "Agent Bill of Materials (AgBOM)"
 
     **Value**: Dynamic agent-aware bill-of-material.
 
-    **Description**: Specifies properties that capture tools, models and capabilities of an AI agent. Extends SBOM standard specs with these properties – AgBOM. Goes further to add dynamic updates to AgBOM to account for dynamic agent capability discovery.
+    **Description**: Specifies properties that capture tools, models and capabilities of an AI agent. Extends SBOM standard specs with these properties as the AgBOM. Goes further to add dynamic updates to AgBOM to account for dynamic agent capability discovery.
 
     **Standards**: [ACS Inspect](./spec/inspect/README.md). Extends [CycloneDX](./spec/inspect/extend_cyclonedx.md), [SPDX](./spec/inspect/extend_spdx.md), [SWID](./spec/inspect/extend_swid.md).
 
-    === "LangChain (Python)"
+    === "ACS wire (JSON-RPC)"
 
-        ```python
-        from acs.inspect import generate_agbom
-        
-        # Generate Agent Bill of Materials in CycloneDX format
-        agbom = generate_agbom(acs_agent, format="cyclonedx")
-        
-        print(agbom.to_json(indent=2))
+        Once per session, after `steps/sessionStart` and before any content-bearing hook, the Observed Agent sends its canonical AgBOM as [`agbom/snapshot`](./spec/inspect/README.md#wire-methods). This agent declares one model, one tool and one capability that uses the tool:
+
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "method": "agbom/snapshot",
+          "id": "rpc-41",
+          "params": {
+            "acs_version": "0.1.0",
+            "request_id": "74813fc2-69d8-4dfc-a4fb-6fb60a47f70d",
+            "timestamp": "2026-10-13T09:14:59Z",
+            "metadata": {
+              "agent_id": "research-assistant",
+              "session_id": "17a301f1-6d17-4941-8bea-92320f0773aa"
+            },
+            "payload": {
+              "trigger": "session_start",
+              "agbom": {
+                "agbom_version": "0.1.0",
+                "agent": {
+                  "agent_id": "research-assistant",
+                  "name": "Research assistant",
+                  "version": "1.0.0"
+                },
+                "generated_at": "2026-10-13T09:14:59Z",
+                "components": [
+                  {
+                    "id": "model-primary",
+                    "type": "model",
+                    "name": "example-model",
+                    "version": "2026-08-01",
+                    "provider": "Example Model Co",
+                    "endpoint": "https://models.example.com/v1",
+                    "model_fields": {
+                      "context_window": 128000
+                    },
+                    "registration_provenance": {
+                      "provenance_id": "prov-agbom-1",
+                      "origin": "system",
+                      "source_id": "agent-config.yaml"
+                    }
+                  },
+                  {
+                    "id": "tool-database-query",
+                    "type": "tool",
+                    "name": "database_query",
+                    "version": "1.4.0",
+                    "provider": "Example Corp",
+                    "tool_fields": {
+                      "capability": "datastore.read"
+                    },
+                    "registration_provenance": {
+                      "provenance_id": "prov-agbom-2",
+                      "origin": "system",
+                      "source_id": "agent-config.yaml"
+                    }
+                  },
+                  {
+                    "id": "cap-reporting",
+                    "type": "agent_capability",
+                    "name": "customer-reporting",
+                    "agent_capability_fields": {
+                      "description": "Summarize customer records for weekly reports.",
+                      "tools": [
+                        "tool-database-query"
+                      ]
+                    }
+                  }
+                ],
+                "agbom_hash": "6cdbeb20fb5a8d75d60f140022a93adb77ddb7373a73fd21d1afbfda468a96a4"
+              }
+            },
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without params.signature)>",
+              "key_id": "acs-hmac-key-1"
+            }
+          }
+        }
         ```
-        
+
+        The Guardian checks the inventory against its policy and answers `allow`. A Guardian MAY answer `deny` to refuse a session whose inventory holds a banned component. The snapshot enters the session's audit chain, so the answer publishes `chain_hash`:
+
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "id": "rpc-41",
+          "result": {
+            "type": "final",
+            "acs_version": "0.1.0",
+            "request_id": "74813fc2-69d8-4dfc-a4fb-6fb60a47f70d",
+            "decision": "allow",
+            "reasoning": "No component in this AgBOM is on the deployment's ban list.",
+            "chain_hash": "77a0ab0d8bade5213c6e497552ad689b6c27bc195c12f9fee936007e37157f38",
+            "signature": {
+              "algorithm": "HMAC-SHA256",
+              "value": "<base64 HMAC-SHA256 over UTF-8 JCS(envelope without result.signature)>",
+              "key_id": "acs-hmac-key-1"
+            }
+          }
+        }
+        ```
+
+        Components refer to each other by `id`, never by nesting, so two snapshots diff cleanly. `registration_provenance` records how each component entered the inventory, here from the agent's configuration file. `agbom_hash` is the SHA-256 of the JCS form of the document without `agbom_hash`, so a Guardian can tell a changed inventory from a re-sent one. The `value` fields in `signature` are placeholders, and the identifiers and `chain_hash` are sample values.
+
+        The reference implementations in release 0.1.5 don't send `agbom/snapshot` yet. The canonical schema is [`agbom/document.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/document.json).
+
+    === "CycloneDX 1.6"
+
+        The Observed Agent always sends the canonical form. When a downstream consumer asks for CycloneDX, the Guardian derives it from the same document by the rules in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json):
+
         ```json
         {
           "bomFormat": "CycloneDX",
-          "specVersion": "1.5",
+          "specVersion": "1.6",
           "version": 1,
           "metadata": {
-            "timestamp": "2024-01-15T10:30:00Z",
+            "timestamp": "2026-10-13T09:14:59Z",
+            "tools": {
+              "components": [
+                {
+                  "type": "application",
+                  "name": "example-agent-framework",
+                  "version": "2.3.0"
+                }
+              ]
+            },
             "component": {
-              "type": "ai-agent",
-              "name": "research-assistant",
+              "type": "application",
+              "bom-ref": "research-assistant",
+              "name": "Research assistant",
               "version": "1.0.0"
             }
           },
           "components": [
             {
-              "type": "ai-model",
-              "name": "gpt-4",
-              "version": "2024-01-01",
-              "supplier": "OpenAI",
+              "type": "machine-learning-model",
+              "bom-ref": "model-primary",
+              "name": "example-model",
+              "version": "2026-08-01",
+              "supplier": {
+                "name": "Example Model Co"
+              },
               "properties": [
-                {"name": "parameters", "value": "175B"},
-                {"name": "context_window", "value": "128000"}
+                {
+                  "name": "acs:provenance:origin",
+                  "value": "system"
+                },
+                {
+                  "name": "acs:provenance:source_id",
+                  "value": "agent-config.yaml"
+                }
               ]
             },
             {
-              "type": "tool",
-              "name": "web-search",
-              "version": "2.1.0",
-              "description": "Search the web for information"
+              "type": "application",
+              "bom-ref": "tool-database-query",
+              "name": "database_query",
+              "version": "1.4.0",
+              "supplier": {
+                "name": "Example Corp"
+              },
+              "properties": [
+                {
+                  "name": "acs:provenance:origin",
+                  "value": "system"
+                },
+                {
+                  "name": "acs:provenance:source_id",
+                  "value": "agent-config.yaml"
+                }
+              ]
+            }
+          ],
+          "compositions": [
+            {
+              "bom-ref": "cap-reporting",
+              "aggregate": "complete",
+              "assemblies": [
+                "tool-database-query"
+              ]
             }
           ]
         }
         ```
 
-    === "Vercel AI (TypeScript)"
-
-        ```typescript
-        import { generateAgBOM } from '@acs/inspect'
-        
-        // Generate AgBOM in CycloneDX format for TypeScript agent
-        const agbom = await generateAgBOM(acsAgent, {
-          format: 'cyclonedx'
-        })
-        
-        console.log(JSON.stringify(agbom, null, 2))
-        // Output matches Python example structure
-        ```
-
-    === "MCP Protocol"
-
-        ```json
-        {
-          "jsonrpc": "2.0",
-          "method": "acs/agbom/generate",
-          "params": {
-            "format": "cyclonedx",
-            "agent_id": "research-assistant"
-          }
-        }
-        
-        // Response
-        {
-          "jsonrpc": "2.0",
-          "result": {
-            "bomFormat": "CycloneDX",
-            "specVersion": "1.5",
-            "version": 1,
-            "metadata": {
-              "timestamp": "2024-01-15T10:30:00Z",
-              "component": {
-                "type": "ai-agent",
-                "name": "research-assistant",
-                "version": "1.0.0"
-              }
-            },
-            "components": [
-              {
-                "type": "ai-model",
-                "name": "claude-3-opus",
-                "version": "2024-01-01",
-                "supplier": "Anthropic"
-              }
-            ]
-          }
-        }
-        ```
-
-    === "A2A"
-
-        ```yaml
-        # Request AgBOM via A2A
-        apiVersion: a2a.io/v1
-        kind: AgBOMRequest
-        metadata:
-          name: research-assistant-agbom
-        spec:
-          agent: research-assistant
-          format: cyclonedx
-          includeRuntime: true
-        ---
-        # Response
-        apiVersion: a2a.io/v1
-        kind: AgBOM
-        metadata:
-          name: research-assistant-agbom
-          timestamp: "2024-01-15T10:30:00Z"
-        spec:
-          format: cyclonedx
-          version: "1.0.0"
-          components:
-            - type: ai-agent
-              name: research-assistant
-              models:
-                - name: claude-3-opus
-                  version: "2024-01-01"
-                  supplier: Anthropic
-              tools:
-                - name: web-search
-                  version: "2.1.0"
-        ```
-
-    === "SPDX"
-
-        ```python
-        from acs.inspect import generate_agbom
-        
-        # Generate Agent Bill of Materials in SPDX format
-        agbom = generate_agbom(acs_agent, format="spdx")
-        
-        print(agbom.to_string())
-        ```
-        
-        ```text
-        SPDXVersion: SPDX-2.3
-        DataLicense: CC0-1.0
-        SPDXID: SPDXRef-DOCUMENT
-        DocumentName: research-assistant-agbom
-        DocumentNamespace: https://example.com/agbom/research-assistant
-        Creator: Tool: acs-sdk-1.0
-        Created: 2024-01-15T10:30:00Z
-        
-        # Package: AI Agent
-        PackageName: research-assistant
-        SPDXID: SPDXRef-Agent
-        PackageVersion: 1.0.0
-        PackageSupplier: Organization: Example Corp
-        PackageDownloadLocation: NOASSERTION
-        
-        # AI Model Component
-        PackageName: gpt-4
-        SPDXID: SPDXRef-Model-GPT4
-        PackageVersion: 2024-01-01
-        PackageSupplier: Organization: OpenAI
-        PackageProperty: ModelParameters: 175B
-        PackageProperty: ContextWindow: 128000
-        
-        # Tool Component  
-        PackageName: web-search
-        SPDXID: SPDXRef-Tool-WebSearch
-        PackageVersion: 2.1.0
-        PackageDescription: Search the web for information
-        ```
-
-    === "Dynamic Discovery"
-
-        ```python
-        from acs.inspect import DynamicAgBOM
-        import asyncio
-        
-        # Enable dynamic AgBOM updates
-        dynamic_agbom = DynamicAgBOM(acs_agent)
-        
-        # Subscribe to capability changes
-        @dynamic_agbom.on_update
-        async def on_capability_change(event):
-            print(f"Agent capability changed: {event.change_type}")
-            print(f"Component: {event.component}")
-            
-            # Automatically update AgBOM
-            new_agbom = await dynamic_agbom.regenerate()
-            
-            # Notify security systems
-            await notify_security_team(new_agbom)
-        
-        # Example: Agent discovers new tool at runtime
-        await acs_agent.run("I need to analyze this PDF document")
-        
-        # Output:
-        # Agent capability changed: COMPONENT_ADDED
-        # Component: {"type": "tool", "name": "pdf-analyzer", "version": "1.2.0"}
-        # 
-        # New component automatically added to AgBOM
-        ```
-
-    === "Real-time Updates"
-
-        ```typescript
-        import { DynamicAgBOM, AgBOMEvent } from '@acs/inspect'
-        
-        // Create dynamic AgBOM monitor
-        const dynamicAgBOM = new DynamicAgBOM(acsAgent)
-        
-        // Listen for capability changes
-        dynamicAgBOM.on('update', async (event: AgBOMEvent) => {
-          console.log(`Capability ${event.changeType}: ${event.component.name}`)
-          
-          // Get updated AgBOM
-          const currentAgBOM = await dynamicAgBOM.getCurrent()
-          
-          // Validate against policies
-          const validation = await validateAgainstPolicy(currentAgBOM)
-          
-          if (!validation.approved) {
-            // Disable unapproved capability
-            await acsAgent.disableComponent(event.component.id)
-            console.warn(`Disabled unapproved component: ${event.component.name}`)
-          }
-        })
-        
-        // Example output when agent adds new model:
-        // Capability ADDED: claude-3-opus
-        // Validating against policy...
-        // Component approved and active
-        ```
+        Each component keeps its canonical `id` as its `bom-ref`. The model becomes a `machine-learning-model` and the tool an `application`. The capability becomes a CycloneDX composition that aggregates the components it references, and provenance rides in `acs:provenance:*` properties. [AgBOM with CycloneDX](./spec/inspect/extend_cyclonedx.md) gives the full table, and the SPDX and SWID pages give the other two derivations.
 
 ## Read Next
 
 - [Core concepts](./topics/core_concepts.md)
+- [Run a Guardian](./topics/reference-implementations.md)
+- [What runs in release 0.1.5](./spec/instrument/README.md#what-runs-in-release-015)
 - [Instrument](./spec/instrument/README.md)
 - [Trace](./spec/trace/README.md)
 - [Inspect](./spec/inspect/README.md)

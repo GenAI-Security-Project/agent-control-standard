@@ -13,14 +13,14 @@ This adapter is that command. On every hook event Cursor spawns it as a subproce
 3. Signs it with HMAC-SHA256 (`ACS_HMAC_SECRET_FILE`, under the label `ACS_HMAC_KEY_ID`).
 4. POSTs to the Guardian.
 5. Verifies the response signature.
-6. Translates the verdict back to Cursor's expected output shape and writes to stdout (or exits with code 2 for `beforeSubmitPrompt`).
+6. Translates the verdict back to Cursor's expected output shape and writes it to stdout with exit code 0. For `beforeSubmitPrompt`, a block is `{"continue": false}`.
 7. Exits.
 
 The handshake/hello fires once per session, cached on disk so subsequent events skip the round-trip.
 
 ### Decision honoring (§6.4)
 
-ACS-Core §6.4 requires the framework to wait for the verdict and apply it before the action executes. Cursor provides this guarantee through its hook protocol: like Claude Code, the adapter is invoked as a blocking subprocess and Cursor reads its stdout (or exit code, for `beforeSubmitPrompt`) for the decision before the action runs. Cursor also provides a native `failClosed: true` flag per hook entry that we set on gate hooks for defense in depth.
+ACS-Core §6.4 requires the framework to wait for the verdict and apply it before the action executes. Cursor provides this guarantee through its hook protocol: like Claude Code, the adapter is invoked as a blocking subprocess and Cursor reads its stdout for the decision (for `beforeSubmitPrompt`, the `continue` field) before the action runs. Cursor also provides a native `failClosed: true` flag per hook entry that we set on gate hooks for defense in depth.
 
 ## Install — five steps
 
@@ -151,7 +151,7 @@ Run from `adapters/`:
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py cursor
-# Runs the shared Guardian, _common, core, client and package checks, then Cursor's suite.
+# Runs the shared Guardian, _common, core, client, package and benchmarks checks, then Cursor's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The manual Cursor procedure is an expected skip in headless runs.
@@ -207,7 +207,7 @@ acs-cursor-hook preToolUse 2>&1 <<'EOF'
 EOF
 ```
 
-Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, signed with its own secret. The hook cannot verify that answer, so it refuses the session whatever the posture (spec issue #32), and stdout carries a deny:
+Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, signed with its own secret. The hook cannot verify that answer, so it refuses the session whatever the posture ([D-040](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals)), and stdout carries a deny:
 
 ```
 ACS_AUDIT {"acs_audit_event": "session_refused", "cause": "error_signature_invalid", "claimed_cause": "signature_invalid_response", "claimed_error_code": -32004, ...}
@@ -230,8 +230,8 @@ Expected: the handshake gets no answer, so the session has no negotiated Guardia
 ```
 ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_closed", ...}
 ACS_AUDIT {"acs_audit_event": "session_not_started_fail_closed", "cause": "transport_failure", ..., "event": "preToolUse", ...}
-```
 {"permission": "deny", "user_message": "ACS adapter: session not started (transport_failure)", "agent_message": "ACS adapter: session not started (transport_failure)"}
+```
 
 Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`session_not_started_fail_closed`, or `unguarded_session_bypass` under `ACS_STARTUP_POSTURE=proceed`). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 
@@ -296,7 +296,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
-| `ACS_DEFAULT_DENY` | (unset) | Unset, or any value but `0`: a step with no usable decision is denied. `0`: it proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins); this is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
+| `ACS_DEFAULT_DENY` | (unset) | Unset, or any value but `0`: a step with no usable decision is denied. `0`: it proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins). This is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting. See [D-040](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals). |
 | `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
@@ -352,7 +352,7 @@ These hooks are emitted only when Cursor's `hooks.json` wires them to the adapte
 | Symptom | Likely cause |
 |---|---|
 | Cursor's agent runs commands as if no Guardian exists | Cursor reads `hooks.json` at startup. **Restart Cursor** after `acs-cursor-wire --write`. |
-| Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
+| Every tool call is denied with `session not started (transport_failure)`, and the Guardian terminal is silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your hooks.json). Stderr shows an `ACS_AUDIT` line with `"cause": "transport_failure"`. |
 | Every tool call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and a step with no usable decision is denied unless the hook sets `ACS_DEFAULT_DENY=0`. Check the Guardian process is running. |
 | Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. The file's directory must also be readable by the adapter, not only traversable: a 0711 directory fails with `its directory ... cannot be opened` (`SecretFileUnreadableError`). Fix: `chmod a+r` on that directory. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |

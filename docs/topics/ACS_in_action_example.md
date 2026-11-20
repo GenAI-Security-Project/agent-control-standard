@@ -4,7 +4,7 @@ A worked example of an Observed Agent calling the `email.send` tool, with a Guar
 
 ## Sequence
 
-The diagram below shows the whole walkthrough: one handshake, one AgBOM snapshot, a tool call the Guardian evaluates and traces, and the result.
+The diagram below shows the whole walkthrough: one handshake, the session start, one AgBOM snapshot, a tool call the Guardian evaluates and traces, and the result.
 
 ```mermaid
 sequenceDiagram
@@ -14,11 +14,11 @@ sequenceDiagram
 
     O->>G: handshake/hello
     G-->>O: ServerHello
-    O->>G: agbom/snapshot
-    G->>T: Trace acs.agbom
-    G-->>O: allow
     O->>G: steps/sessionStart
     Note right of G: Open chain root
+    G-->>O: allow
+    O->>G: agbom/snapshot
+    G->>T: Trace acs.agbom
     G-->>O: allow
     O->>G: steps/userMessage
     G-->>O: allow
@@ -35,7 +35,7 @@ sequenceDiagram
 
 The Observed Agent has been asked by a user to "summarize Project X status and email it to my manager." The agent has retrieved the status (untrusted, from a knowledge base), composed a body via the LLM (agent_generated, derived from the retrieval), and is about to call `email.send`. The Guardian must decide.
 
-This example shows a deployment that elects to populate the OPTIONAL `trust` field on the wire. An equally-conformant v0.1 deployment would omit `trust` from the Provenance objects and have the Guardian derive the same classification from `origin` + `source_id` against local policy.
+The Provenance objects carry no trust value. The Guardian derives each classification from `origin` and `source_id` against local policy, as [Trust basis](../concepts/trust.md) explains.
 
 ### Request
 
@@ -249,6 +249,7 @@ Audit replay walks `policy_references` to reconstruct each paradigm's contributi
 
 ## Read Next
 
+- [Run a Guardian](./reference-implementations.md)
 - [Instrument](../spec/instrument/README.md)
 - [Trace](../spec/trace/README.md)
 - [Inspect](../spec/inspect/README.md)
