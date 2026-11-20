@@ -14,10 +14,10 @@ Never file a public issue or pull request for a suspected security vulnerability
 
 ## Human accountability and workflow rules
 
-1. **A person answers for everything.** Do not open a pull request, file an issue, submit a review, post a comment, or mutate upstream repository or workflow state (such as direct pushes, `gh` mutations, or workflow reruns) unless the person running you approves that specific action. Nothing posts or mutates upstream unattended. Before marking a pull request ready for review, the human author must be able to explain every change without the tool. See [Authorship and AI assistance](./CONTRIBUTING.md#authorship-and-ai-assistance) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
-2. **Work starts from an assigned issue.** Any pull request that changes behavior, normative text, or code requires an issue labeled `status:accepted` that a project or workstream lead assigned to the contributor before the pull request opens. Editorial fixes—typos, grammar, broken links, and formatting that leave meaning unchanged—need no issue. See [How work gets accepted](./CONTRIBUTING.md#how-work-gets-accepted) and [Triage authority](./GOVERNANCE.md#triage-authority).
+1. **A person answers for everything.** Do not open a pull request, file an issue, submit a review, post a comment, or mutate upstream repository or workflow state (such as direct pushes, `gh` mutations, or workflow reruns) unless the person running you approves that specific action. Nothing posts or mutates upstream unattended. Before marking a pull request ready for review, the human author must be able to explain every change without the tool. See [Answer for Your Account](./CODE_OF_CONDUCT.md#answer-for-your-account) and [Authorship and AI assistance](./CONTRIBUTING.md#authorship-and-ai-assistance).
+2. **Work starts from an assigned issue.** Any pull request that changes behavior, normative text, or code requires an issue labeled `status:accepted` that a project or workstream lead assigned to the contributor before the pull request opens. Editorial fixes—typos, grammar, broken links, and formatting that leave meaning unchanged—need no issue. A pull request opened before the assignment gets closed, with an invitation to reopen once a lead assigns the work. See [Start From an Assigned Issue](./CODE_OF_CONDUCT.md#start-from-an-assigned-issue), [How work gets accepted](./CONTRIBUTING.md#how-work-gets-accepted), and [Triage authority](./GOVERNANCE.md#triage-authority).
 3. **Spec changes start as a Discussion.** Start changes to the JSON schemas, hook set, or event catalog in [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions), not a pull request. Load [SPEC_REVIEW_PRINCIPLES.md](./SPEC_REVIEW_PRINCIPLES.md) when designing or critiquing specification changes. See [Development Process](./CONTRIBUTING.md#development-process).
-4. **No bulk activity.** Work on one item at a time and keep a small queue of open items. Do not batch-open issues, pull requests, or comments. See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) for conduct and participation limits.
+4. **No bulk activity.** Post one item at a time, and keep open pull requests and assigned issues within the limits in [Keep Your Queue Small](./CODE_OF_CONDUCT.md#keep-your-queue-small). Do not batch-open issues, pull requests, reviews, or comments.
 
 ## Commits and branches
 
@@ -39,7 +39,7 @@ For changes under `adapters/`, also run the adapter conformance suite in its own
 
 ## Review guidelines
 
-Review a pull request only when a person explicitly asks you to review it. See [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+Approve or request changes only when the pull request's author or a lead asked for the review, or when the person running you is a code owner for the changed paths. Anyone may leave a comment review that reports a specific finding someone else can reproduce. Review one pull request at a time, and post nothing until the person running you approves it. See [Review When Asked, and Show Your Work](./CODE_OF_CONDUCT.md#review-when-asked-and-show-your-work).
 
 A summary of the diff is not a review. Every review or approval states:
 
