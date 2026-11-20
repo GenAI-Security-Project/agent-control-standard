@@ -1,5 +1,20 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -599,6 +614,24 @@ describe("audit-to-otlp: refuses an output that already exists", () => {
       const out = join(dir, "otel.jsonl");
       await expect(convertAuditLog(join(dir, "missing.jsonl"), out)).rejects.toThrow();
       expect(existsSync(out)).toBe(false);
+    }));
+
+  // Issue #283: the exporter refuses these directories, and the converter
+  // asks before it creates its output, so nothing is left to block a rerun.
+  it.skipIf(process.platform === "win32")("creates no output in a directory the exporter refuses", () =>
+    inScratch(async (dir, audit) => {
+      const open = join(dir, "open");
+      mkdirSync(open);
+      chmodSync(open, 0o777);
+      await expect(convertAuditLog(audit, join(open, "otel.jsonl"))).rejects.toThrow(/writable by every user$/);
+      expect(readdirSync(open)).toEqual([]);
+
+      const real = join(dir, "real");
+      mkdirSync(real, { mode: 0o700 });
+      const linked = join(dir, "linked");
+      symlinkSync(real, linked);
+      await expect(convertAuditLog(audit, join(linked, "otel.jsonl"))).rejects.toThrow(/is a symbolic link$/);
+      expect(readdirSync(real)).toEqual([]);
     }));
 
   it("writes a new output owner-only, creating its directory owner-only", () =>

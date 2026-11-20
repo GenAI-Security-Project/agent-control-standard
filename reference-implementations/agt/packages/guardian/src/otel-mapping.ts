@@ -219,6 +219,14 @@ export function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+// An error code too large to be exact is kept at the nearest safe bound
+// instead of being dropped, and a fraction is kept so it never matches a
+// rejection code by accident.
+export function asClampedErrorCode(value: unknown): number | undefined {
+  if (typeof value !== "number" || Number.isNaN(value)) return undefined;
+  return Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, value));
+}
+
 /** A non-empty array of strings, or nothing. An empty array is carried by
  * the wire (`policy_references: []` on an envelope-invalid deny) but says
  * nothing a reader can use, so it is not emitted. */
