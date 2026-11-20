@@ -1513,8 +1513,7 @@ class ClientTokenGate:
 
 def create_app(config: GatewayConfig) -> Starlette:
     # Read first, so a bad token file stops startup before anything else is built.
-    token = (load_secret_file(config.client_token_file, "ACS_GATEWAY_CLIENT_TOKEN_FILE")
-             if config.client_token_file is not None else None)
+    token = load_client_token(config.client_token_file) if config.client_token_file is not None else None
     gateway = Gateway(config)
     routes = [
         Route("/v1/responses", gateway.responses, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
@@ -1544,6 +1543,43 @@ def load_secret_file(path: Path, name: str) -> str:
     if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
         raise ValueError(f"{name} {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
     return token
+
+
+MAX_CLIENT_TOKEN_BYTES = 4096
+
+
+def load_client_token(path: Path) -> str:
+    """The model port's client token: load_secret_file's rules, at most 4096 bytes, and one printable line.
+
+    One trailing newline is dropped, since editors and `echo` add it. Anything else that is whitespace or not
+    printable is refused, because a client can't send it in a header and every request would then get a 401 with
+    nothing to tell the operator why. No message carries the token.
+    """
+    name = "ACS_GATEWAY_CLIENT_TOKEN_FILE"
+    text = secretfile.read_secret_text(path, name, MAX_CLIENT_TOKEN_BYTES)
+    token = text[:-1] if text.endswith("\n") else text
+    if any(c.isspace() or not c.isprintable() for c in token):
+        raise ValueError(f"{name} {path} must hold the token on one line, with no spaces or control characters")
+    if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
+        raise ValueError(f"{name} {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
+    return token
+
+
+def check_distinct_tokens(config: GatewayConfig) -> None:
+    """Refuses a client token equal to the admin or approver token. The model port's client is the governed agent,
+    so with the approver secret it could release its own held calls, and with the admin secret reset the epoch.
+    The error names the two settings, never the values."""
+    if config.client_token_file is None:
+        return
+    client = load_client_token(config.client_token_file).encode("utf-8")
+    others = [("ACS_GATEWAY_ADMIN_TOKEN_FILE", config.admin_token_file),
+              ("ACS_GATEWAY_APPROVER_TOKEN_FILE", config.approver_token_file)]
+    for name, path in others:
+        if path is None:
+            continue
+        if hmac.compare_digest(client, load_secret_file(path, name).encode("utf-8")):
+            raise ValueError(f"ACS_GATEWAY_CLIENT_TOKEN_FILE and {name} hold the same token. The model port's "
+                             "clients must not hold a secret that governs the gateway, so give each its own token")
 
 
 def create_admin_app(gateway: Gateway, token: str) -> Starlette:

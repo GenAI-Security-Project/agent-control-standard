@@ -5,6 +5,7 @@ through the bridge network, so the port takes a bearer token from ACS_GATEWAY_CL
 any upstream call or key swap, in replay as in live.
 """
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -104,11 +105,16 @@ def test_a_key_file_needs_the_client_token(tmp_path):
                                 "ACS_UPSTREAM_KEY_FILE": str(secret(tmp_path, "openai.key", KEY))})
 
 
-def test_live_without_a_key_file_refuses_a_client_token(tmp_path):
-    # The client's own Authorization header goes upstream in that mode, so it would carry the token there.
-    with pytest.raises(ValueError, match="ACS_GATEWAY_CLIENT_TOKEN_FILE"):
+@pytest.mark.parametrize("mode", [{}, {"ACS_UPSTREAM": "live"}, {"ACS_UPSTREAM": "openai"},
+                                  {"ACS_UPSTREAM": "capture", "ACS_RECORDINGS_DIR": "rec"},
+                                  {"ACS_CAPTURE": "1", "ACS_RECORDINGS_DIR": "rec"}])
+def test_every_forwarding_mode_without_a_key_file_refuses_a_client_token(tmp_path, mode):
+    # Live and capture send the client's own Authorization header upstream, so it would carry the token to a third
+    # party. Only replay, which forwards nothing, takes a token without a key file.
+    env = {k: str(tmp_path / v) if k == "ACS_RECORDINGS_DIR" else v for k, v in mode.items()}
+    with pytest.raises(ValueError, match="ACS_GATEWAY_CLIENT_TOKEN_FILE needs ACS_UPSTREAM_KEY_FILE"):
         GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path),
-                                "ACS_GATEWAY_CLIENT_TOKEN_FILE": str(token_file(tmp_path))})
+                                "ACS_GATEWAY_CLIENT_TOKEN_FILE": str(token_file(tmp_path)), **env})
 
 
 def run_main(monkeypatch, capsys, **env):
@@ -126,17 +132,73 @@ def test_live_refuses_to_start_without_the_token_file(monkeypatch, capsys, tmp_p
     assert "ACS_GATEWAY_CLIENT_TOKEN_FILE" in err and KEY not in err
 
 
-@pytest.mark.parametrize(("text", "mode", "why"), [(TOKEN, 0o644, "0600"), ("short", 0o600, "32 bytes")])
+HALF = "h" * 32
+
+
+@pytest.mark.parametrize(("text", "mode", "why"), [
+    (TOKEN, 0o644, "0600"),
+    ("short", 0o600, "32 bytes"),
+    ("t" * 5000, 0o600, "4096 bytes"),
+    (f"{HALF}\n{HALF}", 0o600, "one line"),
+    (f"{HALF} {HALF}", 0o600, "one line"),
+    (f" {TOKEN}", 0o600, "one line"),
+    (f"{HALF}\x07{HALF}", 0o600, "one line"),
+    (f"{TOKEN}\r", 0o600, "one line"),
+])
 def test_a_bad_token_file_stops_startup(monkeypatch, capsys, tmp_path, text, mode, why):
+    # A header can't carry a newline, a space splits the scheme from the token, and a control character never
+    # survives a client library. Each would leave every client with a 401 and the operator with no clue, so startup
+    # refuses the file and says why, without the file's content.
+    monkeypatch.setattr(cli, "_serve", _never_serve)
     (tmp_path / "rec").mkdir()
     code, err = run_main(monkeypatch, capsys, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"),
                          ACS_GATEWAY_CLIENT_TOKEN_FILE=str(secret(tmp_path, "client.token", text, mode)))
     assert code == 2
-    assert why in err and text not in err
+    assert why in err and text.strip() not in err and HALF not in err
 
 
-def drive_gate(scope: dict) -> tuple[list, list]:
-    """Runs ClientTokenGate on a raw ASGI scope. Returns the scopes the inner app saw and the messages sent back."""
+async def _never_serve(servers):
+    raise AssertionError("startup should have been refused before serving")
+
+
+def test_a_token_file_with_one_trailing_newline_loads(tmp_path):
+    from acs_gateway.app import load_client_token
+
+    assert load_client_token(token_file(tmp_path)) == TOKEN
+
+
+@pytest.mark.parametrize("other", ["ACS_GATEWAY_ADMIN_TOKEN_FILE", "ACS_GATEWAY_APPROVER_TOKEN_FILE"])
+def test_the_client_token_must_differ_from_the_admin_and_approver_tokens(tmp_path, other):
+    # The model port's client is the governed agent. Holding the approver secret would let it release its own held
+    # calls, and the admin secret would let it reset the epoch.
+    from acs_gateway.app import check_distinct_tokens
+
+    shared = token_file(tmp_path)
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_UPSTREAM": "replay",
+                                     "ACS_RECORDINGS_DIR": str(tmp_path), "ACS_GATEWAY_CLIENT_TOKEN_FILE": str(shared)})
+    field = {"ACS_GATEWAY_ADMIN_TOKEN_FILE": "admin_token_file",
+             "ACS_GATEWAY_APPROVER_TOKEN_FILE": "approver_token_file"}[other]
+    copy = secret(tmp_path, "other.token", TOKEN)
+    with pytest.raises(ValueError) as raised:
+        check_distinct_tokens(replace(config, **{field: copy}))
+    assert "ACS_GATEWAY_CLIENT_TOKEN_FILE" in str(raised.value) and other in str(raised.value)
+    assert TOKEN not in str(raised.value)
+    check_distinct_tokens(replace(config, **{field: secret(tmp_path, "distinct.token", "d" * 64)}))
+
+
+def test_startup_refuses_an_admin_token_equal_to_the_client_token(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "_serve", _never_serve)
+    (tmp_path / "rec").mkdir()
+    code, err = run_main(monkeypatch, capsys, ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec"),
+                         ACS_GATEWAY_STATE_DIR=str(tmp_path), ACS_GATEWAY_CLIENT_TOKEN_FILE=str(token_file(tmp_path)),
+                         ACS_GATEWAY_ADMIN_PORT="0", ACS_GATEWAY_ADMIN_TOKEN_FILE=str(secret(tmp_path, "a.token", TOKEN)))
+    assert code == 2
+    assert "ACS_GATEWAY_ADMIN_TOKEN_FILE" in err and TOKEN not in err
+
+
+def drive_gate(scope: dict, received: list | None = None) -> tuple[list, list]:
+    """Runs ClientTokenGate on a raw ASGI scope. Returns the scopes the inner app saw and the messages sent back.
+    Each call the gate makes to receive is appended to received when given."""
     import asyncio
 
     from acs_gateway.app import ClientTokenGate
@@ -148,6 +210,10 @@ def drive_gate(scope: dict) -> tuple[list, list]:
         reached.append(scope["type"])
 
     async def receive():
+        if received is not None:
+            received.append(scope["type"])
+        if scope["type"] == "http":
+            return {"type": "http.request", "body": b"{}", "more_body": False}
         return {"type": "websocket.connect"}
 
     async def send(message):
@@ -176,3 +242,60 @@ def test_the_gate_refuses_an_unknown_scope_type():
 def test_the_gate_passes_lifespan_through():
     reached, _ = drive_gate({"type": "lifespan"})
     assert reached == ["lifespan"]
+
+
+def http_scope(*headers: tuple[bytes, bytes]) -> dict:
+    return {"type": "http", "method": "POST", "path": "/v1/responses", "headers": list(headers),
+            "query_string": b"", "http_version": "1.1", "scheme": "http"}
+
+
+GOOD = (b"authorization", f"Bearer {TOKEN}".encode())
+
+
+@pytest.mark.parametrize("headers", [(), ((b"authorization", b"Bearer lab-dummy"),)])
+def test_a_refused_request_never_reads_the_body(headers):
+    # The check runs on the headers alone, so a caller without the token can't make the gateway buffer or
+    # decompress a body. A gate that drained receive first would still refuse, and this test is what catches it.
+    received: list = []
+    reached, sent = drive_gate(http_scope(*headers), received)
+    assert received == []
+    assert reached == []
+    assert sent[0]["type"] == "http.response.start" and sent[0]["status"] == 401
+
+
+def test_an_accepted_request_leaves_the_body_to_the_app():
+    received: list = []
+    reached, _ = drive_gate(http_scope(GOOD), received)
+    assert reached == ["http"] and received == []
+
+
+def test_two_authorization_headers_are_refused_even_when_both_hold_the_token(audit):
+    # Proxies and servers disagree on which of two headers wins, so the gate takes exactly one.
+    reached, sent = drive_gate(http_scope(GOOD, GOOD))
+    assert reached == []
+    assert sent[0]["status"] == 401
+    [event] = [e for e in audit() if e["acs_audit_event"] == "client_unauthorized"]
+    assert event["cause"] == "wrong"
+
+
+def test_the_gate_compares_the_token_in_constant_time(monkeypatch):
+    # A plain == can return at the first differing byte, which leaks the token a byte at a time to a caller who
+    # times the 401. The gate must use hmac.compare_digest, so this spies on it.
+    import hmac
+
+    from acs_gateway import app as app_module
+
+    calls: list = []
+    real = hmac.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr(app_module.hmac, "compare_digest", spy)
+    reached, _ = drive_gate(http_scope(GOOD))
+    assert reached == ["http"]
+    assert calls == [(GOOD[1], GOOD[1])]
+    calls.clear()
+    reached, _ = drive_gate(http_scope((b"authorization", b"Bearer " + b"x" * 64)))
+    assert reached == [] and len(calls) == 1

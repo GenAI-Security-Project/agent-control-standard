@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed: act on these before you upgrade
 
-- The gateway's model port now requires a client token whenever the gateway holds the model key. This is a breaking configuration change. A gateway that sets `ACS_UPSTREAM_KEY_FILE` refuses to start unless `ACS_GATEWAY_CLIENT_TOKEN_FILE` names a token file, a regular file the gateway's user owns, mode 0600 or 0400, with at least 32 bytes. Before you upgrade, create the file and give the token to every client of the model port, which sends it as `Authorization: Bearer <token>`. Every request without it gets a 401 `invalid_api_key` and never reaches the model upstream. Before this change, anyone who could reach the model port spent the operator's key. A gateway without a key file is unchanged. `adapters/gateway/README.md` describes the upgrade.
+- The gateway's model port now requires a client token whenever the gateway holds the model key. This is a breaking configuration change. A gateway that sets `ACS_UPSTREAM_KEY_FILE` refuses to start unless `ACS_GATEWAY_CLIENT_TOKEN_FILE` names a token file. It must be a regular file the gateway's user owns, mode 0600 or 0400, holding one line of 32 to 4096 bytes with no spaces or control characters, and it must not match the approver or admin token. Before you upgrade, create the file and give the token to every client of the model port, which sends it as `Authorization: Bearer <token>`. Every request without it gets a 401 `invalid_api_key` and never reaches the model upstream. Before this change, anyone who could reach the model port spent the operator's key. A gateway without a key file is unchanged. `adapters/gateway/README.md` describes the upgrade.
 
 ## [0.1.5] - 2026-11-20
 
