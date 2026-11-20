@@ -10,9 +10,12 @@
      The closing-choice check fails a reference with neither.
 
      A change that alters behavior, normative text, or adds code needs an issue carrying
-     `status:accepted`, with a lead assigning you. If yours is not accepted yet, open the
-     PR anyway. It will wait, and it may be closed if it waits a long time. See Current
-     Priority Scope in CONTRIBUTING.md. -->
+     `status:accepted` that a lead assigned to you before you opened this PR. If no lead
+     has assigned you yet, ask on the issue and wait for the assignment. A PR opened
+     before the assignment is closed, and you can reopen it once a lead assigns the work.
+     See "Start
+     From an Assigned Issue" in Part 2 of CODE_OF_CONDUCT.md, and Current Priority Scope
+     in CONTRIBUTING.md. -->
 
 - [ ] This is an editorial correction (typo, grammar, link, formatting) with no change in
       meaning, so it needs no issue
