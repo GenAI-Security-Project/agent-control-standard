@@ -72,9 +72,9 @@
 # Coding-agent instructions apply at every directory depth (Codex loads nested AGENTS.md
 # and gives AGENTS.override.md precedence). Placed after broader directory rules such as
 # /adapters/ and before /.github/ so nested instruction files keep the restricted owner
-# set without weakening the lead-only /.github/ rule.
-AGENTS.md          @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-AGENTS.override.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+# set plus the Documentation lead without weakening the lead-only /.github/ rule.
+AGENTS.md          @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
+AGENTS.override.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
