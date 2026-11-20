@@ -12,6 +12,10 @@ def config(tmp_path, **env):
     return GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), **env})
 
 
+# A key file needs the model port's client token (final review R8). Config records only the path.
+TOKEN_ENV = {"ACS_GATEWAY_CLIENT_TOKEN_FILE": "/run/acs/client.token"}
+
+
 def key_file(tmp_path: Path, text: str = KEY, mode: int = 0o600) -> Path:
     path = tmp_path / "keys" / "openai.key"
     path.parent.mkdir(exist_ok=True)
@@ -122,15 +126,17 @@ def test_capture_off_contradicting_capture_mode_is_refused(tmp_path):
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "gateway.lab"])
 def test_a_key_file_refuses_a_model_port_off_loopback(tmp_path, host):
-    """Security scan F1 and F2: the model port takes no client credential, so with a key file anyone who reaches it
-    spends the operator's key. The key file is allowed only on a loopback listener."""
-    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST"):
+    """Security scan F1 and F2: off loopback, more than this host's processes can reach the model port, so the key file
+    needs the operator's explicit opt-in. The message says the client token still gates who spends the key."""
+    with pytest.raises(ValueError, match="ACS_GATEWAY_HOST") as raised:
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host)
+    assert "every client holding the client token that can reach the model port" in str(raised.value)
 
 
 @pytest.mark.parametrize("host", ["", "127.0.0.1", "127.0.0.2", "::1", "localhost"])
 def test_a_key_file_is_accepted_on_a_loopback_model_port(tmp_path, host):
-    assert config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host).upstream_key_file
+    assert config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host,
+                  **TOKEN_ENV).upstream_key_file
 
 
 def test_a_model_port_off_loopback_without_a_key_file_is_unchanged(tmp_path):
@@ -146,7 +152,7 @@ def test_the_shared_key_opt_in_allows_a_model_port_off_loopback(tmp_path):
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0")
     with pytest.raises(ValueError, match="ACS_GATEWAY_HOST"):
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0", ACS_UPSTREAM_KEY_SHARED="0")
-    c = config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0", ACS_UPSTREAM_KEY_SHARED="1")
+    c = config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0", ACS_UPSTREAM_KEY_SHARED="1", **TOKEN_ENV)
     assert (c.listen_host, c.upstream_key_shared) == ("0.0.0.0", True)
 
 
@@ -161,9 +167,9 @@ def test_a_shared_key_says_so_once_at_startup(tmp_path, capfd):
 
     path = str(key_file(tmp_path))
     UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, ACS_GATEWAY_HOST="0.0.0.0",
-                          ACS_UPSTREAM_KEY_SHARED="1"))
+                          ACS_UPSTREAM_KEY_SHARED="1", **TOKEN_ENV))
     err = capfd.readouterr().err
     assert err.count("\n") == 1
-    assert "every client that can reach the model port" in err and KEY not in err
-    UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path))
+    assert "every client holding the client token that can reach the model port" in err and KEY not in err
+    UpstreamSource(config(tmp_path, ACS_UPSTREAM_KEY_FILE=path, **TOKEN_ENV))
     assert capfd.readouterr().err == ""

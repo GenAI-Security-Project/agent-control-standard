@@ -1,0 +1,10 @@
+# The claims check's Markdown parser in the lab CLI image (issue #588, LAB-15). Owner: Rock Lambros.
+#
+# LAB-14's lab_claims parses Markdown with markdown-it-py, a CommonMark parser, because GitHub follows CommonMark plus
+# GFM. It exits 2 without it. Each pin is the root uv.lock's version and wheel hash, so the CLI parses exactly what the
+# repository's tests parse. tests/test_lab_bundle.py fails when either drifts from the lock. Installed with --no-deps:
+# mdurl is markdown-it-py's only locked dependency, and it is pinned here too.
+markdown-it-py==4.2.0 \
+    --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a
+mdurl==0.1.2 \
+    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8

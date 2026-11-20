@@ -1,0 +1,21 @@
+# The build context is the repository root. Secrets, lab state, and anything not needed to build stay out of every
+# layer (issue #588). BuildKit reads this file because it sits beside acs.Dockerfile with the .dockerignore suffix.
+.git
+.github
+.superpowers
+**/state
+**/.env
+**/.env.*
+**/*.key
+**/*.token
+**/*.pem
+**/guardian-keys.json
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+site
+_site
+# Tests ship with the bundle, never in the image.
+labs/finbot/cli/tests
+labs/finbot/viewer/tests

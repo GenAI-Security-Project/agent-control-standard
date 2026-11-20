@@ -1,0 +1,174 @@
+# Checks the FinBot lab bundle: the policy pack, the compose file, the CLI, the viewer, the runtime image, and a
+# replay smoke run of the whole stack with no model key (issue #588, LAB-15, PREMORTEM P13).
+#
+# Owner: Rock Lambros. macOS and Linux only (Rock, 2026-11-17), so the CLI matrix runs on those two only. The smoke job
+# builds the images itself, since the published ones may be private, exactly as lab.sh does on an attendee's machine.
+name: labs
+
+on:
+  push:
+    paths:
+      - "labs/**"
+      - "adapters/**"
+      - ".github/workflows/labs.yml"
+  pull_request:
+    paths:
+      - "labs/**"
+      - "adapters/**"
+      - ".github/workflows/labs.yml"
+
+# Deny by default. Each job grants itself read access to the code and nothing else.
+permissions: {}
+
+concurrency:
+  group: labs-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    # Explicit bash turns on pipefail, so a failing command in a pipeline fails the step.
+    shell: bash
+
+jobs:
+  policy:
+    # LAB-12's pack against real OPA, at the version compose.yaml runs, plus its interface pins in the gateway's
+    # environment. The pins install the test group by name, so pytest is there whatever the gateway's default groups.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Download OPA and check its SHA-256
+        env:
+          OPA_VERSION: "1.22.2"
+          # The release's own digest for opa_linux_amd64_static, read from the GitHub release API on 2026-11-18.
+          OPA_SHA256: "24e344d1fc394cd93dc75666f584cfb97c6981f7255af25f8d2979834317317b"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o opa "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static"
+          echo "${OPA_SHA256}  opa" | sha256sum -c -
+          chmod +x opa
+          ./opa version
+      - name: Check every starter and solution against the module manifest
+        run: python3 labs/finbot/policy/tools/check_pack.py --opa ./opa
+      - name: Check every fixture's verdict against the Guardian's validator
+        run: uv run --project adapters --locked python labs/finbot/policy/tools/check_pack.py --opa ./opa --verdicts
+      - name: Run the pack's interface pins against the gateway
+        run: uv run --project adapters/gateway --locked --group test python -m pytest labs/finbot/policy/tools/test_pins.py -v
+
+  compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: labs/finbot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve the compose file alone, with every profile, and with the OpenAI override
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml config --quiet
+          docker compose -f compose.yaml --profile traces --profile cli config --quiet
+          docker compose -f compose.yaml -f compose.openai.yaml config --quiet
+
+  cli:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-latest", "macos-latest"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Run the CLI and lab.sh tests from the adapters' locked test group
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/cli/tests -v
+
+  viewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      # LAB-13's page test runs the page's app.js under bun and skips without a runtime. Same action SHA and bun
+      # version as reference-implementation.yml, which tests/test_lab_bundle.py holds together.
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: "1.3.11"
+      - name: Run the decision viewer tests with the pqc extra
+        run: uv run --project adapters --locked --extra pqc --group test python -m pytest labs/finbot/viewer/tests -v
+
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Build the runtime image and test its entrypoint, layers and tools
+        env:
+          # A runner without Docker fails here instead of skipping.
+          LAB_REQUIRE_DOCKER: "1"
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/images/tests -v
+
+  smoke:
+    # Module 1's replay path end to end on a fresh runner with no model key. The runner's uid is 1001, which tests the
+    # copy and drop for a uid other than the image default. LAB-16 switches this to lab run s1 and lab check 1.
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: labs/finbot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the host
+        run: ./lab.sh doctor
+      - name: Initialize the lab
+        run: ./lab.sh init
+      - name: Start the lab and wait until every service is healthy
+        run: ./lab.sh up
+      - name: Run the smoke checks
+        run: ./images/smoke.sh
+      - name: Show the service logs
+        if: failure()
+        run: ./lab.sh logs --no-color
+      - name: Stop the lab
+        if: always()
+        run: ./lab.sh down
