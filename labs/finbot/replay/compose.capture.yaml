@@ -1,0 +1,24 @@
+# Capture for the owner's recording takes (issue #589, LAB-16). Only `./lab.sh record` adds this file, after
+# compose.yaml and compose.openai.yaml, and it recreates the gateway without it when the take ends, however it ends.
+#
+# Version 1.1.0. Owner: Rock Lambros. Compose resolves relative paths against the project directory, labs/finbot,
+# so this file can sit in replay/ beside the recordings it writes.
+#
+# The overlay changes the gateway alone. It moves the source of compose.openai.yaml's model secret to the take's own
+# owner-only directory outside the bundle, which lab.sh fills from pass and deletes when the take ends. The lab CLI
+# mounts the whole bundle, so a key under state/ would be readable by the driver (LAB-16 review I3).
+# Capture refuses to start over an existing recording, and lab.sh checks for one before anything starts.
+
+services:
+  acs-gateway:
+    environment:
+      ACS_CAPTURE: "1"
+      # The recording's file name. lab.sh sets it for the take, and compose stops when it is unset.
+      ACS_CAPTURE_SCENARIO: ${LAB_CAPTURE_SCENARIO:?}
+    volumes:
+      # The same target as the read-only mount in compose.yaml, so compose replaces that mount for the take only.
+      - ./replay/recordings:/lab/replay/recordings
+
+secrets:
+  openai-key:
+    file: ${LAB_CAPTURE_KEY_FILE:?}

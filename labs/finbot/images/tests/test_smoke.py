@@ -24,7 +24,7 @@ SMOKE = Path(__file__).resolve().parents[1] / "smoke.sh"
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="smoke.sh runs on macOS and Linux only (Rock, 2026-11-17)")
 
 # Logs each call on one line, newlines in inline code included. It answers the reachability probe with one line per
-# host and port it was given, and the model call with FAKE_MODEL_REPLY and exit status FAKE_MODEL_RC.
+# host and port it was given.
 FAKE_DOCKER = """#!/bin/sh
 printf '%s' "$*" | tr '\\n' ' ' >> "$FAKE_DOCKER_LOG"
 printf '\\n' >> "$FAKE_DOCKER_LOG"
@@ -32,9 +32,6 @@ case "$*" in
     *"exec -T redis wget"*)
         printf '%s\n' "${FAKE_NO_TOKEN_REPLY:-}"
         exit 1 ;;
-    *OPENAI_BASE_URL*)
-        printf '%s' "${FAKE_MODEL_REPLY:-}"
-        exit "${FAKE_MODEL_RC:-0}" ;;
     *lab-reach-record*)
         while [ "$#" -gt 0 ] && [ "$1" != -c ]; do shift; done
         shift 2
@@ -48,12 +45,28 @@ exit 0
 """
 
 
+# Logs each call, fails the one whose arguments equal FAKE_LAB_FAIL, and, once the lab is in enforce mode, leaves a
+# transcript named FAKE_LAB_TRANSCRIPT for each run, the way the gateway does for a new session.
+FAKE_LAB = """#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_LAB_LOG"
+if [ "$*" = "run s1" ] && [ -n "${FAKE_LAB_TRANSCRIPT:-}" ] && grep -qx 'mode enforce' "$FAKE_LAB_LOG"; then
+    mkdir -p state/transcripts
+    : > "state/transcripts/$FAKE_LAB_TRANSCRIPT"
+fi
+if [ "$*" = "${FAKE_LAB_FAIL:-}" ]; then
+    printf 'NOT YET: %s fell over\\n' "$*"
+    exit 1
+fi
+printf 'DONE: %s\\n' "$*"
+"""
+
+
 @pytest.fixture
 def bundle(tmp_path: Path) -> Path:
     root = tmp_path / "bundle"
     (root / "images").mkdir(parents=True)
     shutil.copy2(SMOKE, root / "images" / "smoke.sh")
-    (root / "lab.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (root / "lab.sh").write_text(FAKE_LAB, encoding="utf-8")
     (root / "lab.sh").chmod(0o755)
     (root / ".env").write_text("LAB_PORT_FINBOT=18000\nLAB_PORT_JAEGER=26686\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
@@ -64,13 +77,15 @@ def bundle(tmp_path: Path) -> Path:
     return root
 
 
-def run_smoke(bundle: Path, reachable: str = "acs-gateway", reply: str = "", reply_rc: int = 0,
-              no_token_reply: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
+def run_smoke(bundle: Path, reachable: str = "acs-gateway", no_token_reply: str = "", lab_fail: str = "",
+              transcript: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
     log = bundle.parent / "docker.log"
     log.write_text("", encoding="utf-8")
+    lab_log = bundle.parent / "lab.log"
+    lab_log.write_text("", encoding="utf-8")
     env = {**os.environ, "PATH": f"{bundle.parent / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(log),
-           "FAKE_REACHABLE": reachable, "FAKE_MODEL_REPLY": reply, "FAKE_MODEL_RC": str(reply_rc),
-           "FAKE_NO_TOKEN_REPLY": no_token_reply}
+           "FAKE_REACHABLE": reachable, "FAKE_NO_TOKEN_REPLY": no_token_reply, "FAKE_LAB_LOG": str(lab_log),
+           "FAKE_LAB_FAIL": lab_fail, "FAKE_LAB_TRANSCRIPT": transcript}
     result = subprocess.run(["sh", str(bundle / "images" / "smoke.sh")], env=env, capture_output=True, text=True,
                             timeout=60)
     return result, log.read_text(encoding="utf-8").splitlines()
@@ -167,13 +182,11 @@ def test_the_probe_bound_covers_the_name_lookup(tmp_path):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Final review R1: every model-path check needs a positive result from this run
+# LAB-16 Task 16: module 1 is the model path, and every check needs a positive result from this run (final review R1)
 # ---------------------------------------------------------------------------------------------------------------------
 
-MISS_ANSWER = "resp_replay_miss: I couldn't complete that action."
-TRACEBACK = """Traceback (most recent call last):
-  File "<string>", line 8, in <module>
-urllib.error.URLError: <urlopen error [Errno 111] Connection refused>"""
+MODULE_1 = ["mode off", "run s1", "mode enforce", "run s1", "check 1"]
+SESSION = "11111111-1111-4111-8111-111111111111"
 
 
 def _line(result: subprocess.CompletedProcess, words: str) -> str:
@@ -182,58 +195,39 @@ def _line(result: subprocess.CompletedProcess, words: str) -> str:
     return found[0]
 
 
-def test_a_traceback_from_the_model_call_fails_the_smoke(bundle):
-    result, _ = run_smoke(bundle, reply=TRACEBACK, reply_rc=1)
-    assert _line(result, "model call through FinBot").startswith("NOT YET:")
+def test_smoke_plays_module_1_in_order(bundle):
+    result, _ = run_smoke(bundle)
+    calls = (bundle.parent / "lab.log").read_text(encoding="utf-8").splitlines()
+    assert calls == MODULE_1
+    done = [line for line in result.stdout.splitlines() if line.startswith("DONE: ./lab.sh ")]
+    assert done == [f"DONE: ./lab.sh {step}" for step in MODULE_1]
+
+
+@pytest.mark.parametrize("step", MODULE_1)
+def test_a_failing_module_1_step_fails_the_smoke(bundle, step):
+    result, _ = run_smoke(bundle, lab_fail=step)
+    line = [x for x in result.stdout.splitlines() if x.startswith(f"NOT YET: ./lab.sh {step} exited 1")]
+    assert line, result.stdout
+    # The NOT YET line names what the step itself said, and the step's own output reaches stderr, never stdout.
+    assert line[0].endswith(f"NOT YET: {step} fell over")
+    assert f"lab {step}: NOT YET: {step} fell over" in result.stderr
     assert result.returncode == 1
 
 
-def test_a_traceback_fails_even_when_the_exec_exits_0(bundle):
-    result, _ = run_smoke(bundle, reply=TRACEBACK, reply_rc=0)
-    assert _line(result, "model call through FinBot").startswith("NOT YET:")
+def test_the_enforce_runs_new_transcript_is_verified(bundle):
+    result, calls = run_smoke(bundle, transcript=SESSION)
+    assert _line(result, "left a new transcript").startswith("DONE:")
+    verify = [c for c in calls if "acs.testing.verify" in c]
+    assert len(verify) == 1 and f"/lab/state/transcripts/{SESSION} " in verify[0]
 
 
-def test_an_empty_answer_fails_the_smoke(bundle):
-    result, _ = run_smoke(bundle, reply="", reply_rc=0)
-    assert _line(result, "model call through FinBot").startswith("NOT YET:")
-
-
-def test_the_replay_answer_passes_the_model_call_check(bundle):
-    # The positive control: the check isn't simply always red.
-    result, _ = run_smoke(bundle, reply=MISS_ANSWER, reply_rc=0)
-    assert _line(result, "model call through FinBot").startswith("DONE:")
-
-
-def test_the_call_carries_a_fresh_nonce_each_run(bundle):
-    _, first = run_smoke(bundle, reply=MISS_ANSWER)
-    _, second = run_smoke(bundle, reply=MISS_ANSWER)
-    calls = [c for c in first + second if "OPENAI_BASE_URL" in c]
-    assert len(calls) == 2
-    nonces = [re.search(r" ([0-9a-f]{16})$", c) for c in calls]
-    assert all(nonces), calls
-    assert nonces[0].group(1) != nonces[1].group(1)
-
-
-def test_a_stale_replay_miss_line_from_an_earlier_run_fails_the_smoke(bundle):
-    # A local rerun keeps state/audit.log, so a miss line from the last run must not satisfy this one.
-    (bundle / "state").mkdir()
-    (bundle / "state" / "audit.log").write_text(
-        'ACS_AUDIT {"acs_audit_event": "replay_miss", "cause": "no_recording", "timestamp": "2026-11-17T10:00:00Z"}\n',
-        encoding="utf-8")
-    result, _ = run_smoke(bundle, reply=MISS_ANSWER)
-    assert _line(result, "replay miss").startswith("NOT YET:")
-
-
-def test_stale_model_input_and_transcript_fail_the_smoke(bundle):
-    # The input log and the transcripts from an earlier run hold nothing this run created.
-    state = bundle / "state"
-    (state / "transcripts").mkdir(parents=True)
-    (state / "transcripts" / "11111111-1111-4111-8111-111111111111.jsonl").write_text("{}\n", encoding="utf-8")
-    (state / "model-inputs.jsonl").write_text('{"input": "lab smoke check 0123456789abcdef"}\n', encoding="utf-8")
-    result, _ = run_smoke(bundle, reply=MISS_ANSWER)
-    assert _line(result, "model input log").startswith("NOT YET:")
+def test_a_stale_transcript_fails_the_smoke(bundle):
+    # A transcript an earlier run left holds nothing this run created.
+    (bundle / "state" / "transcripts").mkdir(parents=True)
+    (bundle / "state" / "transcripts" / SESSION).write_text("{}\n", encoding="utf-8")
+    result, calls = run_smoke(bundle)
     assert _line(result, "transcript").startswith("NOT YET:")
-
+    assert not [c for c in calls if "acs.testing.verify" in c]
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -247,7 +241,7 @@ def test_stale_model_input_and_transcript_fail_the_smoke(bundle):
     ("", "NOT YET:"),
 ])
 def test_a_call_from_another_container_without_the_token_must_get_401(bundle, answer, verdict):
-    result, calls = run_smoke(bundle, reply=MISS_ANSWER, no_token_reply=answer)
+    result, calls = run_smoke(bundle, no_token_reply=answer)
     probe = [c for c in calls if "exec -T redis wget" in c]
     assert len(probe) == 1 and "http://acs-gateway:8080/v1/responses" in probe[0], calls
     assert "authorization" not in probe[0].lower()

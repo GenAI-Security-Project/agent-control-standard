@@ -41,7 +41,10 @@ def test_no_state_tracked():
 # compose.yaml and compose.openai.yaml (Task 3)
 # ---------------------------------------------------------------------------------------------------------------------
 
+import json  # noqa: E402
+import os  # noqa: E402
 import re  # noqa: E402
+import shutil  # noqa: E402
 
 import pytest  # noqa: E402
 import yaml  # noqa: E402
@@ -175,9 +178,9 @@ def test_published_services_have_a_non_internal_network():
 
 
 def test_service_networks_match_a2():
-    expected = {"finbot": {"finbot-net"}, "redis": {"finbot-net"}, "acs-gateway": {"finbot-net", "acs-net"},
-                "acs-guardian": {"acs-net"}, "opa": {"acs-net"}, "acs-viewer": {"ui-net"},
-                "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net"}}
+    expected = {"finbot": {"finbot-net", "drive-net"}, "redis": {"finbot-net"},
+                "acs-gateway": {"finbot-net", "acs-net"}, "acs-guardian": {"acs-net"}, "opa": {"acs-net"},
+                "acs-viewer": {"ui-net"}, "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net", "drive-net"}}
     services = _services()
     assert set(services) == set(expected)
     for name, nets in expected.items():
@@ -430,7 +433,7 @@ def test_labs_workflow_shape():
     for event in ("push", "pull_request"):
         assert set(trigger[event]["paths"]) == {"labs/**", "adapters/**", ".github/workflows/labs.yml"}
     jobs = workflow["jobs"]
-    assert set(jobs) == {"policy", "compose", "cli", "viewer", "images", "smoke"}
+    assert set(jobs) == {"policy", "compose", "cli", "viewer", "images", "smoke", *MODULE_JOBS}
     for name, job in jobs.items():
         assert job["permissions"] == {"contents": "read"}, name
     # Rock 2026-11-17: macOS and Linux only, so no windows leg.
@@ -667,3 +670,189 @@ def test_the_gateway_requires_the_client_token_in_both_upstreams():
         assert "acs-client-token:client.token" in env["LAB_SECRETS"].split(), path.name
     assert "client token" in COMPOSE_OPENAI.read_text(encoding="utf-8")
     assert "every local user" not in COMPOSE_OPENAI.read_text(encoding="utf-8").lower()
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# LAB-16 (issue #589): the driver reaches FinBot, and the capture overlay
+# ---------------------------------------------------------------------------------------------------------------------
+
+COMPOSE_CAPTURE = BUNDLE / "replay" / "compose.capture.yaml"
+CAPTURE_ENV = {"LAB_CAPTURE_SCENARIO": "x", "LAB_CAPTURE_KEY_FILE": "/tmp/acs-lab-take.AbC123/openai.key"}
+
+
+def _merged(*files: Path, env: dict[str, str] | None = None) -> dict:
+    # What compose itself resolves, so the network and mount checks see the merge, not one file.
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.skip("docker isn't installed, and these checks need compose's own merge")
+    args = [docker, "compose"]
+    for path in files:
+        args += ["-f", str(path)]
+    run_env = {**os.environ, **(env or {})}
+    for name in ("COMPOSE_PROJECT_NAME", "COMPOSE_FILE", "COMPOSE_PROFILES"):
+        run_env.pop(name, None)
+    result = subprocess.run([*args, "--profile", "cli", "config", "--format", "json"], cwd=BUNDLE, env=run_env,
+                            capture_output=True, text=True, timeout=60)
+    if result.returncode != 0 and "unknown flag" in result.stderr:
+        pytest.skip("this compose can't print its config as JSON")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_lab_cli_joins_finbot_net_and_publishes_nothing():
+    # LAB-16 open question 1 as ruled in review I3: the driver reaches http://finbot:8000 over drive-net, which is
+    # internal, so the CLI container, which mounts state/secrets, has no path to the internet.
+    lab = _services()["lab"]
+    assert sorted(lab["networks"]) == ["acs-net", "drive-net"]
+    assert lab["profiles"] == ["cli"]
+    for key in ("ports", "expose", "restart", "healthcheck", "network_mode", "secrets", "depends_on"):
+        assert key not in lab, key
+    assert lab["cap_drop"] == ["ALL"]
+    assert lab["security_opt"] == ["no-new-privileges:true"]
+    networks = _compose()["networks"]
+    assert networks["drive-net"] == {"internal": True}
+    assert "drive-net" in _services()["finbot"]["networks"] and "finbot-net" in _services()["finbot"]["networks"]
+    # Only FinBot and the CLI share drive-net. The Guardian and OPA stay on acs-net alone.
+    on_drive = {name for name, service in _services().items() if "drive-net" in service.get("networks", [])}
+    assert on_drive == {"finbot", "lab"}
+    merged = _merged(COMPOSE)
+    assert merged["networks"]["drive-net"]["internal"] is True
+    assert merged["networks"]["acs-net"]["internal"] is True
+    for name in merged["services"]["lab"]["networks"]:
+        assert merged["networks"][name].get("internal") is True, name
+    assert not merged["services"]["lab"].get("ports")
+
+
+def test_capture_overlay_touches_only_the_gateway():
+    overlay = _compose(COMPOSE_CAPTURE)
+    assert set(overlay) == {"services", "secrets"}
+    assert set(overlay["services"]) == {"acs-gateway"}
+    gateway = overlay["services"]["acs-gateway"]
+    assert set(gateway) == {"environment", "volumes"}
+    assert _env(gateway) == {"ACS_CAPTURE": "1", "ACS_CAPTURE_SCENARIO": "${LAB_CAPTURE_SCENARIO:?}"}
+    # The same target as the base file's read-only mount, so compose replaces it, read and write for capture only.
+    assert gateway["volumes"] == ["./replay/recordings:/lab/replay/recordings"]
+    base = _services()["acs-gateway"]["volumes"]
+    assert "./replay/recordings:/lab/replay/recordings:ro" in base
+    # Both names are ones the gateway reads.
+    source = (ROOT / "adapters" / "gateway" / "src" / "acs_gateway" / "config.py").read_text(encoding="utf-8")
+    for key in _env(gateway):
+        assert f'"{key}"' in source, key
+    merged = _merged(COMPOSE, COMPOSE_OPENAI, COMPOSE_CAPTURE, env=CAPTURE_ENV)
+    plain = _merged(COMPOSE, COMPOSE_OPENAI)
+    for name, service in merged["services"].items():
+        if name != "acs-gateway":
+            assert service == plain["services"][name], name
+
+
+def test_capture_overlay_holds_no_key():
+    # The overlay moves the openai-key secret's source to the take's own directory and holds nothing else of it: no
+    # value, no secret of its own and no env file, so a take holds nothing a replay session doesn't but that file.
+    text = COMPOSE_CAPTURE.read_text(encoding="utf-8")
+    overlay = _compose(COMPOSE_CAPTURE)
+    gateway = overlay["services"]["acs-gateway"]
+    assert overlay["secrets"] == {"openai-key": {"file": "${LAB_CAPTURE_KEY_FILE:?}"}}
+    assert "secrets" not in gateway and "env_file" not in gateway
+    for needle in ("openai.key", "sk-", "state/secrets", "/run/acs"):
+        assert needle not in text, needle
+
+
+def test_the_take_key_is_out_of_the_cli_containers_reach():
+    # Review I3: the CLI mounts the whole bundle, state/secrets included, because it writes the lab's own secrets.
+    # The take's key file lives outside the bundle, so no bind mount of the CLI, the viewer or the Guardian holds it.
+    merged = _merged(COMPOSE, COMPOSE_OPENAI, COMPOSE_CAPTURE, env=CAPTURE_ENV)
+    key = Path(merged["secrets"]["openai-key"]["file"])
+    assert key == Path(CAPTURE_ENV["LAB_CAPTURE_KEY_FILE"])
+    for name, service in merged["services"].items():
+        for mount in service.get("volumes", []):
+            if mount.get("type") == "bind":
+                assert Path(mount["source"]) not in (key, *key.parents), f"{name} {mount['source']}"
+    users = {name for name, service in merged["services"].items()
+             if any(s.get("source") == "openai-key" for s in service.get("secrets", []))}
+    assert users == {"acs-gateway"}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# LAB-16 Task 16 (issue #589): the module jobs, the smoke switch to module 1, and the offline acceptance override
+# ---------------------------------------------------------------------------------------------------------------------
+
+MODULE_JOBS = ("modules", "scenarios", "recordings", "acceptance")
+SMOKE = BUNDLE / "images" / "smoke.sh"
+OFFLINE = BUNDLE / "modules" / "tests" / "compose.offline.yaml"
+ACCEPTANCE = BUNDLE / "modules" / "tests" / "acceptance.py"
+LAB_SH = BUNDLE / "lab.sh"
+# Module 1 as an attendee plays it, in this order (LAB-16 plan, Task 16).
+MODULE_1_STEPS = ("./lab.sh mode off", "./lab.sh run s1", "./lab.sh mode enforce", "./lab.sh run s1",
+                  "./lab.sh check 1")
+
+
+def test_labs_workflow_has_module_jobs():
+    _check_hygiene(LABS_WORKFLOW)
+    jobs = _workflow(LABS_WORKFLOW)["jobs"]
+    for name in MODULE_JOBS:
+        assert jobs[name]["permissions"] == {"contents": "read"}, name
+    assert ("uv run --project adapters --locked --extra pqc --group test python -m pytest "
+            "labs/finbot/modules/checks/tests labs/finbot/modules/kit/tests labs/finbot/modules/tests -v"
+            in _runs(jobs["modules"]))
+    assert ("uv run --project adapters --locked --group test python -m pytest labs/finbot/scenarios/tests -v"
+            in _runs(jobs["scenarios"]))
+    assert ("uv run --project adapters/gateway --locked --group test python -m pytest labs/finbot/replay/tests -v"
+            in _runs(jobs["recordings"]))
+    acceptance = jobs["acceptance"]
+    assert acceptance["needs"] == "images"
+    assert acceptance["defaults"]["run"]["working-directory"] == "labs/finbot"
+    assert "python3 modules/tests/acceptance.py" in _runs(acceptance)
+    # Attendees run on replay, so the job holds no model key and no secret of any kind.
+    text = yaml.safe_dump(acceptance)
+    assert "OPENAI" not in text.upper() and "secrets." not in text
+    logs = [s for s in _steps(acceptance) if "./lab.sh logs" in s.get("run", "")]
+    assert logs and logs[0].get("if") == "failure()"
+    teardown = [s for s in _steps(acceptance) if "./lab.sh down" in s.get("run", "")]
+    assert teardown and teardown[0].get("if") == "always()"
+
+
+def test_every_lab_test_directory_runs_in_a_job():
+    # A suite added under labs/finbot that no job runs would stay green by never running.
+    runs = "\n".join(_runs(job) for job in _workflow(LABS_WORKFLOW)["jobs"].values())
+    for test_file in sorted(BUNDLE.rglob("test_*.py")):
+        rel = test_file.relative_to(ROOT)
+        assert str(rel.parent) in runs or str(rel) in runs, rel
+
+
+def test_smoke_runs_module_1():
+    text = SMOKE.read_text(encoding="utf-8")
+    loops = re.findall(r"^for step in ((?:\"[^\"]+\" ?)+); do\n(.*?)^done$", text, re.M | re.S)
+    assert len(loops) == 1, "smoke.sh plays module 1 in one loop"
+    steps, body = loops[0]
+    assert tuple(f"./lab.sh {s}" for s in re.findall(r'"([^"]+)"', steps)) == MODULE_1_STEPS
+    assert "output=$(./lab.sh $step 2>&1)" in body
+    # The scripted model call is gone, and so is the host call to an internal verb, which lab.sh refuses.
+    assert "OPENAI_BASE_URL" not in text and "/responses" not in text.replace("/v1/responses", "")
+    assert "./lab.sh _" not in text
+
+
+def test_offline_override_makes_finbot_net_internal():
+    assert _compose(OFFLINE) == {"networks": {"finbot-net": {"internal": True}}}
+    merged = _merged(COMPOSE, OFFLINE)
+    assert merged["networks"]["finbot-net"].get("internal") is True
+    # With the override, every network the model path joins is internal, so no call from the gateway or FinBot can
+    # leave the stack.
+    for name in ("acs-gateway", "finbot", "redis", "lab"):
+        for network in merged["services"][name]["networks"]:
+            assert merged["networks"][network].get("internal") is True, f"{name} {network}"
+    # Everything else is the base file as it stands.
+    plain = _merged(COMPOSE)
+    assert merged["services"] == plain["services"]
+    assert {k: v for k, v in merged["networks"].items() if k != "finbot-net"} == \
+        {k: v for k, v in plain["networks"].items() if k != "finbot-net"}
+
+
+def test_every_lab_sh_compose_call_starts_with_the_base_file():
+    # acceptance.py adds the offline override after `-f compose.yaml` in each Docker call lab.sh makes, so lab.sh
+    # must make every compose call that way. `docker compose version` reads no file.
+    code_lines = [line for line in LAB_SH.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")]
+    code = re.findall(r"docker compose(?: [^\n]*)?", "\n".join(code_lines))
+    assert code, "lab.sh makes no compose call"
+    for call in code:
+        assert call.startswith(("docker compose -f compose.yaml ", "docker compose version")), call
+    assert "compose.offline.yaml" in ACCEPTANCE.read_text(encoding="utf-8")

@@ -1,10 +1,10 @@
 #!/bin/sh
 # smoke.sh: checks a running lab end to end in replay mode with no model key (issue #588, LAB-15).
 #
-# Version 1.0.0. Owner: Rock Lambros. Run after `./lab.sh init` and `./lab.sh up`, from any directory:
+# Version 1.1.0. Owner: Rock Lambros. Run after `./lab.sh init` and `./lab.sh up`, from any directory:
 #   labs/finbot/images/smoke.sh
-# The labs workflow's smoke job runs it, and so does anyone rerunning the stack check by hand. Until LAB-16's module 1
-# lands, the model call is a scripted POST /v1/responses through FinBot's own base URL, answered by replay.
+# The labs workflow's smoke job runs it, and so does anyone rerunning the stack check by hand. The model path is
+# module 1 itself, played with lab mode, lab run s1 and lab check 1 (issue #589, LAB-16), answered by replay.
 #
 # Prints one DONE or NOT YET: line per check, plus NOTE: lines that record what FinBot can reach without checking
 # it. Exit 0 when every check passes, 1 otherwise. The NOTE: lines never change the exit code.
@@ -137,12 +137,6 @@ else
     printf 'NOTE: the reachability probe did not run: %s\n' "$(printf '%s' "$reach" | tail -n 1)"
 fi
 
-if ./lab.sh _epoch | grep -q '^DONE'; then
-    pass "the lab CLI bumps the epoch over the acs-net admin port"
-else
-    fail "the lab CLI couldn't bump the epoch"
-fi
-
 for service_file in "acs-guardian /run/acs/guardian.key" "acs-guardian /run/acs/hmac.key" \
                     "acs-gateway /run/acs/hmac.key" "acs-gateway /run/acs/admin.token"; do
     # shellcheck disable=SC2086
@@ -167,50 +161,30 @@ for service in acs-gateway acs-guardian acs-viewer; do
     [ -z "$listing" ] && pass "$service can't see state/secrets" || fail "$service sees state/secrets: $listing"
 done
 
-# Module 1's model path. Every check below needs a positive result this run produced, never the absence of an error,
-# so leftovers from an earlier local run can't pass it (final review R1). The call carries a fresh nonce, which also
-# gives it a conversation of its own, so the gateway opens a new session and a new transcript for it.
-nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-audit_before=0
-[ ! -f state/audit.log ] || audit_before=$(wc -c < state/audit.log | tr -d ' ')
+# Module 1 as an attendee plays it (LAB-16 Task 16). Each mode change recreates the gateway and bumps the epoch over
+# the acs-net admin port, and each run starts FinBot from empty data and replays s1 from its recording. lab check 1
+# then judges both runs. A step passes only on exit 0, so a replay miss, a timeout or a NOT YET check fails it. The
+# step's own output goes to stderr, so stdout keeps one DONE or NOT YET line per check.
 transcripts_before=$(mktemp)
-ls state/transcripts 2>/dev/null | sort > "$transcripts_before"
-# The call passes only on HTTP 200 with the replay miss response, and prints its id and text so this shell checks
-# them too. Anything else raises, which exits nonzero.
-expected="resp_replay_miss: I couldn't complete that action."
-if reply=$(in_service finbot python -c '
-import json, os, sys, urllib.request
-base = os.environ["OPENAI_BASE_URL"].rstrip("/")
-body = json.dumps({"model": "gpt-5-nano", "input": [{"role": "user", "content": "lab smoke check " + sys.argv[1]}]})
-request = urllib.request.Request(base + "/responses", data=body.encode(), headers={
-    "Content-Type": "application/json", "Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})
-with urllib.request.urlopen(request, timeout=30) as response:
-    assert response.status == 200, response.status
-    answer = json.load(response)
-print(answer["id"] + ": " + answer["output"][0]["content"][0]["text"])
-' "$nonce" 2>&1) && [ "$reply" = "$expected" ]; then
-    pass "a model call through FinBot's base URL got the replay answer: $reply"
-else
-    fail "the model call through FinBot's base URL didn't get the replay answer: $reply"
-fi
-if grep -q "lab smoke check $nonce" state/model-inputs.jsonl 2>/dev/null; then
-    pass "the model input log recorded this run's call"
-else
-    fail "the model input log has no line for this run's call"
-fi
-if [ -f state/audit.log ] && tail -c "+$((audit_before + 1))" state/audit.log | grep -q '"acs_audit_event": *"replay_miss"'; then
-    pass "the audit log marks this run's unrecorded call as a replay miss"
-else
-    fail "no replay miss line in state/audit.log since this run started"
-fi
+for step in "mode off" "run s1" "mode enforce" "run s1" "check 1"; do
+    # The enforce run's transcripts are the new ones, so the list is taken just before it.
+    [ "$step" != "run s1" ] || ls state/transcripts 2>/dev/null | sort > "$transcripts_before"
+    # shellcheck disable=SC2086
+    if output=$(./lab.sh $step 2>&1); then
+        pass "./lab.sh $step"
+    else
+        fail "./lab.sh $step exited $?: $(printf '%s' "$output" | grep -E '^(NOT YET|DONE)' | tail -n 1)"
+    fi
+    printf '%s\n' "$output" | sed "s|^|lab $step: |" >&2
+done
 
-# The session this call opened left a transcript named by its session id, one no earlier run created. acs-verify
+# The enforce run's session left a transcript named by its session id, one no earlier run created. acs-verify
 # (LAB-11) checks its ML-DSA-65 decisions with the key document alone plus the HMAC secret for the requests.
 # Interface pin on acs-verify's first output line.
 new_transcripts=$(ls state/transcripts 2>/dev/null | sort | comm -13 "$transcripts_before" -)
 rm -f "$transcripts_before"
 if [ -n "$new_transcripts" ]; then
-    pass "the call left a new transcript: $(printf '%s' "$new_transcripts" | tr '\n' ' ')"
+    pass "the enforce run left a new transcript: $(printf '%s' "$new_transcripts" | tr '\n' ' ')"
     if [ "$(cat state/image-source 2>/dev/null)" = built ]; then
         export LAB_RUNTIME_IMAGE=acs-lab-runtime:local LAB_FINBOT_IMAGE=acs-lab-finbot:local
     fi
@@ -226,7 +200,7 @@ if [ -n "$new_transcripts" ]; then
         fi
     done
 else
-    fail "the call left no new transcript"
+    fail "the enforce run left no new transcript"
 fi
 
 # The model port takes only FinBot's per-lab client token (final review R8). redis shares finbot-net and holds no
