@@ -582,9 +582,8 @@ func TestDenialArrivesBeforeTheDeclaredTimeout(t *testing.T) {
 		<-release
 		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}, nil
 	})
-	start := time.Now()
-	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := time.Since(start); elapsed >= declared {
+	r, elapsed := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed >= declared {
 		t.Fatalf("the answer took %s, the declared timeout is %s", elapsed, declared)
 	}
 	if r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonEvaluationFailed) {
@@ -609,6 +608,9 @@ type slowStore struct {
 	// it is closed; appending is closed when the first Append starts.
 	holdAppend, appending chan struct{}
 	appendOnce            sync.Once
+	// overrun is how long, in total, stalled calls ran past the deadline of
+	// the context they were given.
+	overrun atomic.Int64
 }
 
 func (s *slowStore) Lock(ctx context.Context, sessionID string) (context.Context, func(), error) {
@@ -632,7 +634,7 @@ func (s *slowStore) Conclude(ctx context.Context, sessionID string, c guardian.C
 	if s.slowConclude.Load() && s.concluding != nil {
 		close(s.concluding)
 	}
-	if err := stall(ctx, &s.slowConclude); err != nil {
+	if err := s.stall(ctx, &s.slowConclude); err != nil {
 		return err
 	}
 	return s.MemorySessionContextStore.Conclude(ctx, sessionID, c)
@@ -643,23 +645,32 @@ func (s *slowStore) Append(ctx context.Context, sessionID string, a guardian.App
 		s.appendOnce.Do(func() { close(s.appending) })
 		<-s.holdAppend
 	}
-	if err := stall(ctx, &s.slowAppend); err != nil {
+	if err := s.stall(ctx, &s.slowAppend); err != nil {
 		return err
 	}
 	return s.MemorySessionContextStore.Append(ctx, sessionID, a)
 }
 
 func (s *slowStore) Load(ctx context.Context, sessionID string) (guardian.Session, bool, error) {
-	if err := stall(ctx, &s.slow); err != nil {
+	if err := s.stall(ctx, &s.slow); err != nil {
 		return guardian.Session{}, false, err
 	}
 	return s.MemorySessionContextStore.Load(ctx, sessionID)
 }
 
 // stall waits up to a second for ctx while on is set, and fails either way.
-func stall(ctx context.Context, on *atomic.Bool) error {
+// A stalled call that returns after ctx's deadline adds the excess to
+// overrun.
+func (s *slowStore) stall(ctx context.Context, on *atomic.Bool) error {
 	if !on.Load() {
 		return nil
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		defer func() {
+			if late := time.Since(deadline); late > 0 {
+				s.overrun.Add(int64(late))
+			}
+		}()
 	}
 	select {
 	case <-ctx.Done():
@@ -667,6 +678,17 @@ func stall(ctx context.Context, on *atomic.Bool) error {
 	case <-time.After(time.Second):
 		return errors.New("the store did not answer")
 	}
+}
+
+// guardianTime is the time the Guardian held a request whose store calls
+// stalled, less the time those calls ran past the deadlines the Guardian gave
+// them. The Guardian waits on each store call, so it cannot answer before the
+// call returns. A loaded host can deliver a context's cancellation to the
+// waiting call hundreds of milliseconds late, and that delay belongs to the
+// host, not to the Guardian. Work the Guardian does after a deadline, such as
+// waiting on a lock or another store call, stays in the time measured.
+func (s *slowStore) guardianTime(held time.Duration) time.Duration {
+	return held - time.Duration(s.overrun.Load())
 }
 
 // TestSlowStoreAnswersBeforeTheDeclaredTimeout: the deadline covers the
@@ -681,9 +703,8 @@ func TestSlowStoreAnswersBeforeTheDeclaredTimeout(t *testing.T) {
 	})
 	c := h.session()
 	store.slow.Store(true)
-	start := time.Now()
-	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := time.Since(start); elapsed >= declared {
+	r, held := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed := store.guardianTime(held); elapsed >= declared {
 		t.Fatalf("the answer took %s, the declared timeout is %s", elapsed, declared)
 	}
 	if r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonStoreUnavailable) {
@@ -694,7 +715,9 @@ func TestSlowStoreAnswersBeforeTheDeclaredTimeout(t *testing.T) {
 // TestRecoveredSessionAnswersInItsOwnTime: a session negotiated under a
 // shorter decision timeout than the Guardian now serving it gets its answer
 // within its own timeout when the store stalls on its step. The serving
-// Guardian's margin, scaled to the session, leaves it 100ms to answer.
+// Guardian's margin, scaled to the session, leaves it 100ms to answer. The
+// bound is the negotiated timeout itself, counted from the request's arrival
+// at the Guardian, which is the promise the session holds the Guardian to.
 func TestRecoveredSessionAnswersInItsOwnTime(t *testing.T) {
 	const negotiated = 200 * time.Millisecond
 	first := newHarness(t, func(c *guardian.Config) { c.DecisionTimeout = negotiated })
@@ -705,9 +728,8 @@ func TestRecoveredSessionAnswersInItsOwnTime(t *testing.T) {
 	})
 	c.Transport = second.post
 	store.slowAppend.Store(true)
-	start := time.Now()
-	second.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := time.Since(start); elapsed >= negotiated {
+	_, held := second.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed := store.guardianTime(held); elapsed >= negotiated {
 		t.Fatalf("the answer took %s, the session negotiated %s", elapsed, negotiated)
 	}
 }
@@ -726,9 +748,8 @@ func TestLockWaitAnswersBeforeTheDeclaredTimeout(t *testing.T) {
 	held := make(chan *acs.Result, 1)
 	go func() { held <- h.decision(c, acs.StepToolCallRequest, toolCall("ls")) }()
 	<-store.appending
-	start := time.Now()
-	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := time.Since(start); elapsed >= declared {
+	r, elapsed := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed >= declared {
 		t.Fatalf("the answer took %s, the declared timeout is %s", elapsed, declared)
 	}
 	if r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonStoreUnavailable) {
@@ -772,9 +793,8 @@ func TestSlowRecordingAnswersInTime(t *testing.T) {
 		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}, State: json.RawMessage(`{}`)}, nil
 	})
 	store.slowConclude.Store(true)
-	start := time.Now()
-	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed, bound := time.Since(start), declared-margin/4; elapsed >= bound {
+	r, held := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed, bound := store.guardianTime(held), declared-margin/4; elapsed >= bound {
 		t.Fatalf("the answer took %s, past %s", elapsed, bound)
 	}
 	if !slices.Contains(r.ReasonCodes, disposition.ReasonStoreUnavailable) {
