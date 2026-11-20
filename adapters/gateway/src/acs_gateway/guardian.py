@@ -19,6 +19,7 @@ from acs.client import (
     FailPosture,
     Negotiated,
     Resolution,
+    SessionRefused,
     Undecided,
     audit_event,
     open_session,
@@ -26,16 +27,17 @@ from acs.client import (
     round_trip,
     sign_envelope,
 )
-from acs.core import Decision, method_evaluated, normalize_decision, request_envelope
+from acs.core import Decision, method_evaluated, normalize_decision, request_envelope, response_shape_problem
 
 from acs_gateway.config import GatewayConfig
 from acs_gateway.sessions import Session
 from acs_gateway.transcript import Transcript
 
 SESSION_START = "steps/sessionStart"
+SESSION_END = "steps/sessionEnd"
 TOOL_CALL_REQUEST = "steps/toolCallRequest"
 TOOL_CALL_RESULT = "steps/toolCallResult"
-METHODS = [SESSION_START, TOOL_CALL_REQUEST, TOOL_CALL_RESULT]
+METHODS = [SESSION_START, TOOL_CALL_REQUEST, TOOL_CALL_RESULT, SESSION_END]
 PLATFORM = "openai-responses-gateway"
 
 @dataclass(frozen=True)
@@ -48,6 +50,13 @@ class StepResult:
     # Set when no usable decision arrived. Every such step denies, whatever any ServerHello says.
     cause: str | None = None
     failure_class: str | None = None
+    # The Guardian's ask_details when it answered ask, as sent, for the approver page (LAB-08).
+    ask_details: dict[str, Any] | None = None
+    # Set when the session must take no further line, with the cause session_retired is audited with.
+    retire: str | None = None
+    # True once the request went to the Guardian. request_id can be set without a send: an envelope that couldn't be
+    # signed, or a step cancelled after its id was minted. A step span claims acs.request_id only when sent (LAB-09).
+    sent: bool = False
 
 
 _MAX_SAFE_INTEGER = 2**53 - 1
@@ -57,8 +66,8 @@ _SURROGATE = re.compile("[\ud800-\udfff]")
 def jcs_problem(value: Any, depth: int = 0) -> str | None:
     """Why RFC 8785 can't encode value, or None.
 
-    acs.client would rewrite such a value before signing, and then the transcript line written before the send would
-    differ from the envelope sent. The gateway refuses the step instead, and refusing a gated step denies it.
+    acs.client would rewrite such a value before signing, so the Guardian would judge an envelope other than the one the
+    gateway gated. The gateway refuses the step instead, and refusing a gated step denies it.
     """
     if depth > 100:
         return "nesting deeper than 100"
@@ -103,6 +112,11 @@ class StepToken:
         self._retired = False
         self._writing = 0
         self._sending = False
+        # Whether a send ever started, so a step settled without its answer still says the Guardian got it.
+        self.sent = False
+        # An answer line with no cause landed and no discards line marks it yet. If the loop abandons the step while
+        # this holds, the transcript ends on an answer the gateway never carried out.
+        self._unmarked = False
 
     def retire(self) -> bool:
         """Retire the step. True when a write or the send had already started, which can still land but nothing new
@@ -117,6 +131,7 @@ class StepToken:
             if self._retired:
                 return False
             self._sending = True
+            self.sent = True
             return True
 
     def end_send(self) -> None:
@@ -140,6 +155,19 @@ class StepToken:
     def end_write(self) -> None:
         with self._lock:
             self._writing -= 1
+
+    def answer_landed(self) -> None:
+        with self._lock:
+            self._unmarked = True
+
+    def answer_marked(self) -> None:
+        with self._lock:
+            self._unmarked = False
+
+    @property
+    def unmarked(self) -> bool:
+        with self._lock:
+            return self._unmarked
 
     def claim(self, request_id: str) -> bool:
         with self._lock:
@@ -173,6 +201,85 @@ def write_line(token: StepToken | None, write: Callable[[], None]) -> bool:
     return True
 
 
+class DiscardUnwritten(Exception):
+    """The discards line for a withheld answer was not written, whether the write raised or a retired token refused
+    it, so the answer stands unmarked."""
+
+
+class _StepRetired(Exception):
+    """The loop retired the step. Raised inside on_wire, so acs.client refuses the step and sends nothing more."""
+
+
+class Wire:
+    """The on_wire callback for one exchange (PREMORTEM P6). It writes each envelope acs.client sends or receives to
+    the transcript exactly once, through the step token, so the request line lands before the send (P20) and a
+    retired step writes and sends nothing more.
+
+    After round_trip or open_session returns, its fields say what was written, so the caller adds a gap line only
+    for a request that was written and got no envelope back.
+    """
+
+    def __init__(self, transcript: Transcript, session_id: str, token: StepToken | None = None) -> None:
+        self.transcript = transcript
+        self.session_id = session_id
+        self.token = token
+        self.request_written = False
+        # An answer envelope arrived. answer_written says its line landed, answer_cause what that line says.
+        self.answer_seen = False
+        self.answer_written = False
+        self.answer_cause: str | None = None
+        # A decoded JSON object that is no JSON-RPC answer. The caller writes it verbatim with the outcome's cause.
+        self.body: dict[str, Any] | None = None
+        self.sending = False
+        self.stopped = False
+        # A transcript write that raised. The caller re-raises it, so the step settles as the gateway's own error.
+        self.error: BaseException | None = None
+
+    def __call__(self, direction: str, envelope: Any) -> None:
+        try:
+            if direction == "req":
+                self._request(envelope)
+            else:
+                self._answer(envelope)
+        except _StepRetired:
+            self.stopped = True
+            raise
+        except Exception as e:  # noqa: BLE001
+            self.error = e
+            raise
+
+    def _request(self, envelope: Any) -> None:
+        if not write_line(self.token, lambda: self.transcript.append(self.session_id, "req", envelope)):
+            raise _StepRetired("the step was retired before its request line")
+        self.request_written = True
+        if self.token is not None:
+            # Checked under the token's lock as one step with retirement, after the line and right before post().
+            if not self.token.begin_send():
+                raise _StepRetired("the step was retired before the send")
+            self.sending = True
+
+    def _answer(self, envelope: Any) -> None:
+        if response_shape_problem(envelope) is not None:
+            # A body that isn't a JSON-RPC answer, such as a 429's detail, gets its cause only once acs.client has
+            # classified it, so the caller writes it then. A JSON object goes in verbatim, so a verifier sees what
+            # the Guardian sent. Anything else leaves a gap line.
+            if isinstance(envelope, dict):
+                self.body = envelope
+            return
+        self.answer_seen = True
+        if self.token is not None and time.monotonic() >= self.token.deadline:
+            # An answer that arrives after its deadline keeps its envelope, since the Guardian chained it.
+            self.answer_cause = "decision_timeout"
+        cause = self.answer_cause
+        if not write_line(self.token, lambda: self.transcript.append(self.session_id, "resp", envelope,
+                                                                     cause=cause)):
+            self.stopped = True
+            return
+        self.answer_written = True
+        if self.token is not None and cause is None:
+            self.token.answer_landed()
+
+
 class GuardianClient:
     def __init__(self, config: GatewayConfig, transcript: Transcript) -> None:
         self.config = config
@@ -202,22 +309,46 @@ class GuardianClient:
         return replace(negotiated, timeout_s=min(negotiated.timeout_s, local),
                        per_method_timeout_s={m: min(s, local) for m, s in negotiated.per_method_timeout_s.items()})
 
-    def open(self, session: Session) -> None:
-        """Handshake, then sessionStart, so the session's chain roots there (A.4)."""
+    def open(self, session: Session) -> str | None:
+        """Handshake, then sessionStart, so the session's chain roots there (A.4).
+
+        Returns the sessionStart request_id, or None when none was sent, for the session's span (LAB-09).
+        """
+        sent: list[str] = []
+
         def start(negotiated: Negotiated) -> Decided | Resolution | None:
             if not method_evaluated(dict(negotiated.server_hello), SESSION_START):
                 return None
-            outcome, _ = self._send(session.session_id, SESSION_START, {}, self.posture(negotiated.server_hello))
+            outcome, request_id = self._send(session.session_id, SESSION_START, {},
+                                             self.posture(negotiated.server_hello))
+            # An envelope the gateway couldn't sign never left it, so the session span has no request_id to claim.
+            if not (isinstance(outcome, Resolution) and outcome.cause == "envelope_not_signable"):
+                sent.append(request_id)
             return outcome
 
+        wire = Wire(self.transcript, session.session_id)
         handshake = open_session(config=self.acs_config, session_id=session.session_id, agent_id=self.config.agent_id,
-                                 platform=PLATFORM, methods_implemented=METHODS, start=start)
+                                 platform=PLATFORM, methods_implemented=METHODS, start=start, on_wire=wire,
+                                 response_keys=self.config.response_keys)
         session.handshake = handshake
+        if wire.request_written and not wire.answer_seen and wire.error is None:
+            # The ClientHello went out and no envelope came back, so its gap is explicit, as for a step. Nothing
+            # else was written in between, since sessionStart follows only a ServerHello.
+            try:
+                self.transcript.append(session.session_id, "resp", wire.body,
+                                       cause=getattr(handshake, "cause", None) or "no_answer")
+            except Exception as e:  # noqa: BLE001
+                # The same refusal acs.client gives when the ClientHello line fails: the record is incomplete, so
+                # the session must not open.
+                fields = {"dir": "resp", "method": "handshake/hello", "error": str(e)}
+                audit_event("on_wire_failed", **fields)
+                handshake = session.handshake = SessionRefused("on_wire_failed", fields)
         hello = dict(handshake.server_hello) if isinstance(handshake, Negotiated) else None
         session.posture = self.posture(hello)
         audit_event("session_opened", session_id=session.session_id, epoch=session.epoch,
                     handshake=type(handshake).__name__, cause=getattr(handshake, "cause", None),
                     guardian_url=self.config.guardian_url)
+        return sent[0] if sent else None
 
     def step(self, session: Session, method: str, payload: dict[str, Any],
              token: StepToken | None = None) -> StepResult:
@@ -248,15 +379,34 @@ class GuardianClient:
             if remaining <= 0:
                 return StepResult(method, None, cause="decision_timeout", failure_class="timeout")
             posture = replace(posture, timeout_s=min(posture.timeout_for(method), remaining), per_method_timeout_s={})
-        outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        try:
+            outcome, request_id = self._send(session.session_id, method, payload, posture, token)
+        except DiscardUnwritten as e:
+            # repr, since an OSError raised with no arguments has no text at all.
+            audit_event("gateway_step_error", session_id=session.session_id, method=method, phase="discard_late",
+                        request_id=e.args[0],
+                        error=repr(e.__cause__) if e.__cause__ is not None else "refused: the step was retired")
+            # Recorded here as well as in the result, since a loop that abandoned the step never reads the result.
+            session.record_unmarked_answer()
+            return StepResult(method, e.args[0], cause="decision_timeout", failure_class="timeout",
+                              retire="discard_unwritten", sent=True)
+        # The token saw whether the send started. Without one (sessionStart inside the handshake), only an envelope
+        # the gateway couldn't sign stays unsent.
+        if token is not None:
+            sent = token.sent
+        else:
+            sent = not (isinstance(outcome, Resolution) and outcome.cause == "envelope_not_signable")
         if outcome is None:
-            return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout")
+            return StepResult(method, request_id, cause="decision_timeout", failure_class="timeout", sent=sent)
         if isinstance(outcome, Resolution):
-            return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"))
+            return StepResult(method, request_id, cause=outcome.cause, failure_class=outcome.fields.get("failure_class"),
+                              sent=sent)
         result = outcome.response.get("result") or {}
         codes = result.get("reason_codes")
+        details = result.get("ask_details")
         return StepResult(method, request_id, decision=normalize_decision(result),
-                          reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [])
+                          reason_codes=[c for c in codes if isinstance(c, str)] if isinstance(codes, list) else [],
+                          ask_details=details if isinstance(details, dict) else None, sent=sent)
 
     def _send(self, session_id: str, method: str, payload: dict[str, Any], posture: FailPosture,
               token: StepToken | None = None) -> tuple[Decided | Resolution | None, str]:
@@ -279,33 +429,59 @@ class GuardianClient:
         signature = dict(request["params"]["signature"])
         if token is not None and not token.claim(request_id):
             return None, request_id
-        # Written before the send, so the transcript holds every envelope in the order the Guardian chained it (P20).
-        if not write_line(token, lambda: self.transcript.append(session_id, "req", request)):
-            return None, request_id
-        if token is not None and not token.begin_send():
-            # The loop gave up on this step and retired its session before the send could start.
-            return None, request_id
+        wire = Wire(self.transcript, session_id, token)
         try:
             outcome = round_trip(request, guardian_url=self.config.guardian_url, posture=posture,
-                                 session_id=session_id, gate=True)
+                                 session_id=session_id, gate=True, on_wire=wire,
+                                 response_keys=self.config.response_keys)
         finally:
-            if token is not None:
+            if wire.sending:
                 token.end_send()
+        if wire.error is not None:
+            raise wire.error
+        if request["params"].get("signature") != signature:
+            audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
+        if wire.stopped:
+            # The loop retired the step, so no line may follow and no answer counts.
+            return None, request_id
         # round_trip's own timeout was set before the request line was written, so a slow write lets an answer
         # through after the deadline. Whatever a late answer says, the step times out.
         late = token is not None and time.monotonic() >= token.deadline
-        if request["params"].get("signature") != signature:
-            audit_event("transcript_mismatch", session_id=session_id, method=method, request_id=request_id)
-        if isinstance(outcome, Resolution):
-            cause = "decision_timeout" if late else outcome.cause
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None, cause=cause))
-        else:
-            # round_trip has already verified the response's signature. acs.client accepts HMAC-SHA256 only, and
-            # LAB-03 (issue #576) changes its algorithm dispatch to verify by key_id from the key document. A late
-            # answer keeps its envelope, since the Guardian chained it.
-            cause = "decision_timeout" if late else None
-            written = write_line(token, lambda: self.transcript.append(session_id, "resp", outcome.response,
-                                                                       cause=cause))
-        if not written or late:
+        if not wire.answer_seen:
+            if wire.request_written:
+                # The request went out and no envelope came back, so the gap is explicit.
+                cause = "decision_timeout" if late else outcome.cause
+                if not write_line(token, lambda: self.transcript.append(session_id, "resp", wire.body, cause=cause)):
+                    return None, request_id
+            return (None if late else outcome), request_id
+        if late or (token is not None and token.retired):
+            if wire.answer_written and wire.answer_cause is None:
+                # Withheld: on time when it arrived and late once its line landed, or landed after the loop abandoned
+                # the step. Either way the transcript must say so, and a retired token refuses that line.
+                self.discard_late(session_id, request_id, token)
             return None, request_id
         return outcome, request_id
+
+    def end(self, session: Session, reason: str, token: StepToken) -> StepResult:
+        """steps/sessionEnd for a session the gateway is dropping, as one more step of it (rehearsal finding R9).
+
+        reason is session-end.json's: abandoned for an eviction, error or cancelled for a retirement, cancelled for an
+        epoch bump or a shutdown. Never raises, like step.
+        """
+        return self.step(session, SESSION_END, {"reason": reason}, token)
+
+    def discard_late(self, session_id: str, request_id: str, token: StepToken | None) -> None:
+        """Mark the answer on the line before as withheld for lateness (lab convention, issue #577).
+
+        The one place a discards line is written, so the one place its absence is decided. DiscardUnwritten when the
+        line did not land for any reason, a raised write or a retired token's refusal alike.
+        """
+        try:
+            written = write_line(token, lambda: self.transcript.append(session_id, "resp", None,
+                                                                       cause="decision_timeout", discards=request_id))
+        except Exception as e:  # noqa: BLE001
+            raise DiscardUnwritten(request_id) from e
+        if not written:
+            raise DiscardUnwritten(request_id)
+        if token is not None:
+            token.answer_marked()

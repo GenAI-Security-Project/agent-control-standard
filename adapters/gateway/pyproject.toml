@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "acs-gateway"
-version = "0.1.0"
+version = "0.1.5"
 description = "An OpenAI Responses API gateway that makes an unmodified client an ACS Observed Agent"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,7 +15,14 @@ dependencies = [
     "starlette==1.10.0",
     "httpx==0.28.1",
     "uvicorn==0.54.0",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
 ]
+
+[project.optional-dependencies]
+# ML-DSA-65 decision verification (issue #576), which needs cryptography 50. Lab convention until issue #316 settles
+# verifier rules: without the extra the gateway verifies HMAC-SHA256 answers only, as before.
+pqc = ["acs-adapters[pqc]"]
 
 [project.scripts]
 acs-gateway = "acs_gateway.cli:main"
@@ -34,8 +41,10 @@ constraint-dependencies = [
     "arrow==1.4.0",
     "attrs==26.1.0",
     "certifi==2026.10.23",
+    "cffi==2.1.1",
     "click==8.5.0",
     "colorama==0.4.6",
+    "cryptography==50.0.2",
     "fqdn==1.6.0",
     "grimp==3.18",
     "h11==0.16.0",
@@ -53,6 +62,7 @@ constraint-dependencies = [
     "mdurl==0.1.2",
     "packaging==26.3",
     "pluggy==1.7.0",
+    "pycparser==3.12",
     "pygments==2.21.0",
     "pytest==9.2.0",
     "python-dateutil==3.0.0",

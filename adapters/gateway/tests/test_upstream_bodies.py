@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from conftest import finbot_request, message_item, response_body
+from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body
 
 
 def events(audit, name):
@@ -45,10 +45,14 @@ def test_shadow_forwards_a_compressed_request_unchanged(gateway, guardian, upstr
 
 @pytest.mark.parametrize("stream", ["true", 1, "yes", 0, ""])
 def test_any_stream_value_but_false_or_null_counts_as_streaming(gateway, guardian, upstream, stream):
+    # An upstream that reads the value as false answers with JSON, which goes through the same gate as any whole
+    # answer, so the destructive call never reaches the client.
+    upstream.reply(response_body(call_item("bash", {"command": "rm -rf /"}, "call_1")))
     body = {**finbot_request(), "stream": stream}
     response = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian).post("/v1/responses", json=body)
-    assert response.status_code == 501
-    assert upstream.received == []
+    assert response.status_code == 200
+    assert b"rm -rf" not in response.content
+    assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
 
 
 @pytest.mark.parametrize("stream", [False, None])

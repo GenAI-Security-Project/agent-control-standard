@@ -61,8 +61,10 @@ def finbot_request(*extra: dict[str, Any], system: str = "You are FinBot for ns1
 
 @dataclass
 class SSE:
-    """A streamed reply: each entry is written and flushed on its own, like a model emitting events."""
+    """A streamed reply: each entry is written and flushed on its own, like a model emitting events. hold_open keeps
+    the connection open that many seconds after the last event, like an upstream that never closes."""
     events: list[bytes]
+    hold_open: float = 0.0
 
 
 def sse_events(text: str) -> list[bytes]:
@@ -94,10 +96,11 @@ class Received:
 class FakeUpstream:
     url: str
     received: list[Received] = field(default_factory=list)
-    replies: list[tuple[int, Any, dict[str, str]]] = field(default_factory=list)
+    replies: list[tuple[int, Any, dict[str, str], float]] = field(default_factory=list)
 
-    def reply(self, body: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
-        self.replies.append((status, body, headers or {}))
+    def reply(self, body: Any, status: int = 200, headers: dict[str, str] | None = None, delay: float = 0.0) -> None:
+        """Queue the answer to the next request. delay holds it back, so a later request can finish first."""
+        self.replies.append((status, body, headers or {}, delay))
 
 
 @pytest.fixture
@@ -108,7 +111,9 @@ def upstream() -> Iterator[FakeUpstream]:
         def do_POST(self) -> None:  # noqa: N802
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             state.received.append(Received(self.path, {k.lower(): v for k, v in self.headers.items()}, body))
-            status, reply, extra = state.replies.pop(0) if state.replies else (200, response_body(message_item("ok")), {})
+            status, reply, extra, delay = (state.replies.pop(0) if state.replies
+                                           else (200, response_body(message_item("ok")), {}, 0.0))
+            time.sleep(delay)
             if isinstance(reply, SSE):
                 self.send_response(status)
                 self.send_header("Content-Type", "text/event-stream")
@@ -117,6 +122,7 @@ def upstream() -> Iterator[FakeUpstream]:
                 for event in reply.events:
                     self.wfile.write(event)
                     self.wfile.flush()
+                time.sleep(reply.hold_open)
                 self.close_connection = True
                 return
             raw = reply if isinstance(reply, bytes) else json.dumps(reply).encode()

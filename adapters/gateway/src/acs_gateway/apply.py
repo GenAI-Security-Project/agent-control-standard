@@ -17,6 +17,44 @@ NEUTRAL_LINE = "I couldn't complete that action."
 DEFAULT_REDACTION = "[REDACTED]"
 
 
+def message_part(part: Any) -> dict[str, Any] | None:
+    """A model message's content part rebuilt from known fields, or None when enforce must not pass it.
+
+    The one allowlist for message parts, shared by whole answers and streams (issue #578): output_text and refusal.
+    Anything else, a function_call-shaped part included, withholds the message.
+    """
+    if not isinstance(part, dict):
+        return None
+    if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+        return {"type": "output_text", "text": part["text"], "annotations": []}
+    if part.get("type") == "refusal" and isinstance(part.get("refusal"), str):
+        return {"type": "refusal", "refusal": part["refusal"]}
+    return None
+
+
+def unsupported_message_part(item: dict[str, Any]) -> str | None:
+    """The type of the first part of a model message outside the allowlist, or None when every part passes."""
+    content = item.get("content")
+    if not isinstance(content, list):
+        return "non_list_value"
+    for part in content:
+        if message_part(part) is None:
+            kind = part.get("type") if isinstance(part, dict) else None
+            return kind if isinstance(kind, str) else type(part).__name__
+    return None
+
+
+def rebuilt_message(item: Any) -> dict[str, Any] | None:
+    """A model message rebuilt from known fields, or None when it isn't a message with an id whose every part passes
+    the allowlist."""
+    if (not isinstance(item, dict) or item.get("type") != "message" or not isinstance(item.get("id"), str)
+            or unsupported_message_part(item) is not None):
+        return None
+    status = item.get("status") if isinstance(item.get("status"), str) else "completed"
+    return {"type": "message", "id": item["id"], "role": "assistant", "status": status,
+            "content": [message_part(part) for part in item["content"]]}
+
+
 def neutral_message() -> dict[str, Any]:
     """An assistant message carrying the neutral line, with an id shaped like the upstream's own."""
     return {"type": "message", "id": f"msg_{secrets.token_hex(24)}", "role": "assistant", "status": "completed",
@@ -149,14 +187,18 @@ def parse_arguments(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
     return value, None
 
 
-def call_payload(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    # tool.version carries the tool digest once LAB-07 (issue #580) computes it.
-    return {"tool": {"name": name}, "arguments": {k: {"value": v} for k, v in arguments.items()}}
+def call_payload(name: str, arguments: dict[str, Any], version: str | None = None) -> dict[str, Any]:
+    """The toolCallRequest payload. version is the declaration digest from ToolDigests (A.10, a lab convention
+    until issue #38), or None for a function the request never declared, which leaves tool.version out."""
+    tool = {"name": name} if version is None else {"name": name, "version": version}
+    return {"tool": tool, "arguments": {k: {"value": v} for k, v in arguments.items()}}
 
 
-def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[dict[str, Any], bool, str | None]:
+def result_payload(name: str, output: Any, request_id_ref: str | None,
+                   version: str | None = None) -> tuple[dict[str, Any], bool, str | None]:
     """The toolCallResult payload, whether outputs[0].value is parsed JSON a redaction can point into, and the first
-    key the output repeats, or None. Parsed once, strictly."""
+    key the output repeats, or None. Parsed once, strictly. version is the declaration digest of the function whose
+    output this is, as on toolCallRequest (A.10, a lab convention until issue #38), or None to leave it out."""
     value, parsed, repeated = output, False, None
     if isinstance(output, str):
         try:
@@ -164,7 +206,8 @@ def result_payload(name: str, output: Any, request_id_ref: str | None) -> tuple[
             parsed = True
         except (ValueError, RecursionError):
             value = output
-    payload: dict[str, Any] = {"tool": {"name": name}, "exit_status": "success", "outputs": [{"value": value}]}
+    tool = {"name": name} if version is None else {"name": name, "version": version}
+    payload: dict[str, Any] = {"tool": tool, "exit_status": "success", "outputs": [{"value": value}]}
     if request_id_ref:
         payload["request_id_ref"] = request_id_ref
     return payload, parsed, repeated

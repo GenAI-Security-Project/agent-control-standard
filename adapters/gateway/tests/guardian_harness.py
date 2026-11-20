@@ -23,6 +23,25 @@ def _tool(params: dict[str, Any]) -> str:
 def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -> dict:
     base = {"type": "final", "acs_version": eg.ACS_VERSION, "request_id": request_id, "chain_hash": chain_hash}
     tool = _tool(params)
+    if tool == "pinned_tool" and method in ("steps/toolCallRequest", "steps/toolCallResult"):
+        # The A.10 pin check LAB-12 writes in Rego, reduced to one comparison against the pinned digest, on calls and
+        # results alike. It fails closed: no version, or no pin to compare with, denies like a mismatch.
+        version = ((params.get("payload") or {}).get("tool") or {}).get("version")
+        pin = os.environ.get("HARNESS_PINNED_VERSION")
+        if not version or not pin or version != pin:
+            return {**base, "decision": "deny", "reasoning": f"tool.version {version}",
+                    "reason_codes": ["tool_content_hash_mismatch"]}
+        if method == "steps/toolCallRequest" and os.environ.get("HARNESS_PINNED_ASK"):
+            # A pinned call that passed the pin then needs a person, so a test sees the pin checked on the first ask
+            # and again on the approval resend. Off unless a test sets the flag.
+            answer = (params.get("payload") or {}).get("x_acs_lab_ask_answer")
+            if isinstance(answer, dict):
+                if answer.get("answer") == "approve":
+                    return {**base, "decision": "allow", "reasoning": "approved", "reason_codes": ["approver_approved"]}
+                return {**base, "decision": "deny", "reasoning": "not approved", "reason_codes": ["approver_rejected"]}
+            return {**base, "decision": "ask", "reasoning": "needs approval", "reason_codes": ["payment_over_threshold"],
+                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve?",
+                                    "timeout_seconds": int(os.environ.get("HARNESS_ASK_TIMEOUT_S", "60"))}}
     if method == "steps/toolCallRequest":
         if tool == "slow_tool":
             time.sleep(float(os.environ.get("HARNESS_SLOW_S", "1.5")))
@@ -30,14 +49,28 @@ def evaluate_step(method: str, params: dict, request_id: str, chain_hash: str) -
             return {**base, "decision": "modify", "reasoning": "recipient rewritten",
                     "reason_codes": ["external_recipient"],
                     "modifications": {"parameter_overrides": {"to": "ops@ns1.finbot"}}}
-        if tool == "ask_tool":
+        if tool in ("ask_tool", "ask_deny_tool"):
+            # The gateway's lab answer field (LAB-08, until issue #175). ask_tool follows the approver, and
+            # ask_deny_tool denies whatever the approver said, so a test can tell the Guardian decided.
+            answer = (params.get("payload") or {}).get("x_acs_lab_ask_answer")
+            if isinstance(answer, dict):
+                if tool == "ask_tool" and answer.get("answer") == "approve":
+                    return {**base, "decision": "allow", "reasoning": "approved", "reason_codes": ["approver_approved"]}
+                return {**base, "decision": "deny", "reasoning": "not approved", "reason_codes": ["approver_rejected"]}
             return {**base, "decision": "ask", "reasoning": "needs approval", "reason_codes": ["payment_over_threshold"],
-                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"},
+                    "ask_details": {"approver": {"type": "human", "id": "lab-approver"}, "question": "Approve?",
+                                    "timeout_seconds": int(os.environ.get("HARNESS_ASK_TIMEOUT_S", "60"))}}
+        if tool == "ask_agent_tool":
+            return {**base, "decision": "ask", "reasoning": "needs a bot", "reason_codes": ["agent_approval"],
+                    "ask_details": {"approver": {"type": "agent", "id": "approval-bot",
+                                                 "endpoint": "https://example.com/approve"},
                                     "question": "Approve?", "timeout_seconds": 60}}
         if tool == "defer_tool":
             return {**base, "decision": "defer", "reasoning": "later", "reason_codes": ["deferred"],
                     "defer_details": {"reason": "low_confidence", "resolution_method": "timeout",
                                       "resolution_timeout_ms": 1000}}
+    if method == "steps/sessionEnd" and os.environ.get("HARNESS_SLOW_END_S"):
+        time.sleep(float(os.environ["HARNESS_SLOW_END_S"]))
     if method == "steps/toolCallResult":
         if tool == "get_vendor_details":
             return {**base, "decision": "modify", "reasoning": "bank account removed",
@@ -80,8 +113,15 @@ def _inject(request: dict) -> dict | None:
     if count_file:
         with open(count_file, "a", encoding="utf-8") as f:
             f.write(f"{request.get('method')}\n")
-    if _tool(request.get("params") or {}) == "rate_limited_tool":
+    if request.get("method") == "steps/sessionEnd" and os.environ.get("HARNESS_FAIL_END") == "1":
+        return {"__harness_status__": 503}
+    tool = _tool(request.get("params") or {})
+    if tool == "rate_limited_tool":
         return {"__harness_status__": 429}
+    if tool == "list_body_tool":
+        return {"__harness_status__": 500, "__harness_body__": ["not", "an", "object"]}
+    if tool == "odd_body_tool":
+        return {"__harness_status__": 200, "__harness_body__": {"detail": "not an answer"}}
     return None
 
 
@@ -122,7 +162,7 @@ def _install_hooks() -> None:
 
 def respond(self: Any, status: int, body: dict) -> None:
     if "__harness_status__" in body:
-        return _respond(self, body["__harness_status__"], {"detail": "rate limited"})
+        return _respond(self, body["__harness_status__"], body.get("__harness_body__", {"detail": "rate limited"}))
     return _respond(self, status, body)
 
 

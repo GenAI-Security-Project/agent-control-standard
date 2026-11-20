@@ -22,11 +22,14 @@ def test_an_allowed_call_is_returned_unchanged(gateway, guardian, upstream, audi
     assert response.json() == reply
     lines = transcript_lines(tmp_path)
     methods = [(line["dir"], line["envelope"].get("method")) for line in lines]
-    assert methods == [("req", "steps/sessionStart"), ("resp", None),
+    assert methods == [("req", "handshake/hello"), ("resp", None), ("req", "steps/sessionStart"), ("resp", None),
                        ("req", "steps/toolCallRequest"), ("resp", None)]
-    request = lines[2]["envelope"]["params"]
-    assert request["payload"] == {"tool": {"name": "get_vendor_details"}, "arguments": {"vendor_id": {"value": 7}}}
-    assert lines[3]["envelope"]["result"]["request_id"] == request["request_id"]
+    request = lines[4]["envelope"]["params"]
+    # The literal digest of finbot_request()'s get_vendor_details declaration (A.10), computed apart from the gateway.
+    version = "sha256:bf299d76420ad64fead3b567ac81241d5b57dc13f2f3b5d63078730f1248d313"
+    assert request["payload"] == {"tool": {"name": "get_vendor_details", "version": version},
+                                  "arguments": {"vendor_id": {"value": 7}}}
+    assert lines[5]["envelope"]["result"]["request_id"] == request["request_id"]
     assert len(events(audit, "session_opened")) == 1
     applied = events(audit, "decision_applied")
     assert [(e["method"], e["decision"]) for e in applied] == [("steps/toolCallRequest", "allow")]
@@ -56,7 +59,7 @@ def test_a_call_with_unsignable_arguments_is_denied(gateway, guardian, upstream,
     assert output[0]["content"][0]["text"] == NEUTRAL
     assert events(audit, "decision_applied")[0]["cause"] == "envelope_not_signable"
     assert [line["envelope"].get("method") for line in transcript_lines(tmp_path) if line["dir"] == "req"] == [
-        "steps/sessionStart"]
+        "handshake/hello", "steps/sessionStart"]
 
 
 def test_a_repeated_call_id_reapplies_the_cached_outcome(gateway, guardian, upstream, audit, tmp_path):
@@ -134,7 +137,9 @@ def test_a_transcript_that_cannot_be_written_denies(gateway, guardian, upstream,
         "/v1/responses", json=finbot_request())
     assert response.status_code == 200
     assert response.json()["output"][0]["content"][0]["text"] == NEUTRAL
-    assert events(audit, "decision_applied")[0]["cause"] == "adapter_exception"
+    # The ClientHello is the first line, so acs.client refuses the session when it can't be written.
+    assert events(audit, "decision_applied")[0]["cause"] == "on_wire_failed"
+    assert events(audit, "session_opened")[0]["handshake"] == "SessionRefused"
 
 
 class FailingTranscript:
@@ -154,16 +159,17 @@ def test_a_step_whose_transcript_line_fails_denies(gateway, guardian, upstream, 
     assert events(audit, "decision_applied")[0]["cause"] == "adapter_exception"
 
 
-@pytest.mark.parametrize("tool,cause", [("slow_tool", "decision_timeout"), ("rate_limited_tool", "http_429_error"),
-                                        ("tampered_tool", "response_signature_invalid")])
+# A tampered answer is an envelope, so its line carries it verbatim (test_transcript_wiring.py).
+# A body that is a JSON object is written verbatim with its cause (test_transcript_wiring.py).
+@pytest.mark.parametrize("tool,cause", [("slow_tool", "decision_timeout"), ("list_body_tool", "http_500_error")])
 def test_a_step_without_a_usable_answer_leaves_an_explicit_gap_in_the_transcript(gateway, harness_guardian, upstream,
                                                                                   tmp_path, tool, cause):
     upstream.reply(response_body(call_item(tool, {}, "call_1")))
     gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=harness_guardian(), ACS_DECISION_TIMEOUT_MS="500").post(
         "/v1/responses", json=finbot_request())
     lines = transcript_lines(tmp_path)
-    assert lines[2]["dir"] == "req" and lines[2]["envelope"]["method"] == "steps/toolCallRequest"
-    assert lines[3] == {"dir": "resp", "envelope": None, "cause": cause}
+    assert lines[-2]["dir"] == "req" and lines[-2]["envelope"]["method"] == "steps/toolCallRequest"
+    assert lines[-1] == {"dir": "resp", "envelope": None, "cause": cause}
 
 
 def reasoning(item_id):
@@ -335,7 +341,8 @@ def test_an_answer_that_comes_back_after_the_deadline_is_a_timeout(gateway, guar
     assert output[0]["content"][0]["text"] == NEUTRAL
     applied = events(audit, "decision_applied")[0]
     assert (applied["decision"], applied["cause"]) == ("deny", "decision_timeout")
-    assert applied["request_id"] == transcript_lines(tmp_path)[-2]["envelope"]["params"]["request_id"]
+    lines = transcript_lines(tmp_path)
+    assert applied["request_id"] == lines[-3]["envelope"]["params"]["request_id"] == lines[-1]["discards"]
 
 
 def test_an_answer_inside_the_deadline_is_honored(gateway, guardian, upstream, audit, tmp_path):

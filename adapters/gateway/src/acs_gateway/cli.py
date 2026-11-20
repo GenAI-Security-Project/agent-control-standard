@@ -31,9 +31,14 @@ def main() -> int:
         return 2
     import uvicorn
 
-    from acs_gateway.app import create_admin_app, create_app, load_admin_token
+    from acs_gateway.app import create_admin_app, create_app, load_admin_token, load_secret_file
 
-    app = create_app(config)
+    try:
+        app = create_app(config)
+    except (ValueError, OSError) as e:
+        # A bad key file or recording is an operator's setting, so it gets the same one-line message as the rest.
+        sys.stderr.write(f"acs-gateway: {e}\n")
+        return 2
     servers = [uvicorn.Server(uvicorn.Config(app, host=config.listen_host, port=config.listen_port,
                                              lifespan="on", log_level="info"))]
     if config.admin_port is not None:
@@ -47,6 +52,21 @@ def main() -> int:
             return 2
         admin = create_admin_app(app.state.gateway, token)
         servers.append(uvicorn.Server(uvicorn.Config(admin, host=config.admin_host, port=config.admin_port,
+                                                     lifespan="off", log_level="info")))
+    approvals = app.state.gateway.approvals
+    if approvals is not None:
+        from acs_gateway.approver import create_approver_app
+
+        assert config.approver_token_file is not None
+        try:
+            secret = load_secret_file(config.approver_token_file, "ACS_GATEWAY_APPROVER_TOKEN_FILE")
+        except (ValueError, OSError) as e:
+            sys.stderr.write(f"acs-gateway: {e}\n")
+            return 2
+        # The approver page (LAB-08). Same process and event loop as the model port, so an answer wakes the held
+        # request directly. Opens after the model port's startup, like the admin port.
+        servers.append(uvicorn.Server(uvicorn.Config(create_approver_app(approvals, secret, config.approver_host),
+                                                     host=config.approver_host, port=config.approver_port,
                                                      lifespan="off", log_level="info")))
     sys.stderr.write(f"acs-gateway: mode {config.mode}, model port {config.listen_port}\n")
     return asyncio.run(_serve(servers))

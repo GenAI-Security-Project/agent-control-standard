@@ -64,3 +64,77 @@ def test_integer_settings_read_whole_numbers(tmp_path):
 def test_integer_settings_take_plain_ascii_digits_only(tmp_path, value):
     with pytest.raises(ValueError, match="ACS_GATEWAY_WORKERS must be plain ASCII digits"):
         GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_WORKERS": value})
+
+
+def test_the_stream_idle_timeout_defaults_to_60_seconds_and_reads_seconds(tmp_path):
+    assert GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)}).stream_idle_timeout_s == 60.0
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path),
+                                     "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S": "2.5"})
+    assert config.stream_idle_timeout_s == 2.5
+    with pytest.raises(ValueError, match="ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S": "0"})
+
+
+def test_the_stream_deadline_defaults_to_600_seconds(tmp_path):
+    assert GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)}).stream_deadline_s == 600.0
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_STREAM_DEADLINE_S": "30"})
+    assert config.stream_deadline_s == 30.0
+
+
+def _approver_env(tmp_path, **extra):
+    token = tmp_path / "approver.token"
+    token.write_text("a" * 40)
+    token.chmod(0o600)
+    return {"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_APPROVER_PORT": "8090",
+            "ACS_GATEWAY_APPROVER_TOKEN_FILE": str(token), **extra}
+
+
+def test_approver_is_off_by_default_and_binds_loopback(tmp_path):
+    config = GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path)})
+    assert config.approver_port is None and config.approver_token_file is None
+    assert config.approver_host == "127.0.0.1"
+    assert config.ask_max_s == 240.0
+
+
+def test_approver_port_token_and_ask_cap_are_read(tmp_path):
+    config = GatewayConfig.from_env(_approver_env(tmp_path, ACS_GATEWAY_ASK_MAX_S="1.5", ACS_DECISION_TIMEOUT_MS="100"))
+    assert config.approver_port == 8090
+    assert config.approver_token_file == tmp_path / "approver.token"
+    assert config.ask_max_s == 1.5
+
+
+def test_ask_cap_above_240_seconds_is_refused(tmp_path):
+    # FinBot's LLM_TIMEOUT is 360 s, so a hold longer than 240 s would outlive the client's own wait (A.3).
+    with pytest.raises(ValueError, match="ACS_GATEWAY_ASK_MAX_S"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_ASK_MAX_S": "241"})
+
+
+def test_ask_cap_must_leave_room_for_the_resend(tmp_path):
+    # The budget covers the hold and the resend, so a cap no longer than one decision leaves no time to hold.
+    with pytest.raises(ValueError, match="ACS_GATEWAY_ASK_MAX_S"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_ASK_MAX_S": "5"})
+
+
+def test_the_approver_page_needs_a_token_file(tmp_path):
+    with pytest.raises(ValueError, match="ACS_GATEWAY_APPROVER_TOKEN_FILE"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_APPROVER_PORT": "8090"})
+
+
+def test_a_non_loopback_approver_host_without_a_token_file_refuses_to_start(tmp_path):
+    with pytest.raises(ValueError, match="ACS_GATEWAY_APPROVER_TOKEN_FILE"):
+        GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), "ACS_GATEWAY_APPROVER_PORT": "8090",
+                                "ACS_GATEWAY_APPROVER_HOST": "0.0.0.0"})
+
+
+@pytest.mark.parametrize("raw", ["0", "65536", "80a", "-1", "8e3", "\u0668\u0660\u0669\u0660"])
+def test_an_approver_port_outside_1_to_65535_is_refused(tmp_path, raw):
+    with pytest.raises(ValueError, match="ACS_GATEWAY_APPROVER_PORT"):
+        GatewayConfig.from_env(_approver_env(tmp_path, ACS_GATEWAY_APPROVER_PORT=raw))
+
+
+@pytest.mark.parametrize("other", [{"ACS_GATEWAY_PORT": "8090"}, {"ACS_GATEWAY_ADMIN_PORT": "8090"},
+                                   {"ACS_GATEWAY_PORT": "08090"}, {"ACS_GATEWAY_ADMIN_PORT": "08090"},
+                                   {"ACS_GATEWAY_ADMIN_PORT": " 8090"}])
+def test_the_approver_port_must_differ_from_the_model_and_admin_ports(tmp_path, other):
+    with pytest.raises(ValueError, match="ACS_GATEWAY_APPROVER_PORT"):
+        GatewayConfig.from_env(_approver_env(tmp_path, **other))
