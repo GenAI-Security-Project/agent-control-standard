@@ -15,8 +15,6 @@
 # Default owners for anything not matched below.
 *                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
 
-/AGENTS.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/AGENTS.override.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /STYLE.md        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -70,6 +68,13 @@
 # and those pull requests do not all wait on the same two reviewers. Every handle here
 # holds write access, because GitHub silently ignores one that does not.
 /adapters/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc @Lrd0036 @e2hln @almogbhl
+
+# Coding-agent instructions apply at every directory depth (Codex loads nested AGENTS.md
+# and gives AGENTS.override.md precedence). Placed after broader directory rules such as
+# /adapters/ and before /.github/ so nested instruction files keep the restricted owner
+# set without weakening the lead-only /.github/ rule.
+AGENTS.md          @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+AGENTS.override.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead
