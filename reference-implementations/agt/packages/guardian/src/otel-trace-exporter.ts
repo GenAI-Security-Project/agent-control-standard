@@ -178,10 +178,9 @@ export type StepSpan = {
  * is required, not defaulted, so a caller that forgets it fails to compile
  * rather than exporting an untrusted request's ids as a step.
  *
- * Trusted here means accepted by every check this Guardian runs. This
- * reference Guardian checks the envelope against the schema and nothing
- * else: it verifies no signature, replay or timestamp yet (PR #229), so a
- * forgery or a replay that passes the schema is still recorded as a step.
+ * Trusted here means the envelope passed the schema. The signature, replay
+ * and timestamp checks run later, inside dispatch, and a request one of them
+ * refuses is still recorded apart: dispatch passes its rejection to `end`.
  *
  * `receivedAt` is `performance.now()` when the request arrived, so the time
  * the Guardian spent checking it counts toward a late decision.

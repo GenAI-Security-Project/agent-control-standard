@@ -19,6 +19,7 @@ describe("denyOnInvalidEnvelope", () => {
         reasoning: "params.payload.tool is required",
         reason_codes: ["envelope_invalid"],
         policy_references: [],
+        metadata: { evaluator: "deterministic" },
       },
     });
   });
