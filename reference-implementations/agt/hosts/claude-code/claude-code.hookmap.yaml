@@ -157,6 +157,11 @@ hooks:
     outputs:
       from: $.tool_response.stdout
       within: $.tool_response
+      # stderr is the other text Bash returns. A withholding replaces it with
+      # stdout, so a deny cannot deliver it. A redaction of stdout leaves it as
+      # produced, because the policy evaluates stdout alone.
+      companions:
+        - $.tool_response.stderr
     # Claude Code fires a SEPARATE PostToolUseFailure event for the failing
     # case (present in 2.1.227's hook schema, not wired in this slice), so
     # this event genuinely means success. A literal, not a field read: the
