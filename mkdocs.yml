@@ -65,7 +65,7 @@ extra:
     external_resources:
       - {title: GitHub, url: "https://github.com/GenAI-Security-Project/agent-control-standard"}
       - {title: Roadmap, url: "https://github.com/GenAI-Security-Project/agent-control-standard/milestones"}
-      - {title: Slack, url: "https://owasp.slack.com"}
+      - {title: Slack, url: "https://owasp.org/slack/invite"}
     # Pages that exist in the build but stay out of nav: on purpose.
     out_of_nav_prefixes:
       - spec/instrument/a2a/hooks/

@@ -89,7 +89,7 @@ REPAIR = {
     "host": (
         "`{url}` is not a reviewed pane link. Every pane URL comes from `mkdocs.yml`, is `https`, "
         "carries no port, userinfo, or backslash, and leaves the site only for github.com or "
-        "owasp.slack.com. The hero's links in `landing/index.html` go only where the pane goes."
+        "the owasp.org Slack invite. The hero's links in `landing/index.html` go only where the pane goes."
     ),
     "section_rules": (
         "The theme stylesheet lost a rule the External resources section in "
@@ -185,7 +185,7 @@ def test_repo_url_and_the_three_resources_are_the_literals():
     assert urls == {
         "GitHub": REPO_URL,
         "Roadmap": REPO_URL + "/milestones",
-        "Slack": "https://owasp.slack.com",
+        "Slack": "https://owasp.org/slack/invite",
     }
 
 
@@ -307,7 +307,7 @@ FAQ = REPO / "docs" / "topics" / "faq.md"
 FAQ_BANNER = "This section is non-normative."
 RFC2119 = re.compile(r"\b(MUST|MUST NOT|REQUIRED|SHALL|SHALL NOT|SHOULD|SHOULD NOT|RECOMMENDED|MAY|OPTIONAL)\b")
 FENCE = re.compile(r"^\s*(```|~~~)")
-REVIEWED_HOSTS = frozenset({"github.com", "owasp.slack.com"})
+REVIEWED_HOSTS = frozenset({"github.com", "owasp.org"})
 WIDE = "@media screen and (min-width:76.25em)"
 CANONICAL = re.compile(r'<link rel="canonical" href="([^"]+)"')
 CONFIG = re.compile(r'<script id="__config" type="application/json">(.*?)</script>', re.S)

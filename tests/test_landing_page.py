@@ -239,7 +239,7 @@ def test_the_specification_is_not_listed_as_an_external_resource(page):
         external.append(url)
     assert not [url for url in external if url.startswith(LANDING_ROOT + "docs/")], external
     hosts = {url.split("/")[2] for url in external}
-    assert hosts == {"github.com", "owasp.slack.com"}, external
+    assert hosts == {"github.com", "owasp.org"}, external
     docs_root = [row for row in rows[:start] if row[2] == LANDING_ROOT + "docs/"]
     assert [row[0] for row in docs_root] == [1], "the docs root sits at the top of the pane"
 

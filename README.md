@@ -375,7 +375,7 @@ What is in focus right now lives in one place, the Current Priority Scope in
 - [Documentation site](https://owaspacs.org/docs/): the specification, concepts, and topic guides.
 - [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification): the JSON Schemas and normative prose in this repository.
 - [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions): questions and design conversation.
-- Slack: [owasp.slack.com](https://owasp.slack.com), channel `#team-genai-asi-acs-general`.
+- Slack: [join OWASP Slack](https://owasp.org/slack/invite), channel `#team-genai-asi-acs-general`.
 - [CONTRIBUTING.md](./CONTRIBUTING.md): how work gets accepted.
 - [SECURITY.md](./SECURITY.md): how to report a vulnerability.
 - [GOVERNANCE.md](./GOVERNANCE.md): who leads which workstream.
