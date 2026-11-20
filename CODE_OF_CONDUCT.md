@@ -56,7 +56,7 @@ Nothing posts from your account unattended. A script or agent that opens pull re
 
 ### Start From an Assigned Issue
 
-- A pull request that changes behavior, normative text, or code references an issue labeled `status:accepted` that a lead assigned to you before you opened the pull request.  
+- A pull request that changes behavior, normative text, or code references an issue labeled `status:accepted` that a lead assigned to you before you opened or reopened the pull request.  
 - A pull request opened early earns no assignment. If a lead wants the work anyway, the lead says so on the issue, assigns it, and you reopen.  
 - An issue assigned to someone else is theirs. Offer help in a comment on the issue and wait for an answer.  
 - A new idea starts as an issue, filed through one of the issue forms. A change to the schemas, the hook set, or the event catalog starts as a [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions).  
@@ -86,11 +86,11 @@ An approval that meets the bar looks like this:
 
 ### Earn Roles Through Merged Work
 
-Leads propose new leads, triage volunteers, and code owners, following [How leadership changes](./GOVERNANCE.md#how-leadership-changes) in GOVERNANCE.md. Those offers follow assigned work that merged and reviews that held up. Asking for a role does not speed that up, and neither does volume.
+Leads propose new leads and code owners, following [How leadership changes](./GOVERNANCE.md#how-leadership-changes) in GOVERNANCE.md. A lead adds triage volunteers, following [Triage authority](./GOVERNANCE.md#triage-authority). Those offers follow assigned work that merged and reviews that held up. Asking for a role does not speed that up, and neither does volume.
 
 ### What Leads Owe You
 
-- Leads reply to a new issue within about a week.  
+- Leads try to reply to a new issue within about a week.  
 - A lead gives a reason and links the section every time the lead closes, dismisses, or hides something under Part 2\.  
 - Leads meet the same review bar, so a lead's approval names the commit and what the lead ran.  
 - No lead assigns an issue after the fact. A lead who wants work that already exists says so on the issue first.
@@ -117,7 +117,7 @@ Bulk activity that continues after a notice goes straight to removal, and so doe
 
 A notice lapses after 12 months without another breach. Project leads keep restrictions and removals in a private record, because the decision log leaves out account and permission details by its own rule.
 
-To appeal, reply where the lead recorded the action, or message a project lead on OWASP Slack, within 14 days. A project lead who did not make the call reviews it and answers within 14 days.
+To appeal, reply where the lead recorded the action, or message a project lead on OWASP Slack, within 14 days. A lead who did not make the call reviews it and aims to answer within 14 days.
 
 Part 2 binds leads too, and when a lead breaches it, the project leads who were not involved decide. If you believe a lead is using Part 2 to harass or retaliate, that is a Part 1 matter, and it goes to OWASP.
 
