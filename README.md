@@ -345,8 +345,8 @@ Every issue starts from one of six forms. There are no blank issues. A form appl
 `type:` label and `status:needs-triage` automatically, and nothing else.
 [Triage authority](./GOVERNANCE.md#triage-authority) in GOVERNANCE.md says who can move an
 issue to `status:accepted`, and only an accepted issue enters the backlog. A pull request that changes behavior, alters normative text, or adds code
-references an accepted issue. An editorial correction, a typo or a broken link, needs
-none.
+references an accepted issue that a lead assigned to its author before it opened. An
+editorial correction, a typo or a broken link, needs none.
 
 ```mermaid
 flowchart LR
