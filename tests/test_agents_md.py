@@ -24,9 +24,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 AGENTS = ROOT / "AGENTS.md"
 
-# A backticked token counts as a repository path when it contains a slash or ends in one
-# of these extensions. A bare host such as `owaspacs.org` matches neither, so it is left
-# alone. A token that starts with a slash is a published site path, not a repository one.
+# A backticked token counts as a repository path when it ends in one of these extensions,
+# or when it has a slash and its first segment exists at the repository root. The second
+# rule keeps the project's own vocabulary out: JSON-RPC methods such as `agbom/list`,
+# branch prefixes such as `fix/`, repository slugs, and media types. A bare host such as
+# `owaspacs.org` matches neither rule. A token that starts with a slash is a published
+# site path, not a repository one.
 PATH_EXTENSIONS = (".md", ".yml", ".yaml", ".toml", ".json", ".py", ".txt", ".lock", ".html", ".ts")
 # Characters that mark a token as a command, label, URL, address, or placeholder.
 NOT_A_PATH = re.compile(r"[\s:@$<>*?]")
@@ -38,8 +41,10 @@ BARE_URL = re.compile(r"https?://\S+")
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
 HTML_ID = re.compile(r"<a\s+(?:id|name)=\"([^\"]+)\"")
 # v0.1, v0.1.0, V2, or a dotted release such as 0.1.4. A two-part number without a v,
-# such as the DCO's 1.1, is a document title rather than a project version.
-VERSION = re.compile(r"(?<![\w.])(?:[vV]\d+(?:\.\d+)*|\d+\.\d+\.\d+)(?![\w.])")
+# such as the DCO's 1.1, is a document title rather than a project version. The lookahead
+# rejects only a following word character or another dotted digit, so a version that
+# ends a sentence is still caught.
+VERSION = re.compile(r"(?<![\w.])(?:[vV]\d+(?:\.\d+)*|\d+\.\d+\.\d+)(?!\w|\.\d)")
 
 
 def prose_lines(text: str) -> list[str]:
@@ -61,7 +66,8 @@ def named_paths(text: str) -> set[str]:
         for token in CODE_SPAN.findall(line):
             if token.startswith("/") or NOT_A_PATH.search(token):
                 continue
-            if "/" in token or token.endswith(PATH_EXTENSIONS):
+            first = token.split("/", 1)[0]
+            if token.endswith(PATH_EXTENSIONS) or ("/" in token and (ROOT / first).exists()):
                 found.add(token.rstrip("/"))
         for target in LINK.findall(line):
             path = target.partition("#")[0]
@@ -157,6 +163,15 @@ def test_hosts_commands_labels_and_site_paths_are_not_paths():
     assert named_paths(text) == set()
 
 
+def test_methods_branch_prefixes_slugs_and_media_types_are_not_paths():
+    text = "`agbom/list` `protocols/A2A` `fix/` `refimpl/` `owasp/nest-schema` `application/json`"
+    assert named_paths(text) == set()
+
+
+def test_a_missing_file_under_a_real_directory_is_still_a_path():
+    assert missing_paths("Run `tools/x.py`.", ROOT) == ["tools/x.py"]
+
+
 def test_paths_inside_a_fenced_block_are_ignored():
     assert named_paths("```bash\ncat `tools/no_such_file.py`\n```\n") == set()
 
@@ -178,6 +193,11 @@ def test_a_repeated_heading_gets_a_numbered_anchor():
 
 def test_a_planted_bare_version_is_caught():
     assert bare_versions("ACS v0.1 ships today, and release 0.1.4 is tagged.") == ["v0.1", "0.1.4"]
+
+
+def test_a_version_ending_a_sentence_is_caught():
+    assert bare_versions("The spec is v0.1.0.") == ["v0.1.0"]
+    assert bare_versions("Release 0.1.4.") == ["0.1.4"]
 
 
 def test_versions_in_code_links_and_titles_are_not_flagged():
