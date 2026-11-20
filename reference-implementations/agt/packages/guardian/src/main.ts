@@ -40,8 +40,9 @@ const otelTraceEndpoint = process.env.ACS_OTEL_ENDPOINT;
 // and never by the exporter. The warning judges them as the operator set
 // them, before the edit: Bun 1.3.11 ignores a runtime edit, and there the
 // warning is all the operator gets. An endpoint that is not a URL is left to
-// the exporter, which reports it and disables that output without stopping
-// the Guardian.
+// the exporter, which reports it and runs without that output. That one is
+// never retried, unlike an endpoint that fails later: there is nothing to
+// send to. The Guardian starts either way.
 if (otelTraceEndpoint !== undefined) {
   try {
     const warning = loopbackProxyWarning(otelTraceEndpoint, process.env);
