@@ -166,6 +166,32 @@ describe("the committed sample trace matches the mapping", () => {
     }
   });
 
+  // The session and message steps (#322 slice 1). This Guardian does not
+  // dispatch them yet, so each carries a guardian_error failure rather than
+  // a decision, but its span and the attributes its request carried are real.
+  it("shows the session and message spans with the attributes their requests carried", () => {
+    const spanOf = (name: string) => {
+      const span = spanFor(SCENARIOS.find((scenario) => scenario.name === name)!.requestId);
+      return { name: span?.name, attributes: attributes(span) };
+    };
+
+    const start = spanOf("session-start");
+    expect(start.name).toBe("acs.session");
+    expect(start.attributes).toMatchObject({ "acs.tenant_id": "sample-tenant", "acs.user.id": "sample-user-1", "acs.policy_mode": "moderate" });
+
+    const user = spanOf("user-message");
+    expect(user.name).toBe("acs.message.user");
+    expect(user.attributes).toMatchObject({ "acs.content.types": ["text", "file"], "acs.provenance.origin": ["user_input", "user_input"] });
+
+    const agent = spanOf("agent-response");
+    expect(agent.name).toBe("acs.message.agent");
+    expect(agent.attributes).toMatchObject({ "acs.agent.id": "sample-agent" });
+
+    const end = spanOf("session-end");
+    expect(end.name).toBe("acs.session.end");
+    expect(end.attributes).toMatchObject({ "acs.session.reason": "completed" });
+  });
+
   it("links the result to its request through acs.request_id_ref", () => {
     const result = SCENARIOS.find((scenario) => scenario.requestIdRef !== undefined)!;
     expect(attributes(spanFor(result.requestId))["acs.request_id_ref"]).toBe(result.requestIdRef);
@@ -201,8 +227,9 @@ describe("the committed sample trace matches the mapping", () => {
       }
       seen.add(`${failure["acs.failure.class"]}/${failure["acs.failure.reported_by"]}`);
     }
-    // The sample holds no step the Guardian answered with an error.
-    expect([...seen].sort()).toEqual(["timeout/guardian", "unreachable/observed_agent"]);
+    // The only steps the Guardian answers with an error are the session and
+    // message steps, which it does not dispatch yet.
+    expect([...seen].sort()).toEqual(["guardian_error/guardian", "timeout/guardian", "unreachable/observed_agent"]);
   });
 
   it("holds one span per step, and keeps the forged request apart from the call whose ids it claimed", () => {
