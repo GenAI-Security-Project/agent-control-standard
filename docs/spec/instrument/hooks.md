@@ -327,7 +327,7 @@ Session termination, audit finalization. The Guardian seals the chain at this po
 
 Schema: [`hooks/agbom-snapshot.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/agbom-snapshot.json).
 
-Inspect-pillar method. Fires once per session, after `sessionStart` and before `agentTrigger` (the first content-bearing hook), and again after handshake-renegotiation. Carries the full AgBOM (the Observed Agent's component graph: models, MCP servers, A2A peers, tools, knowledge sources, memory stores, agent capabilities, skills).
+Inspect-pillar method. Fires once per session, after `sessionStart` and before `agentTrigger` (the first content-bearing hook), and again after a successful [mid-session capability update](./specification.md#42-mid-session-capability-updates-normative) that accepts ACS-Inspect. The repeated snapshot extends the existing session chain. Carries the full AgBOM (the Observed Agent's component graph: models, MCP servers, A2A peers, tools, knowledge sources, memory stores, agent capabilities, skills).
 
 **Decision:** Normally ALLOW. Guardian MAY DENY to refuse a session whose component graph contains a banned model, tool, or peer.
 
