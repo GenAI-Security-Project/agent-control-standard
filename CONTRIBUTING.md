@@ -59,21 +59,26 @@ quarter is not a finding without value.
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
 A pull request that changes behavior, alters normative text, or adds code references an
-accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
-fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
-issue.
+issue labeled `status:accepted` that a lead assigned to its author before the pull request
+opened. An editorial correction does not, wherever it lands: a typo, a grammar fix, a
+broken link, or a formatting repair that leaves the meaning untouched needs no issue.
+[Start From an Assigned Issue](./CODE_OF_CONDUCT.md#start-from-an-assigned-issue) in the
+Code of Conduct owns this rule.
 
 In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` before an issue
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
 
-If you open a pull request nobody asked for, it waits and nothing about it is rejected. A
-bot adds `status:needs-triage` and one comment unless you are a lead in
-[GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull request
-references, or a lead has reviewed it. A pull request that sits untriaged for a long time
-may be closed with an invitation to reopen once a lead asks for the work. Start from an
-issue labeled `help wanted`, and ask a lead to assign it to you, if you want work that is
-already accepted.
+A pull request opened before a lead assigned the work gets closed, with an invitation to
+reopen once a lead assigns it. A bot adds `status:needs-triage` and one comment unless you
+are a lead in [GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull
+request references, or a lead has reviewed it. Start from an issue labeled `help wanted`,
+and ask a lead to assign it to you, if you want work that is already accepted.
+
+The Code of Conduct also limits how much you hold open at once, in
+[Keep Your Queue Small](./CODE_OF_CONDUCT.md#keep-your-queue-small), and when you approve
+or request changes, in
+[Review When Asked, and Show Your Work](./CODE_OF_CONDUCT.md#review-when-asked-and-show-your-work).
 
 We try to reply to new issues within about a week.
 
@@ -83,7 +88,13 @@ which is what makes the rule hold rather than depend on everyone remembering it.
 
 ## Code of Conduct
 
-This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
+This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you agree to
+uphold it.
+
+It has two parts. Part 1 covers how we treat each other.
+[Part 2](./CODE_OF_CONDUCT.md#part-2-how-work-enters-the-repository) covers how work enters the
+repository: start from an assigned issue, keep your queue small, review when asked, and answer
+for everything your account posts. Leads close work that falls outside it.
 
 ## How to Contribute
 
