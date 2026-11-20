@@ -296,7 +296,7 @@ docker run --rm --name acs-otelcol --user "$(id -u):$(id -g)" -p 127.0.0.1:4318:
 
 With Podman, use the same command with `podman` in place of `docker`, plus `--userns=keep-id --umask 077`, and `:z` on both mounts on an SELinux host.
 
-Start the collector before the Guardian. The Guardian stops sending to an endpoint after its first failed send, and prints `disabled after failure` once. If you see that, or you restart the collector, stop the Guardian, restart the collector, then start the Guardian again.
+Start the collector before the Guardian. If the collector is down or restarts, leave the Guardian running. It drops the spans it could not send, counts them, and tries the endpoint again with a later batch, after a wait that grows from one second to one minute. It prints a `failed` line on stderr when the drops start and a `recovered` line when the endpoint takes spans again, each with the count. The dropped spans are not sent later, so a trace that has to be complete needs the collector up first. The [Guardian README](packages/guardian/README.md#troubleshooting) quotes the lines.
 
 Repeat step 3. The collector writes what it received to `.acs/otel-collector-traces.jsonl`. That file can still be empty right after you repeat step 3, because spans go out in batches about every five seconds.
 

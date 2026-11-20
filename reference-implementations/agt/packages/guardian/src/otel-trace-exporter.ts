@@ -37,12 +37,14 @@
  *
  * Total by construction, as envelope-log-sink.ts is. Every entry point is
  * wrapped, and nothing propagates into or delays the decision path. Each
- * output fails on its own: the first failed or throwing export disables
- * that output alone, reports once under its label, and reaches the
- * processor as a success, so a collector that is down, restarting or
+ * output fails on its own: a failed, throwing or stalled export opens a
+ * breaker for that output alone, is reported under its label, and reaches
+ * the processor as a success, so a collector that is down, restarting or
  * answering 4xx cannot reject a flush and take the file down with it. The
- * lab reads the file. A broken mapping or a bug inside start/end still
- * disables everything, once. Ended spans go to one BatchSpanProcessor per
+ * output is tried again after a backoff, and the spans dropped meanwhile
+ * are counted and reported on stderr (see `isolated`). The lab reads the
+ * file. A broken mapping or a bug inside start/end still disables
+ * everything, once. Ended spans go to one BatchSpanProcessor per
  * output and the file is appended asynchronously, so serialisation and I/O
  * happen off the request's own turn. Observability degrades; governance
  * does not.
@@ -51,7 +53,14 @@ import { SpanStatusCode, type Attributes, type Span, type Tracer } from "@opente
 import { ExportResultCode } from "@opentelemetry/core";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
+import {
+  AlwaysOnSampler,
+  BasicTracerProvider,
+  BatchSpanProcessor,
+  type SpanExporter,
+  type SpanLimits,
+  type SpanProcessor,
+} from "@opentelemetry/sdk-trace-base";
 import {
   asNumber,
   asObject,
@@ -121,12 +130,36 @@ const ENDPOINT_TIMEOUT_MS = 2000;
  * own default is 30 s, longer than many supervisors wait before a SIGKILL. */
 const EXPORT_TIMEOUT_MS = ENDPOINT_TIMEOUT_MS + 1000;
 
+/** How long a failed output is left alone before the next batch tests it.
+ * The wait doubles each time the test fails, up to the limit, so a collector
+ * that stays down is tried about once a minute. */
+const RETRY_BACKOFF_MS = 1000;
+const RETRY_BACKOFF_LIMIT_MS = 60_000;
+
+/** The least time between two "still failing" lines for one output. */
+const DROP_REPORT_INTERVAL_MS = 60_000;
+
+/** How many ended spans one output's processor holds until they are sent. */
+const QUEUE_SIZE = 2048;
+
 /** The longest string attribute a span carries. Every attribute value can
  * come from the request, and an uncapped value lets one large request grow
  * the Guardian's memory in the export queue; a Guardian that runs out of
  * memory fails open under the default posture. `acs.reasoning` longer than
  * this is cut to it. */
 const ATTRIBUTE_VALUE_LENGTH_LIMIT = 4096;
+
+/** The most UTF-8 bytes of text one span carries: every string attribute on
+ * the span and on its events, array elements included. The limit above
+ * bounds one string, not their sum: 64 Provenance objects with two long
+ * fields each made a span of about half a megabyte, and a processor queues
+ * 2048 of them. At 32 KiB, a full queue and the batch in flight hold about
+ * 80 MiB of text, and up to twice that in memory: the runtime stores a
+ * string with any character outside Latin-1 at two bytes a character. The
+ * session and request ids are never cut to fit: two 4096-character ids are
+ * at most 24 576 bytes, and 32 KiB is the first power of two that holds
+ * them. */
+export const SPAN_BYTE_LIMIT = 32 * 1024;
 
 /** The `service.name` every span carries. The literal key rather than the
  * semantic-conventions package: one constant does not earn a dependency. */
@@ -144,6 +177,67 @@ export const SPAN_LIMITS: Readonly<SpanLimits> = Object.freeze({
   linkCountLimit: 128,
   attributePerLinkCountLimit: 128,
 });
+
+const UTF8_ENCODER = new TextEncoder();
+/** `ignoreBOM`, so a value that starts with U+FEFF keeps it. */
+const UTF8_DECODER = new TextDecoder("utf-8", { ignoreBOM: true });
+/** Room for the longest string a span carries, at three bytes a character. */
+const UTF8_SCRATCH = new Uint8Array(ATTRIBUTE_VALUE_LENGTH_LIMIT * 3);
+
+/**
+ * `value` within the character limit and within `maxBytes` of UTF-8, cut
+ * between characters. A cut value is decoded from its own bytes, not sliced:
+ * a slice shares the storage of the string it came from, so a short slice of
+ * a megabyte string would keep the megabyte alive for as long as the span
+ * waits in a queue.
+ */
+function clip(value: string, maxBytes = Infinity): string {
+  if (value.length <= ATTRIBUTE_VALUE_LENGTH_LIMIT && Buffer.byteLength(value, "utf8") <= maxBytes) {
+    return value;
+  }
+  // A surrogate pair that straddles the character limit is left out whole.
+  const end = ATTRIBUTE_VALUE_LENGTH_LIMIT - ((value.codePointAt(ATTRIBUTE_VALUE_LENGTH_LIMIT - 1) ?? 0) > 0xffff ? 1 : 0);
+  const { written } = UTF8_ENCODER.encodeInto(value.slice(0, end), UTF8_SCRATCH.subarray(0, maxBytes));
+  return UTF8_DECODER.decode(UTF8_SCRATCH.subarray(0, written));
+}
+
+/** Every string in these attributes, array elements included. */
+function texts(sets: Attributes[]): string[] {
+  return sets.flatMap((attributes) => Object.values(attributes).flat()).filter((value) => typeof value === "string");
+}
+
+/** The same attributes with every string put through `cut`. An array keeps
+ * its length, so columns still line up by position. */
+function cutTexts(attributes: Attributes, cut: (value: string) => string): Attributes {
+  const each = <Value>(value: Value): Value | string => (typeof value === "string" ? cut(value) : value);
+  return Object.fromEntries(
+    Object.entries(attributes).map(([name, value]) => [name, Array.isArray(value) ? value.map(each) : each(value)]),
+  ) as Attributes;
+}
+
+/**
+ * Cuts the strings in `sets` so that the span they go on stays within
+ * SPAN_BYTE_LIMIT. `whole` is what that span carries uncut: the session and
+ * request ids, and a failure event's fixed words. The strings in `sets`
+ * share the bytes left over. A string shorter than an even share keeps all
+ * of its bytes, and the longer ones share what it did not use. So a decision
+ * or a tool name survives and only the long values are cut, all to the same
+ * length. No position is dropped.
+ */
+function fitSpanBytes(whole: Attributes[], sets: Attributes[]): Attributes[] {
+  const bytes = (value: string): number => Buffer.byteLength(value, "utf8");
+  const clipped = sets.map((attributes) => cutTexts(attributes, (value) => clip(value)));
+  const sizes = texts(clipped).map(bytes).sort((a, b) => a - b);
+  let left = SPAN_BYTE_LIMIT - texts(whole).reduce((sum, value) => sum + bytes(value), 0);
+  for (const [index, size] of sizes.entries()) {
+    const share = Math.max(0, Math.floor(left / (sizes.length - index)));
+    if (size > share) {
+      return clipped.map((attributes) => cutTexts(attributes, (value) => clip(value, share)));
+    }
+    left -= size;
+  }
+  return clipped;
+}
 
 /**
  * The span this module started for one step, handed to the caller so the
@@ -204,7 +298,8 @@ export type OtelTraceExporter = {
    * check inside dispatch), whatever shape its answer took. */
   end(stepSpan: StepSpan | null, response: unknown, rejection?: RejectionReason): void;
   /** Pushes every ended span through to the exporters now rather than on
-   * the batch timer. Tests call it; shutdown does too. */
+   * the batch timer. Tests call it; shutdown does too. An output that is
+   * failing is not tried by either: its spans are dropped and counted. */
   flush(): Promise<void>;
   /** Flushes, then releases the processors. A second call waits for the
    * first rather than returning at once: SIGINT followed by SIGTERM is two
@@ -250,10 +345,16 @@ export type CreateOtelTraceExporterOptions = {
   /** How long one export, and shutdown, may take before it is abandoned and
    * reported. Defaults to EXPORT_TIMEOUT_MS; tests pass a short one. */
   exportTimeoutMs?: number;
-  /** Called at most once per output, on that output's first failure, and
-   * at most once more for a failure of the exporter as a whole (a mapping
-   * that will not load, a bug inside start or end). Defaults to one stderr
-   * line each. */
+  /** How long a failed output is left alone before the next batch tests it.
+   * Doubles after each failed test, up to 60 s. Defaults to
+   * RETRY_BACKOFF_MS; tests pass a short one. */
+  retryBackoffMs?: number;
+  /** Called with the cause of the first drop of each outage of an output,
+   * once for an output that cannot be built, and at most once more for a
+   * failure of the exporter as a whole (a mapping that will not load, a bug
+   * inside start or end). Defaults to one stderr line each. An output's
+   * other lines are not failures and always go to stderr: its count while
+   * it is still failing, its recovery, and its total at shutdown. */
   onError?: (error: unknown) => void;
 };
 
@@ -261,63 +362,224 @@ export type CreateOtelTraceExporterOptions = {
  * file's path, the endpoint's URL, or "span exporter" for an injected one. */
 type Output = { label: string; exporter: SpanExporter };
 
+/** What `isolated` is given by the exporter it works for. */
+type OutputHooks = {
+  exportTimeoutMs: number;
+  retryBackoffMs: number;
+  /** True while the exporter is flushing or shutting down. */
+  draining: () => boolean;
+  /** Prints one line. The first drop of an outage comes with its cause. */
+  say: (line: string, cause?: unknown) => void;
+};
+
+/** One output's span processor, and the line that totals what it dropped. */
+type IsolatedOutput = SpanProcessor & { summary(): void };
+
 /**
- * Wraps one output so it can fail without taking any other output with it.
+ * Wraps one output so it can fail, stall and recover without taking any
+ * other output with it, and counts the spans it drops.
  *
- * The first failed result, thrown export, or rejected flush marks this output
- * dead and reports it once, under its label; every later batch for it is
- * dropped. The processor is answered with SUCCESS either way, deliberately:
- * a FAILED result makes the processor's forceFlush reject, the provider's
- * forceFlush and shutdown reject with it, and a collector that is merely down
- * would then end export to the file as well. The failure is this module's
- * finding, reported here, not the processor's. The SDK's own route for a
- * failed result is its global error handler, silent unless a diag logger is
- * installed, which is why the report happens here at all.
+ * A failed result, a thrown export, an export with no answer inside the
+ * export timeout, or the output's own flush or shutdown rejecting opens a
+ * breaker for this output. While it is open, a batch is dropped, counted
+ * and answered at once. After a backoff, the next batch the processor sends
+ * on its own is handed to the output as the test: a success closes the
+ * breaker, a failure doubles the backoff. A batch from the exporter's flush
+ * or shutdown is never the test, so closing the Guardian does not wait on a
+ * collector that is down. While an export is unanswered past its timeout
+ * the output is handed nothing more, the test included, so nothing piles up
+ * behind a stalled write. No batch is handed over twice.
+ *
+ * The processor is answered with SUCCESS either way, deliberately: a FAILED
+ * result makes the processor's forceFlush reject, the provider's forceFlush
+ * and shutdown reject with it, and a collector that is merely down would
+ * then end export to the file as well. The processor's own export timeout
+ * rejects the same way, so it is set to twice ours and ours answers first.
+ * The failure is this module's finding, reported here, not the processor's.
+ * The SDK's own route for a failed result is its global error handler,
+ * silent unless a diag logger is installed, which is why the report happens
+ * here at all.
+ *
+ * Dropped is spans ended minus spans delivered. The processor drops a span
+ * that ends while its queue is full and tells nobody, so the same limit is
+ * applied here first, where the span can be counted.
  */
-function isolated({ label, exporter }: Output, report: (label: string, error: unknown) => void): SpanExporter {
-  let dead = false;
-  const die = (error: unknown): void => {
-    if (dead) {
-      return;
+function isolated({ label, exporter }: Output, { exportTimeoutMs, retryBackoffMs, draining, say }: OutputHooks): IsolatedOutput {
+  const to = `otel trace export to ${label}`;
+  let ended = 0;
+  let delivered = 0;
+  let dropped = 0;
+  /** Spans the processor holds: ended, and not yet sent to export. */
+  let queued = 0;
+  /** The breaker. While it is open, `retryAt` is when the next test may go. */
+  let open = false;
+  let backoffMs = 0;
+  let retryAt = 0;
+  /** Exports handed to the output and still unanswered after their timeout. */
+  let stalled = 0;
+  /** Exports the processor is still waiting on. `idle` runs when the last
+   * of them is answered. */
+  let waiting = 0;
+  let idle: (() => void) | undefined;
+  /** Set by the first drop of an outage, cleared when the output recovers. */
+  let failing = false;
+  let saidAt = 0;
+  let droppedAtLastDelivery = 0;
+
+  /** Counts dropped spans. `cause` marks the first drop of an outage, which
+   * is reported at once. Later drops are reported at most once a minute. */
+  const drop = (count: number, cause?: unknown): void => {
+    dropped += count;
+    const now = performance.now();
+    if (cause !== undefined) {
+      failing = true;
+      saidAt = now;
+      let reason = "an error that cannot be printed";
+      try {
+        reason = String(cause instanceof Error ? cause.message : cause);
+      } catch {
+        // String() throws on some values. The drop is still reported.
+      }
+      say(`${to} failed: ${reason}. Dropping spans until it recovers, ${dropped} dropped so far.`, cause);
+    } else if (now - saidAt >= DROP_REPORT_INTERVAL_MS) {
+      saidAt = now;
+      say(`${to} is still failing, ${dropped} span(s) dropped so far.`);
     }
-    dead = true;
-    report(label, error);
   };
-  return {
+
+  /** One failure of the output, costing `count` spans. The first opens the
+   * breaker. A failed test doubles the backoff. */
+  const failed = (count: number, error: unknown, test = false): void => {
+    const opening = !open;
+    if (opening) {
+      backoffMs = retryBackoffMs;
+    } else if (test) {
+      backoffMs = Math.min(backoffMs * 2, RETRY_BACKOFF_LIMIT_MS);
+    }
+    open = true;
+    retryAt = performance.now() + backoffMs;
+    drop(count, opening && !failing ? (error ?? new Error("span export failed")) : undefined);
+  };
+
+  const output: SpanExporter = {
     export(spans, resultCallback): void {
-      if (dead) {
-        resultCallback({ code: ExportResultCode.SUCCESS });
+      queued -= spans.length;
+      const answer = (): void => resultCallback({ code: ExportResultCode.SUCCESS });
+      const test = open;
+      if (stalled > 0 || (test && (draining() || performance.now() < retryAt))) {
+        drop(spans.length);
+        answer();
         return;
       }
+      waiting += 1;
+      // The processor gets one answer: the output's, or the timeout's.
+      let answered = false;
+      // The timeout answered, and the output has not yet.
+      let late = false;
+      const settle = (delivery: boolean, error?: unknown, timedOut = false): void => {
+        if (answered) {
+          return;
+        }
+        answered = true;
+        clearTimeout(timer);
+        waiting -= 1;
+        if (timedOut) {
+          late = true;
+          stalled += 1;
+        }
+        if (delivery) {
+          delivered += spans.length;
+          if (test) {
+            open = false;
+          }
+          // Recovered: the test passed, or an output that only fell behind
+          // has delivered a batch with nothing dropped since the last one.
+          if (failing && !open && (test || dropped === droppedAtLastDelivery)) {
+            failing = false;
+            say(`${to} recovered, ${dropped} span(s) dropped so far.`);
+          }
+          droppedAtLastDelivery = dropped;
+        } else {
+          failed(spans.length, error, test);
+        }
+        answer();
+        if (waiting === 0) {
+          idle?.();
+        }
+      };
+      const timer = setTimeout(() => settle(false, new Error(`no answer within ${exportTimeoutMs} ms`), true), exportTimeoutMs);
+      timer.unref?.();
       try {
         exporter.export(spans, (result) => {
-          if (result.code === ExportResultCode.FAILED) {
-            die(result.error ?? new Error("span export failed"));
+          if (late) {
+            // The answer to an export that timed out. The output is free
+            // again, and if it did deliver, the spans are not dropped after
+            // all. The breaker stays open until a test passes.
+            late = false;
+            stalled -= 1;
+            if (result.code === ExportResultCode.SUCCESS) {
+              dropped -= spans.length;
+              delivered += spans.length;
+            }
+            return;
           }
-          resultCallback({ code: ExportResultCode.SUCCESS });
+          settle(result.code === ExportResultCode.SUCCESS, result.error);
         });
       } catch (error) {
-        die(error);
-        resultCallback({ code: ExportResultCode.SUCCESS });
+        settle(false, error);
       }
     },
     async shutdown(): Promise<void> {
-      // Shut the output down whether or not it died: a dead HTTP output
+      // A batch the processor sent on its own can still be out when its last
+      // flush is done. Its answer or its timeout comes first, so the output
+      // is not shut down under it and the total is final.
+      if (waiting > 0) {
+        await new Promise<void>((resolve) => {
+          idle = resolve;
+        });
+      }
+      // Shut the output down whether or not it is failing: an HTTP output
       // still holds its keep-alive agent until its exporter releases it.
       try {
         await exporter.shutdown();
       } catch (error) {
-        die(error);
+        failed(0, error);
       }
     },
     async forceFlush(): Promise<void> {
-      if (dead) {
-        return;
-      }
       try {
         await exporter.forceFlush?.();
       } catch (error) {
-        die(error);
+        failed(0, error);
+      }
+    },
+  };
+
+  const processor = new BatchSpanProcessor(output, {
+    // The SDK defaults, written out: anything left unset is read from
+    // OTEL_BSP_*, and a queue of one drops spans.
+    maxQueueSize: QUEUE_SIZE,
+    maxExportBatchSize: 512,
+    scheduledDelayMillis: 5000,
+    // Never reached: the timeout above answers the processor first.
+    exportTimeoutMillis: exportTimeoutMs * 2,
+  });
+  return {
+    onStart(): void {},
+    onEnd(span): void {
+      ended += 1;
+      if (queued >= QUEUE_SIZE) {
+        drop(1, failing ? undefined : new Error(`its queue of ${QUEUE_SIZE} spans is full`));
+        return;
+      }
+      queued += 1;
+      processor.onEnd(span);
+    },
+    forceFlush: () => processor.forceFlush(),
+    shutdown: () => processor.shutdown(),
+    summary(): void {
+      if (ended > delivered) {
+        say(`${to} dropped ${ended - delivered} of ${ended} span(s).`);
       }
     },
   };
@@ -348,6 +610,7 @@ export function createOtelTraceExporter({
   posture = "fail_open",
   mappingPath,
   exportTimeoutMs = EXPORT_TIMEOUT_MS,
+  retryBackoffMs = RETRY_BACKOFF_MS,
   onError,
 }: CreateOtelTraceExporterOptions): OtelTraceExporter {
   /** One report, to the caller's hook or to stderr, never thrown: the
@@ -378,8 +641,33 @@ export function createOtelTraceExporter({
     report("otel trace exporter", error);
   };
 
-  // One output: its own first failure, under its own label, and only it.
+  // An output that cannot be built: reported under its own label and left
+  // out. It is never retried, because there is nothing to retry.
   const reportOutput = (label: string, error: unknown): void => report(`otel trace export to ${label}`, error);
+
+  // Set once shutdown has printed the totals. An export abandoned at the
+  // shutdown limit times out after that, and must not report it then.
+  let finished = false;
+  /** One line from an output, never thrown. The first drop of an outage
+   * comes with its cause, which goes to the caller's hook when there is
+   * one. Every other line goes to stderr. */
+  const say = (line: string, cause?: unknown): void => {
+    if (finished) {
+      return;
+    }
+    try {
+      if (cause !== undefined && onError) {
+        onError(cause);
+      } else {
+        console.error(line);
+      }
+    } catch {
+      // As in report: nothing a reporter throws may reach the caller.
+    }
+  };
+  // Flushes in progress, plus one for a shutdown that has begun. An output
+  // that is failing is not tested while this is above zero.
+  let draining = 0;
 
   // Each output is constructed on its own, so an unwritable file path costs
   // the file and not the endpoint, and the other way round.
@@ -416,11 +704,13 @@ export function createOtelTraceExporter({
     return NULL_OTEL_TRACE_EXPORTER;
   }
 
+  let processors: IsolatedOutput[] = [];
   let provider: BasicTracerProvider | undefined;
   let tracer: Tracer | undefined;
   let mapping: OtelMapping | undefined;
   try {
     mapping = loadOtelMapping(mappingPath);
+    processors = outputs.map((output) => isolated(output, { exportTimeoutMs, retryBackoffMs, draining: () => draining > 0, say }));
     provider = new BasicTracerProvider({
       resource: resourceFromAttributes({ "service.name": OTEL_SERVICE_NAME }),
       // Set explicitly so no OTEL_* environment variable can sample spans
@@ -429,17 +719,7 @@ export function createOtelTraceExporter({
       sampler: new AlwaysOnSampler(),
       // Copied, because the SDK may write to the object it is given.
       spanLimits: { ...SPAN_LIMITS },
-      spanProcessors: outputs.map(
-        (output) =>
-          new BatchSpanProcessor(isolated(output, reportOutput), {
-            // The SDK defaults, written out: anything left unset is read from
-            // OTEL_BSP_*, and a queue of one drops spans.
-            maxQueueSize: 2048,
-            maxExportBatchSize: 512,
-            scheduledDelayMillis: 5000,
-            exportTimeoutMillis: exportTimeoutMs,
-          }),
-      ),
+      spanProcessors: processors,
     });
     tracer = provider.getTracer(OTEL_SERVICE_NAME);
   } catch (error) {
@@ -472,8 +752,11 @@ export function createOtelTraceExporter({
     // Held back, not set: the pair, and every other step attribute, goes on
     // only when the span ends as a trusted step, because a check that runs
     // after this point can still reject the request.
-    const claimed: Attributes = {};
-    collect(claimed, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
+    const ids: Attributes = {};
+    collect(ids, Object.keys(CORRELATION_ATTRIBUTE_SOURCES), CORRELATION_ATTRIBUTE_SOURCES, parts);
+    // Cut to the character limit here, as copies. The span would cut an
+    // oversized id itself, but as a slice that keeps the whole of it alive.
+    const claimed = cutTexts(ids, (value) => clip(value));
     const startedAt = step.receivedAt ?? performance.now();
     // The span's own start is the arrival too, so its duration agrees with
     // the elapsed time the failure event reports.
@@ -559,8 +842,9 @@ export function createOtelTraceExporter({
       finishRejected(stepSpan, reason, errorCode);
       return;
     }
-    span.setAttributes({ ...stepSpan.claimed, ...stepSpan.held });
     const decision = resultParts(envelope);
+    const attributes: Attributes = {};
+    let failure: Attributes | undefined;
     if (decision === undefined) {
       // A JSON-RPC error: the step was answered but not decided. The first
       // of the two failures a Guardian can see itself (#37). Only the code is
@@ -568,20 +852,26 @@ export function createOtelTraceExporter({
       // argument keys), and #228 forbids copying response or error bytes into
       // the trace, so the status message is a fixed sentence too.
       span.setStatus({ code: SpanStatusCode.ERROR, message: GUARDIAN_ERROR_STATUS });
-      span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "guardian_error", { errorCode }));
+      failure = failureAttributes(stepSpan, "guardian_error", { errorCode });
     } else {
-      const attributes: Attributes = {};
       collect(attributes, new Set([...mapping.decisionAttributes, ...DECISION_DETAIL_NAMES]), DECISION_ATTRIBUTE_SOURCES, decision);
-      if (attributes["acs.decision"] !== undefined) {
-        span.addEvent(mapping.decisionEventName, attributes);
-      }
       // The second: a decision that finished after the host stopped waiting.
       // The host applied its posture at the timeout, so the decision above
       // probably never took effect, and a reader has to be told.
       const timeoutMs = timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
       if (timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs) {
-        span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "timeout", { timeoutMs }));
+        failure = failureAttributes(stepSpan, "timeout", { timeoutMs });
       }
+    }
+    // Cut together, so the step's attributes and its decision event share
+    // one SPAN_BYTE_LIMIT.
+    const [held, decided = {}] = fitSpanBytes([stepSpan.claimed, failure ?? {}], [stepSpan.held, attributes]);
+    span.setAttributes({ ...stepSpan.claimed, ...held });
+    if (decided["acs.decision"] !== undefined) {
+      span.addEvent(mapping.decisionEventName, decided);
+    }
+    if (failure !== undefined) {
+      span.addEvent(DECISION_FAILURE_EVENT, failure);
     }
     span.end();
   }
@@ -623,10 +913,13 @@ export function createOtelTraceExporter({
       if (provider === undefined || stopped) {
         return;
       }
+      draining += 1;
       try {
         await provider.forceFlush();
       } catch (error) {
         fail(error);
+      } finally {
+        draining -= 1;
       }
     },
     shutdown(): Promise<void> {
@@ -635,6 +928,7 @@ export function createOtelTraceExporter({
           return;
         }
         stopped = true;
+        draining += 1;
         // Steps still open: a bridge that never answered, or a signal during
         // traffic. Closed here, as the third failure this Guardian can see,
         // so the step is exported at all.
@@ -644,11 +938,10 @@ export function createOtelTraceExporter({
               finishRejected(stepSpan, stepSpan.rejected);
               continue;
             }
-            stepSpan.span.setAttributes({ ...stepSpan.claimed, ...stepSpan.held });
-            stepSpan.span.addEvent(
-              DECISION_FAILURE_EVENT,
-              failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
-            );
+            const failure = failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" });
+            const [held] = fitSpanBytes([stepSpan.claimed, failure], [stepSpan.held]);
+            stepSpan.span.setAttributes({ ...stepSpan.claimed, ...held });
+            stepSpan.span.addEvent(DECISION_FAILURE_EVENT, failure);
             stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
             stepSpan.span.end();
           } catch (error) {
@@ -657,9 +950,9 @@ export function createOtelTraceExporter({
         }
         openSpans.clear();
         // Flushes every processor, then releases them. Bounded, because a
-        // stalled output would otherwise hold the process open. The SDK's own
-        // export timeout covers a batch in flight; this covers an exporter
-        // whose shutdown never returns.
+        // stalled output would otherwise hold the process open. The export
+        // timeout in `isolated` covers a batch in flight; this covers an
+        // exporter whose shutdown never returns.
         let timer: ReturnType<typeof setTimeout> | undefined;
         const deadline = new Promise<"timeout">((resolve) => {
           timer = setTimeout(() => resolve("timeout"), exportTimeoutMs);
@@ -675,6 +968,12 @@ export function createOtelTraceExporter({
         } finally {
           clearTimeout(timer);
         }
+        // What each output dropped, of what it was given. Quiet for an
+        // output that delivered everything.
+        for (const processor of processors) {
+          processor.summary();
+        }
+        finished = true;
       })();
       return shutdownPromise;
     },
