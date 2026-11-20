@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json",
   "title": "ACS Response Envelope",
-  "description": "JSON-RPC 2.0 response envelope with ACS extensions. Sent by the Guardian Agent to the Observed Agent.",
+  "description": "JSON-RPC 2.0 profile for ACS responses: no notifications, a required result or error, closed objects (additionalProperties: false), and optional batching. Sent by the Guardian Agent to the Observed Agent.",
   "type": "object",
   "required": ["jsonrpc", "id"],
   "additionalProperties": false,
@@ -93,7 +93,7 @@
         },
         "signature": {
           "$ref": "request-envelope.json#/$defs/Signature",
-          "description": "Signature over this response envelope, computed on the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Optional in the schema; mandatory under ACS-Core. Required for a published chain_hash to be verifiable."
+          "description": "Signature over this response envelope, computed on the signed input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Optional in the schema; mandatory under ACS-Core. Required for a published chain_hash to be verifiable."
         },
         "metadata": {
           "type": "object",

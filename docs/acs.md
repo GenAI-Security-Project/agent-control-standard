@@ -20,6 +20,14 @@ flowchart LR
     DET -->|"allow / deny / modify / ask / defer"| OA
 ```
 
+## Design principles
+
+1. **Opinionated on contract, permissive on implementation.** The wire format and semantics are locked. Engines, crypto suites, OS, and transport are deployment-owned.
+2. **Facts on the wire; classification in policy.** Provenance fields (`origin`, `source_id`, `derived_from`) are populated by deterministic framework code at channel boundaries, never by the LLM. v0.1 keeps trust *classification* off the mandatory wire surface: Guardians derive trust from `origin` + `source_id` against local policy. The wire format reserves an OPTIONAL `trust` enum for vendor implementations that elect to carry the classification in the envelope; when populated, the monotonicity rule applies ([Instrument §7](./spec/instrument/specification.md#7-provenance)).
+3. **Three pillars, tiered conformance.** Instrument, Trace, and Inspect are all defined in v0.1.0. None is deferred. ACS-Core is the mandatory baseline; Trace, Inspect, Provenance, Crypto, and Audit are normative profiles deployments advertise via handshake negotiation.
+
+The Instrument principles for the control loop are in [Instrument §1](./spec/instrument/specification.md#1-design-principles).
+
 ## What v0.1.0 ships
 
 `v0.1.0` is the specification version, which names the schema namespace, and a release can update the schemas inside it. The release number changes with each release, as the [releases page](https://github.com/GenAI-Security-Project/agent-control-standard/releases) and the [CHANGELOG](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CHANGELOG.md) record.
