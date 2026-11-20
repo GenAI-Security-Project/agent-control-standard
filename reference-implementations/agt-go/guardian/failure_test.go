@@ -608,9 +608,6 @@ type slowStore struct {
 	// it is closed; appending is closed when the first Append starts.
 	holdAppend, appending chan struct{}
 	appendOnce            sync.Once
-	// overrun is how long, in total, stalled calls ran past the deadline of
-	// the context they were given.
-	overrun atomic.Int64
 }
 
 func (s *slowStore) Lock(ctx context.Context, sessionID string) (context.Context, func(), error) {
@@ -659,16 +656,22 @@ func (s *slowStore) Load(ctx context.Context, sessionID string) (guardian.Sessio
 }
 
 // stall waits up to a second for ctx while on is set, and fails either way.
-// A stalled call that returns after ctx's deadline adds the excess to
-// overrun.
+// For a timed request, it adds to the request's overrun the time the call
+// ran past the later of ctx's deadline and the moment the call began. A call
+// that begins after its deadline has passed returns at once, so time the
+// Guardian spent before the call is never counted as the call's.
 func (s *slowStore) stall(ctx context.Context, on *atomic.Bool) error {
 	if !on.Load() {
 		return nil
 	}
-	if deadline, ok := ctx.Deadline(); ok {
+	overrun, timed := ctx.Value(overrunKey{}).(*atomic.Int64)
+	if deadline, ok := ctx.Deadline(); ok && timed {
+		if called := time.Now(); called.After(deadline) {
+			deadline = called
+		}
 		defer func() {
 			if late := time.Since(deadline); late > 0 {
-				s.overrun.Add(int64(late))
+				overrun.Add(int64(late))
 			}
 		}()
 	}
@@ -678,17 +681,6 @@ func (s *slowStore) stall(ctx context.Context, on *atomic.Bool) error {
 	case <-time.After(time.Second):
 		return errors.New("the store did not answer")
 	}
-}
-
-// guardianTime is the time the Guardian held a request whose store calls
-// stalled, less the time those calls ran past the deadlines the Guardian gave
-// them. The Guardian waits on each store call, so it cannot answer before the
-// call returns. A loaded host can deliver a context's cancellation to the
-// waiting call hundreds of milliseconds late, and that delay belongs to the
-// host, not to the Guardian. Work the Guardian does after a deadline, such as
-// waiting on a lock or another store call, stays in the time measured.
-func (s *slowStore) guardianTime(held time.Duration) time.Duration {
-	return held - time.Duration(s.overrun.Load())
 }
 
 // TestSlowStoreAnswersBeforeTheDeclaredTimeout: the deadline covers the
@@ -703,8 +695,8 @@ func TestSlowStoreAnswersBeforeTheDeclaredTimeout(t *testing.T) {
 	})
 	c := h.session()
 	store.slow.Store(true)
-	r, held := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := store.guardianTime(held); elapsed >= declared {
+	r, elapsed := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if elapsed >= declared {
 		t.Fatalf("the answer took %s, the declared timeout is %s", elapsed, declared)
 	}
 	if r.Disposition != acs.Deny || !slices.Contains(r.ReasonCodes, disposition.ReasonStoreUnavailable) {
@@ -728,8 +720,7 @@ func TestRecoveredSessionAnswersInItsOwnTime(t *testing.T) {
 	})
 	c.Transport = second.post
 	store.slowAppend.Store(true)
-	_, held := second.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed := store.guardianTime(held); elapsed >= negotiated {
+	if _, elapsed := second.timedDecision(c, acs.StepToolCallRequest, toolCall("ls")); elapsed >= negotiated {
 		t.Fatalf("the answer took %s, the session negotiated %s", elapsed, negotiated)
 	}
 }
@@ -793,8 +784,8 @@ func TestSlowRecordingAnswersInTime(t *testing.T) {
 		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}, State: json.RawMessage(`{}`)}, nil
 	})
 	store.slowConclude.Store(true)
-	r, held := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if elapsed, bound := store.guardianTime(held), declared-margin/4; elapsed >= bound {
+	r, elapsed := h.timedDecision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if bound := declared - margin/4; elapsed >= bound {
 		t.Fatalf("the answer took %s, past %s", elapsed, bound)
 	}
 	if !slices.Contains(r.ReasonCodes, disposition.ReasonStoreUnavailable) {

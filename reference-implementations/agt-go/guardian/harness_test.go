@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,8 +120,8 @@ type harness struct {
 	signer *guardian.HMACSigner
 	server *httptest.Server
 	now    time.Time
-	// held maps the token of a timed request to how long the Guardian held
-	// it, from the request reaching its handler to the answer being written.
+	// held maps the token of a timed request to the time serve charges the
+	// Guardian with for it.
 	held sync.Map
 }
 
@@ -162,16 +163,33 @@ const timingHeader = "Acs-Test-Timing"
 // post.
 type timingToken struct{}
 
-// serve hands a request to the Guardian and, for a timed request, records how
-// long the Guardian held it. The clock starts before the Guardian sets the
-// arrival its deadlines count from, so the time recorded is never shorter
-// than the time the Guardian took.
+// overrunKey is the context key under which a timed request carries its
+// overrun to the store calls the Guardian makes for it: how long stalled
+// calls ran late, which slowStore.stall adds to.
+type overrunKey struct{}
+
+// serve hands a request to the Guardian and, for a timed request, records
+// the time the Guardian is charged with. The clock starts before the Guardian
+// sets the arrival its deadlines count from, and stops once the answer is
+// flushed to the connection, so it covers sending the answer, which the
+// answer margin reserves time for.
+//
+// The request's overrun is subtracted. The Guardian waits on each store call,
+// and a loaded host can deliver a context's cancellation to a stalled call
+// hundreds of milliseconds late. That delay belongs to the host.
 func (h *harness) serve(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	h.g.ServeHTTP(w, r)
-	if token := r.Header.Get(timingHeader); token != "" {
-		h.held.Store(token, time.Since(start))
+	token := r.Header.Get(timingHeader)
+	if token == "" {
+		h.g.ServeHTTP(w, r)
+		return
 	}
+	var overrun atomic.Int64
+	start := time.Now()
+	h.g.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), overrunKey{}, &overrun)))
+	_ = http.NewResponseController(w).Flush()
+	// The client finishes reading only after net/http ends the response,
+	// which happens after serve returns, so timedDecision finds this entry.
+	h.held.Store(token, time.Since(start)-time.Duration(overrun.Load()))
 }
 
 func (h *harness) post(ctx context.Context, body []byte) ([]byte, error) {
@@ -231,7 +249,7 @@ func (h *harness) decision(c *observedagent.Client, methodName string, payload a
 }
 
 // timedDecision sends a step through this harness's Guardian, requires a
-// signed decision back, and returns how long the Guardian held the request.
+// signed decision back, and returns the time serve charges the Guardian with.
 // A step's deadline counts from the request's arrival at the Guardian, so a
 // test of that deadline measures this time. Building, signing, sending and
 // verifying the request on the agent's side happen outside it, and on a
