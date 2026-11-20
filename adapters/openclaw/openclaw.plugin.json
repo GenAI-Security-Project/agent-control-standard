@@ -1,0 +1,90 @@
+{
+  "id": "acs-guardian-client",
+  "name": "Agent Control Standard",
+  "description": "Sends signed agent steps to an ACS Guardian and enforces its decisions.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "agentToolResultMiddleware": [
+      "openclaw"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "guardianUrl",
+      "hmacKeyId"
+    ],
+    "oneOf": [
+      {
+        "required": [
+          "hmacSecretFile"
+        ]
+      },
+      {
+        "required": [
+          "hmacSecretEnv"
+        ]
+      }
+    ],
+    "properties": {
+      "guardianUrl": {
+        "type": "string",
+        "format": "uri",
+        "description": "The Guardian's ACS endpoint URL."
+      },
+      "hmacKeyId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "The key_id the Guardian uses for this HMAC secret (§10)."
+      },
+      "hmacSecretFile": {
+        "type": "string",
+        "minLength": 1,
+        "description": "File containing the HMAC secret in standard base64. The decoded secret must hold at least 32 bytes."
+      },
+      "hmacSecretEnv": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Environment variable containing the HMAC secret in standard base64. The decoded secret must hold at least 32 bytes."
+      },
+      "failurePosture": {
+        "enum": [
+          "closed",
+          "negotiated"
+        ]
+      },
+      "deadlineMs": {
+        "type": "integer",
+        "minimum": 251,
+        "description": "Maximum time a hook waits for Guardian requests, including handshakes. The hook reserves its last 250 ms to record the answer. Must be shorter than hookTimeoutMs."
+      },
+      "hookTimeoutMs": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Timeout requested from OpenClaw for each hook. Must exceed deadlineMs so the plugin can answer first. On timeout, OpenClaw lets the original through for reply_dispatch, reply_payload_sending and message_sending."
+      },
+      "pingIntervalMs": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Interval between gateway system/ping probes (ACS §13). A failure logs as a warning; recovery logs once."
+      },
+      "maxUndecidedMessages": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Maximum messages kept per session for a run that is not yet admitted. The plugin drops a further message, since the Guardian never sees it."
+      },
+      "maxAttachmentBytes": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Maximum measured attachment bytes per inbound message. URL-only attachments do not count. The plugin drops a message over the limit, since the Guardian never sees it."
+      },
+      "auditLog": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

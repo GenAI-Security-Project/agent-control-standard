@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../reference-implementations/agt/tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "../.."
+  },
+  "include": ["*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules"]
+}

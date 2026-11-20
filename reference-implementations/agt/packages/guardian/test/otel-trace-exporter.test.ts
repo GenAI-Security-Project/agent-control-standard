@@ -10,6 +10,8 @@ import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
+import { createMemorySessionContextStore, type SessionContextStore } from "../src/session-context-store.ts";
+import { handshakeFor } from "../../../test/helpers/handshake.ts";
 import {
   createFileSpanExporter,
   keepLoopbackOffProxy,
@@ -76,11 +78,18 @@ function throwingSpanExporter(): SpanExporter {
 }
 
 async function postRaw(url: string, body: unknown): Promise<Record<string, unknown>> {
+  await handshakeFor(url, body);
   const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return (await res.json()) as Record<string, unknown>;
 }
 
 const baseOptions = { port: 0, manifestPath: "policy/manifest.yaml" } as const;
+
+/** The response carries `chain_hash`, which covers each entry's recorded time,
+ * so two Guardians answer identically only on the same clock. */
+function frozenClock(): { sessionContextStore: SessionContextStore } {
+  return { sessionContextStore: createMemorySessionContextStore({ now: () => new Date(0) }) };
+}
 
 /** The OTLP/JSON `ExportTraceServiceRequest` shape, as far as these tests
  * read it: resource attributes, and span names and events. */
@@ -630,6 +639,82 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 });
 
 describe("Guardian trace export wiring", () => {
+  // #229's own checks, end to end: each refusal is recorded apart, and the
+  // genuine request keeps the only span under its pair (issue #283).
+  it("records a replayed request apart, so the genuine call keeps the only span under its ids", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    const ids = { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() };
+    try {
+      await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 1, ...ids }));
+      expect(((await postRaw(guardian.url, toolCallEnvelope("ls -la", { id: 2, ...ids }))).error as { code: number }).code).toBe(-32005);
+      await exporter.flush();
+
+      expect(spans().filter((span) => span.attributes["acs.request_id"] === ids.requestId)).toHaveLength(1);
+      const rejected = spans().filter((span) => span.name === "guardian.rejected_request");
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.attributes["guardian.rejected.reason"]).toBe("replay_detected");
+      expect(rejected[0]?.attributes["guardian.rejected.claimed_request_id"]).toBe(ids.requestId);
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("records a request whose signature fails apart, never under the ids it claims", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({
+      ...baseOptions,
+      hmacSecret: Buffer.alloc(32, 0x5a).toString("base64"),
+      hmacKeyId: "test-key",
+      traceExporter: exporter,
+    });
+    const requestId = crypto.randomUUID();
+    try {
+      const response = await fetch(guardian.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(toolCallEnvelope("ls -la", { id: 1, requestId })),
+      });
+      expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32004);
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      expect(spans()[0]?.name).toBe("guardian.rejected_request");
+      expect(spans()[0]?.attributes["guardian.rejected.reason"]).toBe("signature_invalid");
+      expect(spans()[0]?.attributes["acs.request_id"]).toBeUndefined();
+    } finally {
+      await guardian.close();
+    }
+  });
+
+  it("records a forged handshake/hello apart too, though a hello has no step span", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({
+      ...baseOptions,
+      hmacSecret: Buffer.alloc(32, 0x5a).toString("base64"),
+      hmacKeyId: "test-key",
+      traceExporter: exporter,
+    });
+    try {
+      const hello = makeEnvelope("handshake/hello", {
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: ["steps/toolCallRequest"],
+        transports_supported: ["http"],
+        provenance_producer: "none",
+        profiles_supported: ["acs-core"],
+      });
+      const response = await fetch(guardian.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(hello) });
+      expect(((await response.json()) as { error: { code: number } }).error.code).toBe(-32004);
+      await exporter.flush();
+
+      expect(spans()).toHaveLength(1);
+      expect(spans()[0]?.name).toBe("guardian.rejected_request");
+      expect(spans()[0]?.attributes["guardian.rejected.reason"]).toBe("signature_invalid");
+    } finally {
+      await guardian.close();
+    }
+  });
+
   it("emits one span per decided step, carrying the session and the decision event", async () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
@@ -648,9 +733,8 @@ describe("Guardian trace export wiring", () => {
       const [event] = span?.events ?? [];
       expect(event?.name).toBe(MAPPING.decisionEventName);
       expect(event?.attributes?.["acs.decision"]).toBe("deny");
-      // This Guardian sends metadata.evaluator once #229 lands; until then
-      // the event carries none, rather than one the exporter made up.
-      expect(event?.attributes?.["acs.evaluator"]).toBeUndefined();
+      // Taken from the response's metadata.evaluator, not made up by the exporter.
+      expect(event?.attributes?.["acs.evaluator"]).toBe("deterministic");
       expect(typeof event?.attributes?.["acs.reasoning"]).toBe("string");
       expect(Array.isArray(event?.attributes?.["acs.reason_codes"])).toBe(true);
       expect(Array.isArray(event?.attributes?.["acs.policy.ids"])).toBe(true);
@@ -741,7 +825,16 @@ describe("Guardian trace export wiring", () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
     try {
-      await postRaw(guardian.url, makeEnvelope("handshake/hello", {}, { id: 42 }));
+      // A schema-valid ClientHello: an invalid one is a rejected request, and
+      // is recorded apart like any other.
+      const clientHello = {
+        acs_versions_supported: ["0.1.0"],
+        methods_implemented: ["steps/sessionStart"],
+        transports_supported: ["http"],
+        provenance_producer: "none",
+        profiles_supported: [],
+      };
+      await postRaw(guardian.url, makeEnvelope("handshake/hello", clientHello, { id: 42 }));
       await postRaw(guardian.url, makeEnvelope("steps/sessionStart", {}, { id: 43 }));
       await exporter.flush();
 
@@ -874,8 +967,8 @@ describe("Guardian trace export wiring", () => {
   it("answers identically with a failing exporter and with export off, and reports once", async () => {
     const errorSpy = spyOn(console, "error").mockImplementation(() => {});
     const exporter = createOtelTraceExporter({ spanExporter: throwingSpanExporter(), methodsEvaluated: METHODS_EVALUATED });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const exporting = await startGuardian({ ...baseOptions, ...frozenClock(), traceExporter: exporter });
+    const silent = await startGuardian({ ...baseOptions, ...frozenClock() });
     try {
       const requestId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
@@ -1082,8 +1175,8 @@ describe("Guardian trace export wiring", () => {
       methodsEvaluated: METHODS_EVALUATED,
       onError: (error) => errors.push(error),
     });
-    const exporting = await startGuardian({ ...baseOptions, traceExporter: exporter });
-    const silent = await startGuardian(baseOptions);
+    const exporting = await startGuardian({ ...baseOptions, ...frozenClock(), traceExporter: exporter });
+    const silent = await startGuardian({ ...baseOptions, ...frozenClock() });
     let exportingClosed = false;
     try {
       // Decisions are the same as with export off, before the endpoint dies.

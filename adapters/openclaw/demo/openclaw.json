@@ -1,0 +1,41 @@
+{
+  "gateway": { "mode": "local", "port": 18789, "bind": "loopback", "auth": { "mode": "none" } },
+  "plugins": {
+    "load": { "paths": ["/acs/adapters/openclaw"] },
+    "entries": {
+      "acs-guardian-client": {
+        "enabled": true,
+        "hooks": { "allowConversationAccess": true },
+        "config": {
+          "guardianUrl": "http://127.0.0.1:8787/acs",
+          "hmacKeyId": "demo",
+          "hmacSecretEnv": "ACS_HMAC_SECRET",
+          "auditLog": "/tmp/acs-demo/audit.jsonl"
+        }
+      }
+    }
+  },
+  "channels": { "a2a": { "enabled": true, "peers": { "demo": { "token": "${A2A_DEMO_TOKEN}" } } } },
+  "commands": { "allowFrom": { "a2a": ["operator"] } },
+  "session": { "dmScope": "per-channel-peer" },
+  "acp": { "enabled": false },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "stub": {
+        "baseUrl": "http://127.0.0.1:8899/v1",
+        "apiKey": "stub",
+        "api": "openai-completions",
+        "agentRuntime": { "id": "openclaw" },
+        "models": [{ "id": "stub-1", "name": "Stub" }]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "stub/stub-1",
+      "workspace": "/tmp/acs-demo/work",
+      "models": { "stub/stub-1": { "agentRuntime": { "id": "openclaw" } } }
+    }
+  }
+}

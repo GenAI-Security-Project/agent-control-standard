@@ -1,0 +1,17 @@
+{
+  "plugins": {
+    "entries": {
+      "acs-guardian-client": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
+        "config": {
+          "guardianUrl": "http://127.0.0.1:8787/acs",
+          "hmacKeyId": "default",
+          "hmacSecretEnv": "ACS_HMAC_SECRET"
+        }
+      }
+    }
+  }
+}
