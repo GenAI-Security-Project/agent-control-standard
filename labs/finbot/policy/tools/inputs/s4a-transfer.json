@@ -1,0 +1,36 @@
+{
+  "description": "s4a: a transfer above the threshold",
+  "input": {
+    "method": "steps/toolCallRequest",
+    "payload": {
+      "tool": {
+        "name": "finstripe__create_transfer",
+        "version": "sha256:5ab7ec8469ca339bff853308d4a00f7afcc764ee9107d4170565855833ea9b8c"
+      },
+      "arguments": {
+        "vendor_account": {
+          "value": "000123456789"
+        },
+        "amount": {
+          "value": 7500
+        },
+        "invoice_reference": {
+          "value": "INV-1042"
+        },
+        "vendor_id": {
+          "value": 3
+        },
+        "invoice_id": {
+          "value": 1042
+        }
+      }
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "ask",
+    "reason_codes": [
+      "payment_over_threshold"
+    ]
+  }
+}

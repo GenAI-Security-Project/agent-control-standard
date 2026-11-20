@@ -1,0 +1,32 @@
+{
+  "description": "s1: the onboarding agent tells the admin about the new vendor",
+  "input": {
+    "method": "steps/toolCallRequest",
+    "payload": {
+      "tool": {
+        "name": "finmail__send_email",
+        "version": "sha256:26d8a787f636d022f95db63ee0f572d2590cbe0ff5b63badf9f9b23d7343371c"
+      },
+      "arguments": {
+        "to": {
+          "value": [
+            "admin@ns_user_abc.finbot"
+          ]
+        },
+        "subject": {
+          "value": "New vendor"
+        },
+        "body": {
+          "value": "Northwind Supplies is onboarded."
+        },
+        "message_type": {
+          "value": "general"
+        }
+      }
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "allow"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "finmail__send_email": {
+    "digests": [
+      "sha256:26d8a787f636d022f95db63ee0f572d2590cbe0ff5b63badf9f9b23d7343371c"
+    ]
+  },
+  "finstripe__create_transfer": {
+    "digests": [
+      "sha256:5ab7ec8469ca339bff853308d4a00f7afcc764ee9107d4170565855833ea9b8c"
+    ]
+  },
+  "get_vendor_details": {
+    "digests": [
+      "sha256:067654508c207c8f376876e5ab09437c722ac5bb3cef5bfadbdff4877ca3672d",
+      "sha256:c894a35f0ea98ff9182aafbb3b3296ea7eaf8ba81916d647c35085ee179ea25b"
+    ]
+  },
+  "systemutils__network_request": {
+    "digests": [
+      "sha256:3fedc9b658e78c4b5fab2c6cb58b34737eef0de9ec1ae49c33ee2c7e8548f847"
+    ]
+  }
+}

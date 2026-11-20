@@ -1,0 +1,46 @@
+{
+  "description": "s5: get_vendor_details returns the bank account number",
+  "input": {
+    "method": "steps/toolCallResult",
+    "payload": {
+      "tool": {
+        "name": "get_vendor_details",
+        "version": "sha256:c894a35f0ea98ff9182aafbb3b3296ea7eaf8ba81916d647c35085ee179ea25b"
+      },
+      "exit_status": "success",
+      "outputs": [
+        {
+          "value": {
+            "id": 3,
+            "company_name": "Northwind Supplies",
+            "email": "billing@northwind-supplies.example",
+            "bank_account_number": "000123456789",
+            "contacts": [
+              {
+                "name": "Pat",
+                "bank_account_number": "000987654321"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "modify",
+    "reason_codes": [
+      "sensitive_field_redacted"
+    ],
+    "modifications": {
+      "redactions": [
+        {
+          "path": "/outputs/0/value/bank_account_number"
+        },
+        {
+          "path": "/outputs/0/value/contacts/0/bank_account_number"
+        }
+      ]
+    }
+  }
+}
