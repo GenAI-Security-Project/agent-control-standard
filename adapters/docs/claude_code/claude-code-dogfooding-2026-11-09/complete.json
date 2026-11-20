@@ -1,0 +1,885 @@
+{
+ "scenario": "complete",
+ "prompt": "Write report.txt with the standard 40 lines.",
+ "acs_commit": "88acdfce6a0fc2055a19cf710be05a01226ce792",
+ "acs_dirty": false,
+ "claude_version": "2.1.283 (Claude Code)",
+ "python": "3.12.16",
+ "reps": [
+  {
+   "rep": 1,
+   "claude_exit": 0,
+   "duration_s": 9.7,
+   "endpoint": "http://127.0.0.1:48577/complete",
+   "guardian_port": 43751,
+   "target_created": true,
+   "target_bytes": 2120,
+   "files_left": [
+    ".claude/settings.json",
+    "envelopes.jsonl",
+    "report.txt",
+    "stub.jsonl"
+   ],
+   "claude_stdout": "Done.\n",
+   "claude_stderr": "",
+   "stub_requests": [
+    {
+     "t": 1793992985.838,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 61034,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "first",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": "Write",
+     "model": "claude-opus-5-5",
+     "tool_result": ""
+    },
+    {
+     "t": 1793992988.954,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 63611,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "after_tool_result",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": null,
+     "model": "claude-opus-5-5",
+     "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
+    }
+   ],
+   "guardian_steps": [
+    "[guardian] handshake/hello session=331dc55f req=8361d095",
+    "[guardian] steps/sessionStart session=331dc55f req=a6ba8c67",
+    "[guardian] steps/turnStart session=331dc55f req=a218b43b",
+    "[guardian] steps/userMessage session=331dc55f req=e88c9471",
+    "[guardian] steps/toolCallRequest session=331dc55f req=31cfc968",
+    "[guardian] steps/toolCallResult session=331dc55f req=714a6db1",
+    "[guardian] steps/agentResponse session=331dc55f req=380b7857",
+    "[guardian] steps/turnEnd session=331dc55f req=71449e33",
+    "[guardian] steps/sessionEnd session=331dc55f req=8f5d4f48"
+   ],
+   "envelopes": [
+    {
+     "bytes": 999,
+     "method": "handshake/hello",
+     "id": "512fedb7-66e3-43e5-b446-da6a1b0aa113",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "8361d095-5f64-4f8e-9d53-527ce691bf31",
+     "params_sha256": "480c10ffbe97c3f1bf7e2b9e2ca6c85120314bb619d8f95df74a6811400709c4"
+    },
+    {
+     "bytes": 851,
+     "method": "steps/sessionStart",
+     "id": "227545a5-fbf1-4b23-aede-3674bf80f884",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "a6ba8c67-9731-4692-be94-6b80424da7a5",
+     "params_sha256": "1fff900e92011ead9c787ed2c2d5d44f8ad3c964d55b5313543b0a823ab067d0"
+    },
+    {
+     "bytes": 849,
+     "method": "steps/turnStart",
+     "id": "b920898d-d1fd-430f-aef4-e27ab4fd1450",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "a218b43b-c537-40e7-8086-ea9626e3798f",
+     "params_sha256": "257baffe4b79cd999826ea4e4691a3f1e704673a8080f8a818c441d648383931"
+    },
+    {
+     "bytes": 856,
+     "method": "steps/userMessage",
+     "id": "520d3f5d-b03c-4e86-b7f1-6727a5d42f47",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "e88c9471-3562-45d8-b770-b47623d6ed0a",
+     "params_sha256": "f4bd32673a1f38f022bb129a46331c3f6981a488e536167366e234f0f89f69db"
+    },
+    {
+     "bytes": 3067,
+     "method": "steps/toolCallRequest",
+     "id": "ef05d2ba-3abd-487f-8333-3097da2ad8d1",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
+     "params_sha256": "b9d2e3d96a3bb52928ce61822d523804f419f5541cedfd50321fe00461527d2e",
+     "tool_name": "Write",
+     "arguments_sha256": "2178f79512c184c82f0ceb9fb90a477cf04a25a27d1e99fd8cc12a5b2b590391",
+     "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
+    },
+    {
+     "bytes": 3213,
+     "method": "steps/toolCallResult",
+     "id": "b2fe3ccb-ea2f-4cd2-87d5-8d5787f3c612",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "714a6db1-9632-4ca1-82a2-08e4fe28c3d4",
+     "params_sha256": "dc068d69fddd9b52edae9451f0dc6e74dc2fe822739ef2be18a1153d10141d9e"
+    },
+    {
+     "bytes": 819,
+     "method": "steps/agentResponse",
+     "id": "0b3b233c-8270-4be1-9137-432e7295d802",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "380b7857-a369-4344-842e-6fb602719128",
+     "params_sha256": "bd832d11cdff95e36bb53d044fb4d3a969547d3db00665adab0c4588786606a4"
+    },
+    {
+     "bytes": 839,
+     "method": "steps/turnEnd",
+     "id": "a217a14d-93f7-4e7e-a693-d9489688de8b",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "71449e33-762d-489b-b731-c779102b6c82",
+     "params_sha256": "fa603b7a32c44976ca84ba4351b5cadbf02c26c42bbabd7567a663becb03cc3c"
+    },
+    {
+     "bytes": 743,
+     "method": "steps/sessionEnd",
+     "id": "deb348b9-3af0-412a-a91e-b062ea434793",
+     "session_id": "331dc55f-76b4-4d74-8ca4-7aa6780a7577",
+     "request_id": "8f5d4f48-5d19-4c0a-95b9-6482c60b2334",
+     "params_sha256": "64677bcb322bab57c1ba99cdf4bbb311014744a5f254175110d45eaff24732b7"
+    }
+   ]
+  },
+  {
+   "rep": 2,
+   "claude_exit": 0,
+   "duration_s": 10.0,
+   "endpoint": "http://127.0.0.1:45503/complete",
+   "guardian_port": 41391,
+   "target_created": true,
+   "target_bytes": 2120,
+   "files_left": [
+    ".claude/settings.json",
+    "envelopes.jsonl",
+    "report.txt",
+    "stub.jsonl"
+   ],
+   "claude_stdout": "Done.\n",
+   "claude_stderr": "",
+   "stub_requests": [
+    {
+     "t": 1793992997.324,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 61034,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "first",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": "Write",
+     "model": "claude-opus-5-5",
+     "tool_result": ""
+    },
+    {
+     "t": 1793993000.464,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 63611,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "after_tool_result",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": null,
+     "model": "claude-opus-5-5",
+     "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
+    }
+   ],
+   "guardian_steps": [
+    "[guardian] handshake/hello session=9dfb2ec9 req=f7e6fa2d",
+    "[guardian] steps/sessionStart session=9dfb2ec9 req=cda853ca",
+    "[guardian] steps/turnStart session=9dfb2ec9 req=b5b51a76",
+    "[guardian] steps/userMessage session=9dfb2ec9 req=3b27e233",
+    "[guardian] steps/toolCallRequest session=9dfb2ec9 req=31cfc968",
+    "[guardian] steps/toolCallResult session=9dfb2ec9 req=b76123b2",
+    "[guardian] steps/agentResponse session=9dfb2ec9 req=c34a93bc",
+    "[guardian] steps/turnEnd session=9dfb2ec9 req=6eedae8b",
+    "[guardian] steps/sessionEnd session=9dfb2ec9 req=23632f21"
+   ],
+   "envelopes": [
+    {
+     "bytes": 999,
+     "method": "handshake/hello",
+     "id": "ea8e561c-f30a-4939-88dc-2446e5b35f87",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "f7e6fa2d-2cf4-4b13-adf3-1d9dae777cb4",
+     "params_sha256": "1ebf38adeb42660acd0397cfc13602ab71168cd9682cbe6db1a804da6b571986"
+    },
+    {
+     "bytes": 851,
+     "method": "steps/sessionStart",
+     "id": "b3255a64-5475-49ff-b9f1-fb3fee142746",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "cda853ca-36f5-4765-b55c-e47acd39436c",
+     "params_sha256": "738c0e2906fda85f59418dd1a33e77e38d60646c92d18d6db96b717e819a1172"
+    },
+    {
+     "bytes": 849,
+     "method": "steps/turnStart",
+     "id": "22d69590-a9c9-4f14-89ec-9fbb87ecad42",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "b5b51a76-478e-4dff-bd2a-6afd07e9f7db",
+     "params_sha256": "b72270d684321105b9ebab92b39296d5441ee6442fb9239bed070887c26b424a"
+    },
+    {
+     "bytes": 856,
+     "method": "steps/userMessage",
+     "id": "89895a25-4442-4ae7-9bb8-ad80b5e20b1d",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "3b27e233-c3a0-4709-832b-1542377786d6",
+     "params_sha256": "e58826b867f6853398d236eaa69131cb4661d04dcc0b6c4e9c6f5a6b72c8e404"
+    },
+    {
+     "bytes": 3067,
+     "method": "steps/toolCallRequest",
+     "id": "16b71b06-3f35-41d8-a52f-e5f8252e3c73",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
+     "params_sha256": "4f882d08b9f3c2ae92695708f5ad8b0b65d48754d15050b167a36f9571fe09ee",
+     "tool_name": "Write",
+     "arguments_sha256": "f8727db1b9aa60093621044b43472c2bfeedf4e63a199f2f36eb854fcabdc3d8",
+     "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
+    },
+    {
+     "bytes": 3213,
+     "method": "steps/toolCallResult",
+     "id": "1af93b3c-c475-4749-9e12-c29a68a86b29",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "b76123b2-a7b2-4bf2-925b-38a2b866eb7c",
+     "params_sha256": "35e319ebc4e531bafad87b32752101db7e01348118e2a6103676a2ee2f28841c"
+    },
+    {
+     "bytes": 819,
+     "method": "steps/agentResponse",
+     "id": "6bdab767-b9a9-4383-895f-165e04a6bc8a",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "c34a93bc-ef01-4fb6-b012-1f0d368c5010",
+     "params_sha256": "8bd19ff385333f444416a7722ddbe2a604066b92ab903f8a5df45cdb00e87d84"
+    },
+    {
+     "bytes": 839,
+     "method": "steps/turnEnd",
+     "id": "ffeefb9e-2af8-4422-8a27-653fb56f34ff",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "6eedae8b-f564-4aa2-b12c-b9bfb04b87e7",
+     "params_sha256": "1757eb33950d0ffb4dbf51ff32825dfccfa3fa0bd5014f1decec1190ec23de3f"
+    },
+    {
+     "bytes": 743,
+     "method": "steps/sessionEnd",
+     "id": "d0bb241b-97f7-4ff7-93b6-4a27ca29df9a",
+     "session_id": "9dfb2ec9-158b-4dfa-bba8-4fc632c8bd4f",
+     "request_id": "23632f21-da17-4584-9bb1-4efdc8cdf380",
+     "params_sha256": "0893036a44fc2f0cef10ba53d24433fe95bf7248b8f9399f3e095808f7829a1a"
+    }
+   ]
+  },
+  {
+   "rep": 3,
+   "claude_exit": 0,
+   "duration_s": 9.5,
+   "endpoint": "http://127.0.0.1:55039/complete",
+   "guardian_port": 40529,
+   "target_created": true,
+   "target_bytes": 2120,
+   "files_left": [
+    ".claude/settings.json",
+    "envelopes.jsonl",
+    "report.txt",
+    "stub.jsonl"
+   ],
+   "claude_stdout": "Done.\n",
+   "claude_stderr": "",
+   "stub_requests": [
+    {
+     "t": 1793993008.311,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 61034,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "first",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": "Write",
+     "model": "claude-opus-5-5",
+     "tool_result": ""
+    },
+    {
+     "t": 1793993011.366,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 63611,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "after_tool_result",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": null,
+     "model": "claude-opus-5-5",
+     "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
+    }
+   ],
+   "guardian_steps": [
+    "[guardian] handshake/hello session=5ba0277e req=1c6ed30d",
+    "[guardian] steps/sessionStart session=5ba0277e req=07b097e8",
+    "[guardian] steps/turnStart session=5ba0277e req=28b591ca",
+    "[guardian] steps/userMessage session=5ba0277e req=9f749aa8",
+    "[guardian] steps/toolCallRequest session=5ba0277e req=31cfc968",
+    "[guardian] steps/toolCallResult session=5ba0277e req=0eaa7cae",
+    "[guardian] steps/agentResponse session=5ba0277e req=2b8e9365",
+    "[guardian] steps/turnEnd session=5ba0277e req=46ad459b",
+    "[guardian] steps/sessionEnd session=5ba0277e req=7987446b"
+   ],
+   "envelopes": [
+    {
+     "bytes": 999,
+     "method": "handshake/hello",
+     "id": "20f55713-40b2-4b31-a2fa-524076e20845",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "1c6ed30d-3bf8-424c-b703-eb249a109514",
+     "params_sha256": "5984b28390c5506fbca7282566c76cdc2efc395001b3df30817120214de4e137"
+    },
+    {
+     "bytes": 851,
+     "method": "steps/sessionStart",
+     "id": "1dd26430-a45d-410d-bfd5-1ada25b31fc3",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "07b097e8-5811-4182-a6e5-b1743b456775",
+     "params_sha256": "d4bf84e43fd36f28e045148b526654b15035f2147ee837ec302b39334e9cb413"
+    },
+    {
+     "bytes": 849,
+     "method": "steps/turnStart",
+     "id": "8a621f75-f1cb-4405-aeb1-f371f156dae6",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "28b591ca-990c-4a01-8084-7cde456f89e6",
+     "params_sha256": "4608036b6aa139054afd10f147c9a22f381745a467f07b19dcdfe126f519bd36"
+    },
+    {
+     "bytes": 856,
+     "method": "steps/userMessage",
+     "id": "80b6852e-1c1c-4843-a024-f8bd3f44abbc",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "9f749aa8-1c57-431a-8199-084f4c461802",
+     "params_sha256": "d79abe49dd89d1f75be1cc2c731fbc0b5bd565b3235be8730116d3ac1fee6a67"
+    },
+    {
+     "bytes": 3067,
+     "method": "steps/toolCallRequest",
+     "id": "072dabdc-c6f6-47ab-8da9-ce573ffb0961",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
+     "params_sha256": "f13c3a3a4f50fc4a991dc7ac92dce4756a937d8f09acff8c58c1f8bc7313a788",
+     "tool_name": "Write",
+     "arguments_sha256": "594f21e9572e550a9c8621cb009ef9028f984c48a2706eec9380668d07767a94",
+     "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
+    },
+    {
+     "bytes": 3213,
+     "method": "steps/toolCallResult",
+     "id": "875bd6cf-935c-4983-a4bf-d2d330f4911f",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "0eaa7cae-6b29-40b6-99c0-6ea5bd672a83",
+     "params_sha256": "1cc573ca698c36e912c3556a016f3c45f6a3f544285b1cfa4f99a36a40f430a4"
+    },
+    {
+     "bytes": 819,
+     "method": "steps/agentResponse",
+     "id": "8541ba31-f304-4af5-bbf6-8169f5d8f019",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "2b8e9365-a333-4719-a89a-518160569726",
+     "params_sha256": "f63cca424c052643ea7f3fd2756c54eff8113258655fb24a49cdf01430877f47"
+    },
+    {
+     "bytes": 839,
+     "method": "steps/turnEnd",
+     "id": "fbabe7db-4cc8-4709-8fd0-2796bf898a68",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "46ad459b-773b-435f-8192-618b6c1472ed",
+     "params_sha256": "c76614241dc4a0435b77c6bea1786c5e246cbb92e26ab18bb5274146469a988f"
+    },
+    {
+     "bytes": 743,
+     "method": "steps/sessionEnd",
+     "id": "6e06f4ea-63b3-42a9-b98c-92dfc7cadc1d",
+     "session_id": "5ba0277e-be45-4577-aac1-44f473c7fe18",
+     "request_id": "7987446b-8686-4056-bfd3-c5173bd56226",
+     "params_sha256": "1ecd5144f39bf26fcc08520ecc1c43e2fb05300f3b21a82a845cf8be4782b40c"
+    }
+   ]
+  },
+  {
+   "rep": 4,
+   "claude_exit": 0,
+   "duration_s": 9.9,
+   "endpoint": "http://127.0.0.1:50753/complete",
+   "guardian_port": 42475,
+   "target_created": true,
+   "target_bytes": 2120,
+   "files_left": [
+    ".claude/settings.json",
+    "envelopes.jsonl",
+    "report.txt",
+    "stub.jsonl"
+   ],
+   "claude_stdout": "Done.\n",
+   "claude_stderr": "",
+   "stub_requests": [
+    {
+     "t": 1793993019.297,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 61034,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "first",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": "Write",
+     "model": "claude-opus-5-5",
+     "tool_result": ""
+    },
+    {
+     "t": 1793993022.638,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 63611,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "after_tool_result",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": null,
+     "model": "claude-opus-5-5",
+     "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
+    }
+   ],
+   "guardian_steps": [
+    "[guardian] handshake/hello session=f2afb15a req=96d2db92",
+    "[guardian] steps/sessionStart session=f2afb15a req=47edca1f",
+    "[guardian] steps/turnStart session=f2afb15a req=82df2bcf",
+    "[guardian] steps/userMessage session=f2afb15a req=5d169f46",
+    "[guardian] steps/toolCallRequest session=f2afb15a req=31cfc968",
+    "[guardian] steps/toolCallResult session=f2afb15a req=ab57d5a4",
+    "[guardian] steps/agentResponse session=f2afb15a req=8932dc29",
+    "[guardian] steps/turnEnd session=f2afb15a req=89576d5c",
+    "[guardian] steps/sessionEnd session=f2afb15a req=f02483bc"
+   ],
+   "envelopes": [
+    {
+     "bytes": 999,
+     "method": "handshake/hello",
+     "id": "cdc010af-b398-45ca-afc3-fc55443acf1b",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "96d2db92-0606-49f3-b7c0-db656b8632f6",
+     "params_sha256": "3a452273112e0a3f0e2347b9ec8e63ec22113f4a67765b152c628b7aa969898a"
+    },
+    {
+     "bytes": 851,
+     "method": "steps/sessionStart",
+     "id": "d42087a2-02d2-4aa9-9525-1c92594bc1e0",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "47edca1f-7136-4b41-9a13-1ab9232c141b",
+     "params_sha256": "a04f25617cebaabc9c566be927bb4abfd9bb4e087b9524362d0cb5f71345f80f"
+    },
+    {
+     "bytes": 849,
+     "method": "steps/turnStart",
+     "id": "74a81d16-2437-44be-ae2f-b2e7eec1275b",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "82df2bcf-9469-4040-892b-d4a0cace9ea2",
+     "params_sha256": "fcfbc6990d4f336e6e811952a063e6b4d3bea0e1d83b19d71ba00a27492c7805"
+    },
+    {
+     "bytes": 856,
+     "method": "steps/userMessage",
+     "id": "a2471365-f62d-4e48-af16-b65dac0be723",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "5d169f46-fbe5-4f26-9a8c-d0496c6c4cf7",
+     "params_sha256": "d4f834a19f0ff3f37879383bf1f6f71f1ef10744c864e7e7008bb4e2626c32c7"
+    },
+    {
+     "bytes": 3067,
+     "method": "steps/toolCallRequest",
+     "id": "58346369-9255-4a33-b53b-79f15ccb49cd",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
+     "params_sha256": "ce4207ddd12728a597dff0f88d5796d2ea554a21eb98c602fec11fccd332f1c4",
+     "tool_name": "Write",
+     "arguments_sha256": "8cf3773b6a0c38563c24d218ccb5eb2bdec3ecd44deb008d78325a48d1173061",
+     "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
+    },
+    {
+     "bytes": 3215,
+     "method": "steps/toolCallResult",
+     "id": "9ecfd34d-bc94-4ac3-80f5-a19104a239ed",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "ab57d5a4-729e-49b2-8e5e-b32f35addba1",
+     "params_sha256": "e497300c2d7b9225b637a318f51e6161f672c122f6d68888822833c2ba9e7b8e"
+    },
+    {
+     "bytes": 819,
+     "method": "steps/agentResponse",
+     "id": "904c4ee5-dafd-47a3-8017-af182b53aca7",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "8932dc29-ffdf-46c7-a04b-4cfe468ae387",
+     "params_sha256": "1951e925bad81dfd28a4dfef5a7b438ede5c00dc4c617c47e3bea19c6d3c94a4"
+    },
+    {
+     "bytes": 839,
+     "method": "steps/turnEnd",
+     "id": "72060ccb-309e-41fa-bcd5-7887798e5099",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "89576d5c-7def-4ed9-9f03-bc463a0c7974",
+     "params_sha256": "ca026e99a43f24f9a73250289f0ec6646c1ddd59a40711429f115631472ac953"
+    },
+    {
+     "bytes": 743,
+     "method": "steps/sessionEnd",
+     "id": "ea2a6bc7-e762-467a-8a4a-a89b609f290d",
+     "session_id": "f2afb15a-e7a2-45f4-87a4-eab7921f7108",
+     "request_id": "f02483bc-04b2-42e3-bd58-e80c9816db84",
+     "params_sha256": "d65478d3c8ee82b36c95e2e50b0fd70f5b62a8c801daf6c4800c1d50ca949d53"
+    }
+   ]
+  },
+  {
+   "rep": 5,
+   "claude_exit": 0,
+   "duration_s": 9.5,
+   "endpoint": "http://127.0.0.1:56353/complete",
+   "guardian_port": 36245,
+   "target_created": true,
+   "target_bytes": 2120,
+   "files_left": [
+    ".claude/settings.json",
+    "envelopes.jsonl",
+    "report.txt",
+    "stub.jsonl"
+   ],
+   "claude_stdout": "Done.\n",
+   "claude_stderr": "",
+   "stub_requests": [
+    {
+     "t": 1793993030.487,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 61034,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "first",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": "Write",
+     "model": "claude-opus-5-5",
+     "tool_result": ""
+    },
+    {
+     "t": 1793993033.602,
+     "mode": "complete",
+     "path": "/complete/v1/messages?beta=true",
+     "bytes": 63611,
+     "endpoint": "messages",
+     "stream": true,
+     "turn": "after_tool_result",
+     "tools_offered": [
+      "Agent",
+      "Bash",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "Edit",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListAgents",
+      "NotebookEdit",
+      "Read",
+      "ReportFindings",
+      "ScheduleWakeup",
+      "SendMessage",
+      "Skill",
+      "TaskStop",
+      "WebFetch",
+      "WebSearch",
+      "Workflow",
+      "Write"
+     ],
+     "tool_called": null,
+     "model": "claude-opus-5-5",
+     "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
+    }
+   ],
+   "guardian_steps": [
+    "[guardian] handshake/hello session=bd4d90ae req=9e5649bd",
+    "[guardian] steps/sessionStart session=bd4d90ae req=c4c278bf",
+    "[guardian] steps/turnStart session=bd4d90ae req=e3dec71d",
+    "[guardian] steps/userMessage session=bd4d90ae req=69d81541",
+    "[guardian] steps/toolCallRequest session=bd4d90ae req=31cfc968",
+    "[guardian] steps/toolCallResult session=bd4d90ae req=1addb9f1",
+    "[guardian] steps/agentResponse session=bd4d90ae req=65c89813",
+    "[guardian] steps/turnEnd session=bd4d90ae req=74f9b865",
+    "[guardian] steps/sessionEnd session=bd4d90ae req=c828c671"
+   ],
+   "envelopes": [
+    {
+     "bytes": 999,
+     "method": "handshake/hello",
+     "id": "2bc72343-7795-4c0d-98cc-9178906facc1",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "9e5649bd-20e5-4c48-b960-c24d608a60b6",
+     "params_sha256": "ec80abaa585e87d69601fe8b848ba919068eeca498ff297f9a61fd3e5719f1a5"
+    },
+    {
+     "bytes": 851,
+     "method": "steps/sessionStart",
+     "id": "318b2458-ae67-4dd2-9770-9956a397eaba",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "c4c278bf-5585-48ee-95bc-67a3fb7db842",
+     "params_sha256": "cad8cf43dce0e0f55e3463f3271b2d3d83d27c8029ca4d64ae4ffe5201701362"
+    },
+    {
+     "bytes": 849,
+     "method": "steps/turnStart",
+     "id": "04387f11-ac63-4f0e-b5b1-4b9c776c9f75",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "e3dec71d-311a-4e8b-b46c-dde234d62658",
+     "params_sha256": "19ab8792924ec1e4c1bf7ef834fe987af85caf4cddd1b942de65cb651c5ae83d"
+    },
+    {
+     "bytes": 856,
+     "method": "steps/userMessage",
+     "id": "4d056c9d-46b2-4600-a6e4-38375eecc38b",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "69d81541-334b-462c-9fe4-62623b97f936",
+     "params_sha256": "56dd8ea53b5424dbe6bf94a5455f0298603d1f0953f177f4d83ea153e5a68181"
+    },
+    {
+     "bytes": 3067,
+     "method": "steps/toolCallRequest",
+     "id": "5d72e939-20cf-4149-9798-a6722d79cb89",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
+     "params_sha256": "a788e12753891b8d1e3fd5e9af78813c44dea0b12113e10de3e694d480b3be78",
+     "tool_name": "Write",
+     "arguments_sha256": "552342a72091162388020ea32c12f792d0918708340e3fb77901bec96c3f67a1",
+     "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
+    },
+    {
+     "bytes": 3213,
+     "method": "steps/toolCallResult",
+     "id": "e06fe376-9907-463d-8ce9-a24521f6d216",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "1addb9f1-3941-4386-b410-91e2e2ec828d",
+     "params_sha256": "c7141559cc17098589fcc28977a8775755070bc4662de87957bfdde40d4e75e0"
+    },
+    {
+     "bytes": 819,
+     "method": "steps/agentResponse",
+     "id": "19f76667-19be-41f0-bbf7-7ee4a6e58fa7",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "65c89813-d551-42e6-894f-8eaac99a90f3",
+     "params_sha256": "c0b8d51e65d9910659c0ff5e34dd828060bc577975c8548c69cbd610fe3ecdfd"
+    },
+    {
+     "bytes": 839,
+     "method": "steps/turnEnd",
+     "id": "7edffe8a-9b83-4a52-bd89-f1cdeefcb140",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "74f9b865-bb9c-4581-ace7-ba65017391c1",
+     "params_sha256": "fbc9bb836e42b9b25256d8b92fa6a0c0ff3cdd89d09a162322551232c2b0d019"
+    },
+    {
+     "bytes": 743,
+     "method": "steps/sessionEnd",
+     "id": "311d7593-443c-4d54-8556-5dea72020d34",
+     "session_id": "bd4d90ae-2ee9-4aad-8d1d-3ecf4bd94a27",
+     "request_id": "c828c671-5364-4f9e-918f-1dc6aea41a8e",
+     "params_sha256": "4ae56cd8235b54df0eb9e461f0f5304708ad8f5d5d39a0c2e6be80b21a8fd21a"
+    }
+   ]
+  }
+ ]
+}
