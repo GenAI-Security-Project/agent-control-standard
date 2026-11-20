@@ -77,7 +77,7 @@ Every native hook uses the standard request envelope from [`request-envelope.jso
 }
 ```
 
-The decision envelope shape is documented in [Specification §6](./specification.md#6-disposition-vocabulary) and [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json).
+The decision envelope shape is documented in [Specification §6](./specification.md#6-disposition-vocabulary) and [`response-envelope.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/response-envelope.json). The `signature.algorithm` field is a claim: a verifier takes the algorithm from the key that `key_id` resolves to and rejects an envelope whose `algorithm` does not match ([Specification §10](./specification.md#10-cryptographic-signatures)).
 
 ---
 

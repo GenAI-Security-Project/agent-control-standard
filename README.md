@@ -82,7 +82,7 @@ Set `ACS_ON_DECISION_FAILURE=deny` on the Guardian before trusting it to fail cl
 Two gaps sit above the fold on purpose, because a project that hides its own gap list
 forfeits the right to be trusted on the rest of it.
 
-The wire is not authenticated. ACS-Core requires a baseline HMAC-SHA256 signature on
+The wire is not authenticated. ACS-Core requires a baseline HMAC-SHA256 message authentication code (MAC) on
 every envelope. The reference Guardian implements none of it, so anything that can reach
 the port can read decisions and cause decisions. That gap is tracked as
 [issue #70](https://github.com/GenAI-Security-Project/agent-control-standard/issues/70).

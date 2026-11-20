@@ -98,7 +98,7 @@
     "Signature": {
       "type": "object",
       "required": ["algorithm", "value", "key_id"],
-      "description": "Cryptographic signature envelope. The registry is crypto-agile: HMAC-SHA256 is the v0.1 baseline RECOMMENDED default (sufficient for shared-secret deployments). Classical asymmetric (ECDSA-P256, RSA-PSS-SHA256) and PQC algorithms (ML-DSA-*, SLH-DSA-*, aligned to NIST FIPS 203-205) are available under the ACS-Crypto profile. ML-DSA-65 is the RECOMMENDED primary for ACS-Crypto deployments; SLH-DSA-128s is a SHOULD backup for algorithmic diversity. Hybrid composites combine PQC + classical for transitional deployments.",
+      "description": "Signature or MAC envelope. The registry is crypto-agile: HMAC-SHA256, a MAC, is the v0.1 baseline RECOMMENDED default (sufficient for shared-secret deployments, with no non-repudiation). Classical asymmetric (ECDSA-P256, RSA-PSS-SHA256) and PQC algorithms (ML-DSA-*, SLH-DSA-*, aligned to NIST FIPS 203-205) are available under the ACS-Crypto profile. ML-DSA-65 is the RECOMMENDED primary for ACS-Crypto deployments; SLH-DSA-128s is a SHOULD backup for algorithmic diversity. Composite ML-DSA algorithms (RFC 10073) combine ML-DSA-65 with a classical algorithm for transitional deployments.",
       "properties": {
         "algorithm": {
           "type": "string",
@@ -111,18 +111,18 @@
             "ML-DSA-87",
             "SLH-DSA-128s",
             "SLH-DSA-128f",
-            "ML-DSA-65+ECDSA-P256",
-            "ML-DSA-65+RSA-PSS-SHA256"
+            "id-MLDSA65-ECDSA-P256-SHA512",
+            "id-MLDSA65-RSA3072-PSS-SHA512"
           ],
-          "description": "Signature algorithm. HMAC-SHA256 is symmetric MAC for shared-secret deployments (v0.1 RECOMMENDED). ECDSA-P256 and RSA-PSS-SHA256 are classical asymmetric. ML-DSA-* and SLH-DSA-* are pure PQC. The '<PQC>+<CLASSICAL>' forms are hybrid composites: the value field is the base64 of len(pqc_sig)||pqc_sig||len(classical_sig)||classical_sig where each len is a 4-byte big-endian unsigned integer; verifiers MUST verify both component signatures over the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed)."
+          "description": "Signature algorithm. HMAC-SHA256 is a symmetric MAC for shared-secret deployments (v0.1 RECOMMENDED). ECDSA-P256 and RSA-PSS-SHA256 are classical asymmetric. ML-DSA-* and SLH-DSA-* are pure PQC. The 'id-MLDSA65-*' values are the composite ML-DSA algorithms of RFC 10073 (the published form of draft-ietf-lamps-pq-composite-sigs): the value field is the base64 of mldsaSig||tradSig with no length prefixes, and the signature is valid only if both components verify (Specification 10.2). This field is a claim: a verifier takes the expected algorithm from the key descriptor that key_id resolves to and MUST reject an envelope whose algorithm does not match it (SIGNATURE_INVALID, Specification 10). The signed input is defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed)."
         },
         "value": {
           "type": "string",
-          "description": "Base64-encoded signature. For hybrid algorithms, see the algorithm description for the composite encoding."
+          "description": "Base64-encoded signature or MAC. For the composite algorithms, see the algorithm description for the encoding."
         },
         "key_id": {
           "type": "string",
-          "description": "For HMAC-SHA256, an opaque label chosen by the deployment that names one configured secret (Specification 10, key_id for HMAC). For asymmetric algorithms, the identifier resolving to the public key (or the hybrid key descriptor that pins both component public keys for hybrid algorithms)."
+          "description": "For HMAC-SHA256, an opaque label chosen by the deployment that names one configured secret (Specification 10, key_id for HMAC). For asymmetric algorithms, the identifier resolving to the key descriptor, which holds the public key (for the composite algorithms, both component public keys) and the algorithm bound to it. A verifier takes the expected algorithm from that descriptor, not from the wire."
         }
       }
     }

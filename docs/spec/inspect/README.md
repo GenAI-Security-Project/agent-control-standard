@@ -76,6 +76,8 @@ A deployment claiming **ACS-Inspect-Dynamic** additionally MUST:
 
 Without -Dynamic, a deployment that hot-swaps components silently is not Inspect-conformant for that session — the Guardian's view of the agent diverges from runtime reality.
 
+A signature on a CycloneDX, SPDX, or SWID serialization is not required for conformance. CycloneDX treats a BOM signature as optional, and ACS-Inspect does not add one. Inspect integrity comes from the ACS envelope on `agbom/snapshot` and `agbom/changed`, which carries the signature or MAC required by [Specification §10](../instrument/specification.md#10-cryptographic-signatures), and from the SessionContext chain that records each AgBOM event. A deployment MAY sign a serialization it hands to a third party, and a Guardian MUST NOT treat a missing BOM signature as a conformance failure.
+
 ## Triggers for AgBOM updates
 
 - Model added, removed, or version-changed.

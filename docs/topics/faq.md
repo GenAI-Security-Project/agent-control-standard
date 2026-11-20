@@ -174,7 +174,7 @@ The conformance line is between *not having the surface* and *suppressing the ho
 No, same principle for all three: ACS specifies the category (you need a transport, you need signed envelopes, you need an identity scheme) and catalogs the options the spec defines; the deployment picks which.
 
 - **Transport.** v0.1 defines HTTP(S) (for SaaS, on-prem, multi-tenant Guardians) and stdio (for IDE-embedded Guardians); gRPC and unix sockets come in a later version ([Specification §16](../spec/instrument/specification.md#16-roadmap)). The handshake declares which is in use, and the envelope and method semantics are transport-agnostic.
-- **Cryptography.** ACS-Core's baseline is HMAC-SHA256, which any deployment can satisfy without infrastructure investment. ACS-Crypto adds asymmetric and post-quantum algorithms (ML-DSA-65 primary, SLH-DSA-128s backup, hybrid composites for transitional deployments) for deployments that need non-repudiation or PQC readiness.
+- **Cryptography.** ACS-Core's baseline is the HMAC-SHA256 MAC, which any deployment can satisfy without infrastructure investment. ACS-Crypto adds asymmetric and post-quantum algorithms (`ECDSA-P256` and `RSA-PSS-SHA256` classical, ML-DSA-65 primary, SLH-DSA-128s backup, composite ML-DSA for transitional deployments) for deployments that need non-repudiation or PQC readiness.
 - **Identity.** SPIFFE, OIDC, mTLS, and organizational PKI are all deployment choices; ACS reserves `policy_references[].policy_version` as a stable pointer so audit replay works regardless of the scheme.
 
 **ACS catalogs what exists; the deployment picks what to use.**
