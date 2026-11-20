@@ -14,9 +14,9 @@ Contributor work lands on `integration`, the default branch. On it:
 - `reference-implementations/` holds the Guardian reference implementations.
 - `adapters/` holds the reference adapters that connect agent frameworks to a Guardian, with an example Guardian and their own conformance suite.
 - `tests/` holds the repository guards CI runs.
-- `tools/` holds the scripts the workflows in `.github/workflows/` call, such as schema publishing and pull request intake.
+- `tools/` holds the scripts the workflows call, such as schema publishing and pull request intake, plus a few maintainer tools.
 
-Read [README.md](./README.md) and [Core Concepts](./docs/topics/core_concepts.md) for detail. The release version lives in `version.txt` and the spec version in each schema's `$id`. The two differ, so never state one as the other.
+Read [README.md](./README.md) and [Core Concepts](./docs/topics/core_concepts.md) for detail. The release version lives in `version.txt` and the spec version in each schema's `$id`. They can differ, so never state one as the other.
 
 ## Start with CONTRIBUTING.md
 
@@ -57,7 +57,7 @@ For changes under `adapters/`, also run the adapter conformance suite in its own
 
 Approve or request changes only when the pull request's author or a lead asked for the review, or when the person running you is a code owner for the changed paths. Anyone may leave a comment review that reports a specific finding someone else can reproduce. Review one pull request at a time, and post nothing until the person running you approves it. See [Review When Asked, and Show Your Work](./CODE_OF_CONDUCT.md#review-when-asked-and-show-your-work).
 
-A summary of the diff is not a review. Every review or approval states:
+A summary of the diff is not a review. Every approval states:
 
 - **Commit reviewed:** exact commit SHA inspected
 - **Checks run:** commands executed and their outcome (or `none`)
