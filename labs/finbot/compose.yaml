@@ -1,10 +1,12 @@
 # The FinBot guided lab: FinBot, unmodified, behind the ACS gateway, Guardian and OPA (issue #588, LAB-15).
 #
-# Version 1.0.0. Owner: Rock Lambros. Lab branch only. Start it with ./lab.sh, which runs `lab init` first, picks the
+# Version 1.1.0. Owner: Rock Lambros. Lab branch only. LAB-16 added drive-net. Start it with ./lab.sh, which runs `lab init` first, picks the
 # pulled or locally built images, and adds compose.openai.yaml when the upstream is openai.
 #
 # Networks (A.2 as amended):
 #   finbot-net  FinBot, redis and the gateway's model port. Not internal, so FinBot's port can be published.
+#   drive-net   FinBot and the lab CLI only, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
+#               so the CLI, which mounts state/secrets, still has no path to the internet.
 #   acs-net     gateway, Guardian, OPA, Jaeger and the lab CLI. internal: true, so nothing on it reaches the internet,
 #               and FinBot, which isn't on it, can't reach the Guardian, OPA or the gateway's admin port.
 #   ui-net      the viewer and Jaeger only. Docker publishes no port for a container whose only network is internal.
@@ -62,6 +64,7 @@ services:
       - "127.0.0.1:${LAB_PORT_FINBOT:-8000}:8000"
     networks:
       - finbot-net
+      - drive-net
     volumes:
       - finbot-data:/app/data
       - finbot-uploads:/app/uploads
@@ -308,8 +311,11 @@ services:
       ACS_GATEWAY_ADMIN_TOKEN_FILE: /lab/state/secrets/admin.token
     volumes:
       - .:/lab
+    # acs-net for the admin and approver ports, drive-net for FinBot's API, which the scenario driver calls. Both are
+    # internal. The container listens on nothing and lives for one command, so FinBot gains nothing to reach.
     networks:
       - acs-net
+      - drive-net
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
@@ -320,6 +326,8 @@ networks:
     ipam:
       config:
         - subnet: ${LAB_ACS_SUBNET:-10.88.47.0/24}
+  drive-net:
+    internal: true
   ui-net: {}
 
 secrets:

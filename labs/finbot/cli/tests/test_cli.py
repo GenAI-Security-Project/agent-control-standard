@@ -103,6 +103,8 @@ def test_init_writes_defaults_and_keeps_overrides(bundle, capsys):
     assert lab("init", capsys=capsys)[0] == 0
     values = env_file(bundle)
     token = values.pop("LAB_CLIENT_TOKEN")
+    # LAB-16 pins the Guardian's fingerprint here too. test_lab_modules checks its value.
+    assert values.pop("LAB_GUARDIAN_FINGERPRINT") == f"sha256:{'cd' * 32}"
     assert token == (bundle / "state" / "secrets" / "client.token").read_text(encoding="utf-8").strip()
     assert values == {"LAB_PORT_FINBOT": "8001", "ACS_LAB_MODE": "enforce", "ACS_UPSTREAM": "replay",
                       "ACS_RESPONSE_SIGNING": "ML-DSA-65", "ACS_RESPONSE_ALGORITHMS": "ML-DSA-65"}

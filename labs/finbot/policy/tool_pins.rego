@@ -14,7 +14,7 @@
 # the body and the step goes through.
 package finbot
 
-# The starter's body never matches, so a poisoned declaration goes through. Replace false with the rule.
+# The starter's body never matches, so a poisoned declaration goes through. Replace this whole rule with yours.
 deny_codes contains "tool_content_hash_mismatch" if {
 	input.payload.tool.version
 	false

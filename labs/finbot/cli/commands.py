@@ -1,16 +1,17 @@
 """The lab CLI's commands (issue #588, LAB-15, Appendix A.11). Standard library only.
 
 Each command takes its arguments and returns an exit code from report: 0 pass, 1 not yet, 2 the environment is
-broken. LAB-16 adds run, check, forge, verify, downgrade and record to COMMANDS.
+broken. LAB-16's lab_modules adds check, policy, _drive, forge, verify and downgrade to COMMANDS.
 
 Paths: LAB_BUNDLE names the bind-mounted labs/finbot directory (/lab in the container). The CLI writes only under it:
-state/, .env, replay/recordings/ and, through lab pins, policy/data.json.
+state/, .env, replay/recordings/ and, through lab pins and lab policy, policy/data.json and the live .rego files.
 """
 from __future__ import annotations
 
 import collections
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -54,6 +55,10 @@ SECRET_FILES = ("hmac.key", "guardian.key", "admin.token", "approver.token", "cl
 # FinBot's bearer for the gateway's model port (final review R8). init writes it to state/secrets for the gateway and
 # to .env, where compose passes it to FinBot as OPENAI_API_KEY.
 CLIENT_TOKEN = "LAB_CLIENT_TOKEN"
+# The pin lab verify and lab check 7 pass to acs-verify as --expect-fingerprint (LAB-16). It lives in .env, which no
+# service mounts, because the gateway can write state/ and a forger holding its files could otherwise pick the key.
+GUARDIAN_FINGERPRINT = "LAB_GUARDIAN_FINGERPRINT"
+FINGERPRINT_FORMAT = re.compile(r"sha256:[0-9a-f]{64}")
 # The attendee's own model key, pasted in by hand for `lab upstream openai`. lab init can't make it again, so lab reset
 # keeps it unless told otherwise.
 MODEL_KEY = "openai.key"
@@ -150,7 +155,8 @@ def cmd_init(args: list[str]) -> int:
                                  "--guardian-id", GUARDIAN_ID], capture_output=True, text=True, timeout=120)
         fingerprint = next((line.split("=", 1)[1] for line in result.stdout.splitlines()
                             if line.startswith("fingerprint=")), None)
-        if result.returncode != 0 or fingerprint is None:
+        # The value goes into .env as one line, so anything but the generator's own format is refused.
+        if result.returncode != 0 or fingerprint is None or not FINGERPRINT_FORMAT.fullmatch(fingerprint):
             report.not_yet(f"the Guardian key generator failed: {result.stderr.strip() or result.stdout.strip()}")
             return report.EXIT_BROKEN
         os.replace(out_dir / "guardian.key", secrets_dir / "guardian.key")
@@ -161,8 +167,9 @@ def cmd_init(args: list[str]) -> int:
         shutil.rmtree(workdir, ignore_errors=True)
 
     update_env(dict(DEFAULTS), only_missing=True)
-    # Always replaced: reset keeps .env, and a token left from the last lab would no longer match the gateway's.
-    update_env({CLIENT_TOKEN: client_token})
+    # Both always replaced: reset keeps .env, and a token or pin left from the last lab would no longer match the new
+    # keys.
+    update_env({CLIENT_TOKEN: client_token, GUARDIAN_FINGERPRINT: fingerprint})
     report.done(f"lab initialized. Guardian decision key {GUARDIAN_KEY_ID}, fingerprint {fingerprint}")
     report.info("Compare that fingerprint with what acs-verify --expect-fingerprint is given. Next: ./lab.sh up")
     return report.EXIT_PASS
@@ -365,6 +372,10 @@ COMMANDS: dict[str, Callable[[list[str]], int]] = {
     "approver": cmd_approver,
     "help": cmd_help,
 }
+
+import lab_modules  # noqa: E402  (imported after COMMANDS, since lab_modules calls back into this module)
+
+COMMANDS.update(lab_modules.COMMANDS)
 
 
 def dispatch(argv: list[str]) -> int:

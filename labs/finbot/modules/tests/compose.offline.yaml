@@ -1,0 +1,13 @@
+# compose.offline.yaml: the acceptance run's stand-in for an unplugged network (issue #589, LAB-16 Task 16).
+#
+# Version 1.0.0. Owner: Rock Lambros. Test tooling, never an attendee file. acceptance.py adds it after compose.yaml
+# in every Docker call lab.sh makes, and nothing else reads it.
+#
+# finbot-net is the one network on the model path that reaches outside the stack. With it internal, acs-gateway,
+# FinBot, redis and the lab CLI join only internal networks, so a replay run that tried to reach a model upstream, or
+# FinBot reaching the internet, fails instead of passing quietly. Docker publishes no host port from an internal
+# network, so FinBot's and the approver's host ports go dark for the run. The driver needs neither, since it reaches
+# FinBot over drive-net and the gateway over acs-net. Owner step R4 (Wi-Fi off) is the real test, and this is CI's.
+networks:
+  finbot-net:
+    internal: true

@@ -1,5 +1,7 @@
 # Checks the FinBot lab bundle: the policy pack, the compose file, the CLI, the viewer, the runtime image, and a
-# replay smoke run of the whole stack with no model key (issue #588, LAB-15, PREMORTEM P13).
+# replay smoke run of the whole stack with no model key (issue #588, LAB-15, PREMORTEM P13). LAB-16 (issue #589) adds
+# the module checks, kit and guides, the scenario driver, the recordings, and an offline acceptance run of guides 1
+# to 7.
 #
 # Owner: Rock Lambros. macOS and Linux only (Rock, 2026-11-17), so the CLI matrix runs on those two only. The smoke job
 # builds the images itself, since the published ones may be private, exactly as lab.sh does on an attendee's machine.
@@ -144,8 +146,8 @@ jobs:
         run: uv run --project adapters --locked --group test python -m pytest labs/finbot/images/tests -v
 
   smoke:
-    # Module 1's replay path end to end on a fresh runner with no model key. The runner's uid is 1001, which tests the
-    # copy and drop for a uid other than the image default. LAB-16 switches this to lab run s1 and lab check 1.
+    # Module 1's replay path end to end on a fresh runner with no model key: lab run s1 off and on, then lab check 1.
+    # The runner's uid is 1001, which tests the copy and drop for a uid other than the image default.
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -166,6 +168,86 @@ jobs:
         run: ./lab.sh up
       - name: Run the smoke checks
         run: ./images/smoke.sh
+      - name: Show the service logs
+        if: failure()
+        run: ./lab.sh logs --no-color
+      - name: Stop the lab
+        if: always()
+        run: ./lab.sh down
+
+  modules:
+    # Every module check, the module 7 kit, and the guide checks with their simulator. The kit verifies ML-DSA-65
+    # signatures, so the adapters environment carries the pqc extra.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Run the module checks, the kit and the guide tests with the pqc extra
+        run: >-
+          uv run --project adapters --locked --extra pqc --group test python -m pytest
+          labs/finbot/modules/checks/tests labs/finbot/modules/kit/tests labs/finbot/modules/tests -v
+
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Run the scenario driver and scenario tests against the fake FinBot
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/scenarios/tests -v
+
+  recordings:
+    # The recordings load through the gateway's own RecordingStore, so they run in the gateway's environment.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+      - name: Check every guide run has a recording the gateway loads
+        run: uv run --project adapters/gateway --locked --group test python -m pytest labs/finbot/replay/tests -v
+
+  acceptance:
+    # Guides 1 to 7 played command by command on a fresh runner with no model key and finbot-net internal, so no call
+    # can leave the stack. Every check must print DONE, with no replay miss and no run in a recording's namespace.
+    # acceptance.py is standard library only, like the guide simulator it reads the guides through.
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: labs/finbot
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the host
+        run: ./lab.sh doctor
+      - name: Play guides 1 to 7 offline and run every check
+        run: python3 modules/tests/acceptance.py
       - name: Show the service logs
         if: failure()
         run: ./lab.sh logs --no-color
