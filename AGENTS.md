@@ -4,7 +4,7 @@ Follow these rules before editing files, opening work, or reviewing changes in t
 
 ## About this repository
 
-The OWASP Agent Control Standard (ACS) is a wire specification. It lets a separate Guardian Agent inspect what an AI agent is about to do and permit, deny, or modify that action before it happens, over an authenticated channel, with an audit trail that reconstructs after the fact. The agent under watch is the Observed Agent. ACS groups its capabilities into three pillars: Instrument (hooks), Trace (events), and Inspect (the Agent Bill of Materials, or AgBOM).
+The OWASP GenAI Security Project Agent Control Standard (ACS) is a wire specification. It lets a separate Guardian Agent inspect what an AI agent is about to do and permit, deny, or modify that action before it happens, over an authenticated channel, with an audit trail that reconstructs after the fact. The agent under watch is the Observed Agent. ACS groups its capabilities into three pillars: Instrument (hooks), Trace (events), and Inspect (the Agent Bill of Materials, or AgBOM).
 
 Contributor work lands on `integration`, the default branch. On it:
 

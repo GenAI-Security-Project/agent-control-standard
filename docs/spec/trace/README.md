@@ -1,4 +1,4 @@
-# OWASP Agent Control Standard - Trace
+# OWASP GenAI Security Project Agent Control Standard - Trace
 
 AI agents make autonomous decisions that impact business outcomes. Without observability, enterprises can't understand, trust, or control these decisions.
 
