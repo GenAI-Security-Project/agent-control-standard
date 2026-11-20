@@ -1,4 +1,4 @@
-# Code owners for the OWASP Agent Control Standard.
+# Code owners for the OWASP GenAI Security Project Agent Control Standard.
 #
 # Owners listed here are required reviewers on the paths they own, enforced by
 # the ruleset on main. GitHub requires write access for an entry to take
@@ -13,7 +13,7 @@
 # here, because an entry without write access does nothing.
 
 # Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
 
 /CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -36,11 +36,12 @@
 /tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
 /landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /GOVERNANCE.md  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+/CODE_OF_CONDUCT.md @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /project.owasp.yaml @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @artmaro @Lrd0036 @e2hln @almogbhl
+/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @artmaro @Lrd0036 @e2hln @almogbhl
+/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @almogbhl
 /overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 /docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
@@ -58,6 +59,23 @@
 # these entries exist to force a second reviewer on every later change rather than to
 # record who wrote it.
 /reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro
+
+# The reference adapters are installable code that hooks into an agent and decides
+# whether its tool calls run. Bar Kaduri owns them. The other two project leads are
+# listed too, because GitHub does not let an author approve her own pull request, and
+# with Bar as the only owner every change she makes here would need an admin bypass.
+# The FinBot guided lab (issues #574 to #591) lands a run of adapter pull requests,
+# so the Reference Implementation lead and three more maintainers are owners as well,
+# and those pull requests do not all wait on the same two reviewers. Every handle here
+# holds write access, because GitHub silently ignores one that does not.
+/adapters/  @bar-capsule @rocklambros @afogel @artmaro @fewdisc @Lrd0036 @e2hln @almogbhl
+
+# Coding-agent instructions apply at every directory depth (Codex loads nested AGENTS.md
+# and gives AGENTS.override.md precedence). Placed after broader directory rules such as
+# /adapters/ and before /.github/ so nested instruction files keep the restricted owner
+# set plus the Documentation lead without weakening the lead-only /.github/ rule.
+AGENTS.md          @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
+AGENTS.override.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
 # itself. Changes here are a privilege-escalation surface, so a project lead

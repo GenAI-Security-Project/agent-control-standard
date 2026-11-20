@@ -8,15 +8,18 @@ reader can fetch it unchanged.
 | Field | Value |
 |---|---|
 | Implementation under test | `<name and version>` |
-| Specification version claimed against | `<tag>` at `<full commit SHA>` |
+| Specification version claimed against | `v0.1.0` |
+| Release the claim was tested against | `<release tag, such as v0.1.5>` at `<full commit SHA>` |
 | Date of claim | `<date>` |
 | Claimant | `<organisation or individual>` |
 | Published at | `<URL that resolves to fixed bytes>` |
 | SHA-256 of this filled copy, computed with the digest replaced by the literal `<digest>` | `<digest>` and `<filename it belongs to>` |
 
-Pin the specification by tag and full commit SHA. A tag can move, and `version.txt` has
-disagreed with the latest tag before (`Issue #143`). A full SHA is computed from the bytes and
-cannot name anything else.
+The specification version names the schema namespace, and each release can change the
+schemas at the `v0.1.0` URIs in place. Name the release by tag and full commit SHA so a reader
+knows which bytes you tested against. A tag can move, and `version.txt` has disagreed with the
+latest tag before. A full SHA is computed from the bytes and cannot name
+anything else.
 
 ## 2. Trust topology
 
@@ -96,9 +99,11 @@ code invented on the page.
 
 ## 5. ACS-Core decision posture
 
-Required whenever `acs-core` is `EXERCISED`. ACS-Core mandates decision honoring, and its
-defaults are permissive, so a claim that omits this reports the default posture as evidence of
-enforcement.
+Required whenever `acs-core` is `EXERCISED`. ACS-Core mandates decision honoring, and the
+defaults in the specification v0.1.0 text are permissive, so a claim that omits this reports the
+default posture as evidence of enforcement. The project leads decided to make deny the default
+([D-036](../decisions/index.md#d-036-default-the-failure-posture-to-deny)), and the
+specification text has not changed yet. Record the posture you configured either way.
 
 | Field | Value |
 |---|---|
@@ -138,15 +143,15 @@ stays silent on it lets a reader supply oversight that ACS never checked.
 Quoted from `docs/spec/conformance.md` so that it travels with the claim:
 
 > What "ACS-Core conformant" guarantees: the channel is authenticated and the Observed Agent
-> honors the Guardian's decisions. It does NOT assert that a deployment's policies are strict,
-> nor that the audit chain is tamper-evident against a compromised Guardian (that is the
-> ACS-Crypto and ACS-Audit profiles, since the HMAC baseline is symmetric). A permissive Guardian
-> is a conformant but permissive deployment, not a violation.
+> honors the Guardian's decisions on the four MUST-support dispositions (ALLOW, DENY, ASK,
+> DEFER). [...] This clause does NOT assert that a deployment's policies are strict, nor that
+> the audit chain is tamper-evident against a compromised Guardian (that is the ACS-Crypto and
+> ACS-Audit profiles, since the HMAC baseline is symmetric). A permissive Guardian is a
+> conformant but permissive deployment, not a violation.
 
 > Who verifies a conformance claim: nobody, in v0.1.0. `profiles_supported` and
-> `profiles_accepted` are self-declaration on the wire. This release ships no conformance test
-> suite, no registry of conformant implementations, and no steward body to arbitrate a disputed
-> claim.
+> `profiles_accepted` are self-declaration on the wire. No registry of conformant
+> implementations exists, and no steward body arbitrates a disputed claim.
 
 This page records what an implementer asserts about itself. A claim form that does not repeat
 that limit inside itself will be quoted without it.

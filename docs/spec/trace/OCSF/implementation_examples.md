@@ -1,286 +1,176 @@
 # OCSF Implementation Examples
 
-This document provides detailed implementation examples and patterns for ACS's OCSF implementation.
+This page shows one way to turn ACS traffic into OCSF 1.9.0 events by following [`trace/ocsf-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json), and how to query the result in a SIEM. [Trace Events](../events.md#ocsf-event-classes) states the rules. Where this page and the mapping file differ, the mapping file wins.
 
-## Dependencies
+The code is an illustration, not a package the project ships. No release 0.1.5 component emits OCSF yet.
 
-```bash
-pip install py-ocsf-models
-```
+## Build events from an ACS exchange
 
-## Event Producer Implementation
+The function below uses the Python standard library only. It takes a signed request and the Guardian's response and builds two events: the step itself as Process Activity (1007), and the decision as Detection Finding (2004), or as Application Lifecycle (6002) for an allow.
 
 ```python
+"""Build OCSF 1.9.0 events from an ACS request and response, per trace/ocsf-mapping.json."""
+import json
 from datetime import datetime
-from uuid import uuid4
-from py_ocsf_models.objects import Event, Activity, Finding
-from py_ocsf_models.enums import CategoryType, ClassType, ActivityType
-from py_ocsf_models.types import Metadata, Actor, API
-from typing import Dict, Any, Optional
 
-class OCSFEvent(Event):
-    """Base OCSF event with configuration."""
-    class Config:
-        allow_population_by_field_name = True
+OCSF_VERSION = "1.9.0"
+PRODUCT = {"name": "Example ACS Guardian", "vendor_name": "Example Corp"}
 
-    def __init__(self, **data):
-        super().__init__(
-            category_uid=CategoryType.APPLICATION_ACTIVITY,
-            class_uid=ClassType.API_ACTIVITY,
-            **data
-        )
+# From ocsf-mapping.json: step_to_class for the two tool hooks, and the decision tables.
+TOOL_CLASS = {"class_uid": 1007, "class_name": "Process Activity", "category_uid": 1, "category_name": "System Activity"}
+SEVERITY = {"allow": 1, "modify": 2, "ask": 3, "defer": 3, "deny": 4}
+ACTION = {"allow": (1, "Allowed"), "deny": (2, "Denied"), "modify": (4, "Modified"), "ask": (99, "ask"), "defer": (99, "defer")}
+DISPOSITION = {"allow": (1, "Allowed"), "deny": (2, "Blocked"), "modify": (99, "modify"), "ask": (99, "ask"), "defer": (99, "defer")}
+ALERT = {"allow": False, "deny": True, "modify": False, "ask": True, "defer": True}
+ACS_FIELDS = ["request_id", "decision", "reasoning", "reason_codes", "policy_references",
+              "cited_provenance_ids", "chain_hash", "metadata"]
 
-class SecurityFinding(Finding):
-    """Security finding event with configuration."""
-    class Config:
-        allow_population_by_field_name = True
 
-    def __init__(self, **data):
-        super().__init__(
-            category_uid=CategoryType.FINDINGS,
-            class_uid=ClassType.SECURITY_FINDING,
-            **data
-        )
+def epoch_ms(timestamp):
+    return int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp() * 1000)
 
-class OCSFAgentLogger:
-    """OCSF-compliant logger for AI agent activities."""
-    
-    def __init__(self, product_name: str = "ASOP Security Layer",
-                 vendor_name: str = "ASOP",
-                 ocsf_version: str = "1.0.0"):
-        self.product_name = product_name
-        self.vendor_name = vendor_name
-        self.ocsf_version = ocsf_version
 
-    def _create_base_metadata(self) -> Dict[str, Any]:
-        """Create base metadata for OCSF events."""
-        return {
-            "version": "1.0.0",
-            "product": {
-                "name": self.product_name,
-                "vendor_name": self.vendor_name
-            },
-            "ocsf": {
-                "version": self.ocsf_version
-            }
-        }
+def pair(request):
+    return request["params"]["metadata"]["session_id"], request["params"]["request_id"]
 
-    def create_api_activity_event(self, 
-                                agent_event: Dict[str, Any],
-                                validate: bool = True) -> Dict[str, Any]:
-        """Create and validate an OCSF API Activity event."""
-        try:
-            event_data = {
-                "metadata": self._create_base_metadata(),
-                "activity_id": ActivityType.CREATE,
-                "activity_name": "Agent Tool Use",
-                "time": int(datetime.utcnow().timestamp() * 1000),
-                "severity_id": agent_event.get("severity_id", 1),
-                "actor": {
-                    "user": {
-                        "uid": agent_event.get("agent_id"),
-                        "name": agent_event.get("agent_name"),
-                        "type": "AI Agent"
-                    }
-                },
-                "api": {
-                    "service": {
-                        "name": agent_event.get("service_name"),
-                        "version": agent_event.get("service_version")
-                    },
-                    "operation": agent_event.get("operation")
-                },
-                "unmapped": {
-                    "asop": {
-                        "context": {
-                            "agent": {
-                                "id": agent_event.get("agent_id"),
-                                "name": agent_event.get("agent_name"),
-                                "version": agent_event.get("agent_version"),
-                                "provider": {
-                                    "name": agent_event.get("provider_name"),
-                                    "url": agent_event.get("provider_url")
-                                }
-                            },
-                            "session": {
-                                "id": agent_event.get("session_id")
-                            },
-                            "model": {
-                                "id": agent_event.get("model_id"),
-                                "provider": {
-                                    "name": agent_event.get("model_provider")
-                                }
-                            }
-                        },
-                        "step": {
-                            "id": agent_event.get("step_id"),
-                            "type": agent_event.get("step_type"),
-                            "turn_id": agent_event.get("turn_id"),
-                            "reasoning": agent_event.get("reasoning")
-                        }
-                    }
-                }
-            }
 
-            # Add operation details based on step type
-            operation = {}
-            if agent_event.get("tool_id"):
-                operation = {
-                    "type": "tool_execution",
-                    "tool": {
-                        "id": agent_event.get("tool_id"),
-                        "execution_id": agent_event.get("execution_id"),
-                        "inputs": agent_event.get("tool_inputs", []),
-                        "outputs": agent_event.get("tool_outputs", []),
-                        "is_error": agent_event.get("is_error", False)
-                    }
-                }
-            elif agent_event.get("protocol_type"):
-                operation = {
-                    "type": "protocol_message",
-                    "protocol": {
-                        "type": agent_event.get("protocol_type"),
-                        "message": agent_event.get("protocol_message", {}),
-                        "reasoning": agent_event.get("protocol_reasoning")
-                    }
-                }
-            elif agent_event.get("memory_type"):
-                operation = {
-                    "type": "memory_operation",
-                    "action": agent_event.get("memory_type"),
-                    "content": agent_event.get("memory_content", [])
-                }
-            elif agent_event.get("knowledge_query"):
-                operation = {
-                    "type": "knowledge_operation",
-                    "query": agent_event.get("knowledge_query"),
-                    "keywords": agent_event.get("knowledge_keywords", []),
-                    "results": agent_event.get("knowledge_results", [])
-                }
+def provenance_enrichments(payload):
+    """Provenance facts go in enrichments named acs_provenance_* (provenance_metadata)."""
+    found = []
+    for argument in payload.get("arguments", {}).values():
+        found.extend(argument.get("provenance", []))
+    enrichments = []
+    for item in found:
+        enrichments.append({"name": "acs_provenance_origin", "value": item["origin"], "data": item})
+        if "source_id" in item:
+            enrichments.append({"name": "acs_provenance_source_id", "value": item["source_id"], "data": item})
+    return enrichments
 
-            if operation:
-                event_data["unmapped"]["asop"]["step"]["operation"] = operation
 
-            # Add trace context if available
-            for field in ["trace_id", "span_id", "parent_span_id"]:
-                if field in agent_event:
-                    event_data["metadata"][field] = agent_event[field]
+def step_event(request, activity_id, activity_name, host_context):
+    """A steps/toolCallRequest or steps/toolCallResult event as Process Activity (1007).
 
-            if validate:
-                event = OCSFEvent(**event_data)
-                return event.dict(by_alias=True, exclude_none=True)
-            return event_data
+    host_context carries the OCSF context only the host runtime knows, such as
+    actor, device and process. ACS payloads do not hold it.
+    """
+    params = request["params"]
+    session_id, request_id = pair(request)
+    event = {
+        **TOOL_CLASS,
+        "activity_id": activity_id,
+        "activity_name": activity_name,
+        "type_uid": TOOL_CLASS["class_uid"] * 100 + activity_id,
+        "severity_id": 1,
+        "time": epoch_ms(params["timestamp"]),
+        "metadata": {"version": OCSF_VERSION, "product": PRODUCT,
+                     "correlation_uid": f"{session_id}:{request_id}"},
+        **host_context,
+        "unmapped": {"acs": {
+            "method": request["method"],
+            "request_id": request_id,
+            "session_id": session_id,
+            "agent_id": params["metadata"]["agent_id"],
+            **params["payload"],
+        }},
+    }
+    enrichments = provenance_enrichments(params["payload"])
+    if enrichments:
+        event["enrichments"] = enrichments
+    return event
 
-        except Exception as e:
-            raise ValueError(f"Failed to create OCSF event: {str(e)}")
 
-    def create_security_finding(self, 
-                              finding_data: Dict[str, Any],
-                              validate: bool = True) -> Dict[str, Any]:
-        """Create a security finding event."""
-        try:
-            event_data = {
-                "metadata": self._create_base_metadata(),
-                "activity_id": ActivityType.CREATE,
-                "activity_name": "Create",
-                "time": int(datetime.utcnow().timestamp() * 1000),
-                "severity_id": finding_data.get("severity_id", 3),
-                "finding": {
-                    "title": finding_data.get("title", "Agent Policy Violation"),
-                    "desc": finding_data.get("description"),
-                    "types": finding_data.get("types", ["Policy Violation"]),
-                    "uid": finding_data.get("finding_id", str(uuid4()))
-                },
-                "resources": [
-                    {
-                        "type": "AI Agent",
-                        "uid": finding_data.get("agent_id"),
-                        "name": finding_data.get("agent_name")
-                    }
-                ],
-                "unmapped": {
-                    "policy_violated": finding_data.get("policy_name"),
-                    "agent_context": finding_data.get("agent_context", {}),
-                    "remediation": finding_data.get("remediation")
-                }
-            }
-
-            if validate:
-                event = SecurityFinding(**event_data)
-                return event.dict(by_alias=True, exclude_none=True)
-            return event_data
-
-        except Exception as e:
-            raise ValueError(f"Failed to create security finding: {str(e)}")
+def decision_event(request, response, decided_at):
+    """The Guardian's answer: Detection Finding (2004), or Application Lifecycle (6002) for allow."""
+    result = response["result"]
+    decision = result["decision"]
+    session_id, request_id = pair(request)
+    unmapped = {"session_id": session_id}
+    unmapped.update({name: result[name] for name in ACS_FIELDS if result.get(name) not in (None, [], {})})
+    common = {
+        "time": epoch_ms(decided_at),
+        "severity_id": SEVERITY[decision],
+        "metadata": {"version": OCSF_VERSION, "product": PRODUCT,
+                     "correlation_uid": f"{session_id}:{request_id}"},
+        "unmapped": {"acs": unmapped},
+    }
+    if decision == "allow":
+        # allow_class leaves activity_id open, so this example records 0 (Unknown).
+        return {"class_uid": 6002, "class_name": "Application Lifecycle", "category_uid": 6,
+                "category_name": "Application Activity", "activity_id": 0, "activity_name": "Unknown",
+                "type_uid": 600200, **common}
+    action_id, action = ACTION[decision]
+    disposition_id, disposition = DISPOSITION[decision]
+    event = {
+        "class_uid": 2004, "class_name": "Detection Finding", "category_uid": 2, "category_name": "Findings",
+        "activity_id": 1, "activity_name": "Create", "type_uid": 200401,
+        **common,
+        "action_id": action_id, "action": action,
+        "disposition_id": disposition_id, "disposition": disposition,
+        "is_alert": ALERT[decision],
+        "finding_info": {"uid": f"{session_id}:{request_id}",
+                         "title": f"ACS {decision} on {request['method']}"},
+        "evidences": [{
+            "ai_agent": {"uid": request["params"]["metadata"]["agent_id"]},
+            "actor": {"session": {"uid": session_id}},
+        }],
+    }
+    if request["method"] in ("steps/toolCallRequest", "steps/toolCallResult"):
+        event["evidences"][0]["api"] = {"operation": request["params"]["payload"]["tool"]["name"]}
+    event["metadata"]["profiles"] = ["security_control"]
+    if "reasoning" in result:
+        event["finding_info"]["desc"] = result["reasoning"]
+    references = result.get("policy_references", [])
+    if references:
+        event["authorizations"] = [
+            {"policy": {key: ref[src] for key, src in (("uid", "policy_id"), ("version", "policy_version"), ("name", "policy_name")) if src in ref}}
+            if ("policy_id" in ref or "policy_name" in ref) else {}
+            for ref in references
+        ]
+    return event
 ```
 
-## SIEM Integration Examples
+Two choices in it come from the example, not from the mapping. The mapping fixes the class for a tool step but not its `activity_id`, so the caller passes one. The mapping leaves the `activity_id` of an allow event open too, and the code records 0 (Unknown).
 
-### Splunk
+The step event holds only the fields ACS defines. Process Activity also requires `actor`, `device` and `process`, which only the host runtime knows, so the caller passes them in `host_context`. The [OCSF example in the ACS overview](../../../acs.md#traceable) shows a step event with that context filled in.
 
-```spl
-# Count tool usage by agent and tool
-index=security sourcetype=ocsf
-| where category_uid=6 AND class_uid=6003
-| where unmapped.asop.step.operation.type="tool_execution"
-| stats count by 
-    unmapped.asop.context.agent.name,
-    unmapped.asop.step.operation.tool.id
-| sort count desc
+`unmapped.acs` copies the request payload as it is, tool arguments included. Apply the deployment's redaction policy before an event leaves the host, as [Trace with OpenTelemetry](../extend_opentelemetry.md#sensitive-data) advises for spans.
 
-# Monitor agent activities by step type
-index=security sourcetype=ocsf
-| where category_uid=6
-| stats count by 
-    unmapped.asop.context.agent.name,
-    unmapped.asop.step.type
-| sort count desc
+## Example output
 
-# Track protocol message patterns
-index=security sourcetype=ocsf
-| where unmapped.asop.step.operation.type="protocol_message"
-| stats count by 
-    unmapped.asop.step.operation.protocol.type,
-    unmapped.asop.step.operation.protocol.message.params.message.action
-| sort count desc
-
-# Monitor model usage across agents
-index=security sourcetype=ocsf
-| stats count by 
-    unmapped.asop.context.agent.name,
-    unmapped.asop.context.model.id,
-    unmapped.asop.context.model.provider.name
-| sort count desc
-```
-
-### Elasticsearch
+Run on the `steps/toolCallRequest` exchange from the [ACS overview](../../../acs.md#instrumentable), with an empty `host_context`, the step event is:
 
 ```json
 {
-  "query": {
-    "bool": {
-      "must": [
-        { "term": { "category_uid": 6 }},
-        { "term": { "class_uid": 6003 }}
-      ]
-    }
+  "class_uid": 1007,
+  "class_name": "Process Activity",
+  "category_uid": 1,
+  "category_name": "System Activity",
+  "activity_id": 1,
+  "activity_name": "Launch",
+  "type_uid": 100701,
+  "severity_id": 1,
+  "time": 1791882900000,
+  "metadata": {
+    "version": "1.9.0",
+    "product": {
+      "name": "Example ACS Guardian",
+      "vendor_name": "Example Corp"
+    },
+    "correlation_uid": "17a301f1-6d17-4941-8bea-92320f0773aa:c329d5a4-97ae-44c8-986d-77d1da194ab7"
   },
-  "aggs": {
-    "by_agent": {
-      "terms": {
-        "field": "unmapped.asop.context.agent.name.keyword",
-        "size": 10
+  "unmapped": {
+    "acs": {
+      "method": "steps/toolCallRequest",
+      "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+      "session_id": "17a301f1-6d17-4941-8bea-92320f0773aa",
+      "agent_id": "research-assistant",
+      "tool": {
+        "name": "database_query"
       },
-      "aggs": {
-        "by_step_type": {
-          "terms": {
-            "field": "unmapped.asop.step.type.keyword"
-          }
-        },
-        "by_operation_type": {
-          "terms": {
-            "field": "unmapped.asop.step.operation.type.keyword"
-          }
+      "capability": "datastore.read",
+      "arguments": {
+        "query": {
+          "value": "SELECT * FROM customers"
         }
       }
     }
@@ -288,51 +178,141 @@ index=security sourcetype=ocsf
 }
 ```
 
-## Implementation Guidelines
+The Guardian answered `modify`, so the decision event is a Detection Finding with `action_id` 4 (Modified) and `disposition_id` 99, whose `disposition` carries the ACS name:
 
-### 1. Error Handling
-- Always validate events before sending
-- Implement proper exception handling
-- Log validation failures for debugging
-- Include trace context in error reports
-
-### 2. Performance Considerations
-- Use async validation for high-volume events
-- Implement event batching where appropriate
-- Consider caching validated event templates
-- Monitor SIEM ingestion performance
-
-### 3. Security Guidelines
-- Sanitize all user inputs before event creation
-- Implement rate limiting for event generation
-- Use secure transport for SIEM communication
-- Regular trace of logged data for sensitive information
-
-### 4. Schema Versioning
-Always specify OCSF schema version in metadata:
 ```json
 {
+  "class_uid": 2004,
+  "class_name": "Detection Finding",
+  "category_uid": 2,
+  "category_name": "Findings",
+  "activity_id": 1,
+  "activity_name": "Create",
+  "type_uid": 200401,
+  "time": 1791882900042,
+  "severity_id": 2,
   "metadata": {
-    "ocsf": {
-      "version": "1.0.0"
+    "version": "1.9.0",
+    "product": {
+      "name": "Example ACS Guardian",
+      "vendor_name": "Example Corp"
+    },
+    "correlation_uid": "17a301f1-6d17-4941-8bea-92320f0773aa:c329d5a4-97ae-44c8-986d-77d1da194ab7",
+    "profiles": [
+      "security_control"
+    ]
+  },
+  "unmapped": {
+    "acs": {
+      "session_id": "17a301f1-6d17-4941-8bea-92320f0773aa",
+      "request_id": "c329d5a4-97ae-44c8-986d-77d1da194ab7",
+      "decision": "modify",
+      "reasoning": "Narrowed the query to two columns and 100 rows. A full customer export violates the data-protection policy.",
+      "reason_codes": [
+        "pii_detected"
+      ],
+      "policy_references": [
+        {
+          "policy_id": "data-protection",
+          "rule_id": "limit-customer-export"
+        }
+      ],
+      "chain_hash": "25d878e6726ecf3bd9ee823d7642bdd78f148c0db5c06a585d16bc23494e2175",
+      "metadata": {
+        "evaluator": "deterministic"
+      }
+    }
+  },
+  "action_id": 4,
+  "action": "Modified",
+  "disposition_id": 99,
+  "disposition": "modify",
+  "is_alert": false,
+  "finding_info": {
+    "uid": "17a301f1-6d17-4941-8bea-92320f0773aa:c329d5a4-97ae-44c8-986d-77d1da194ab7",
+    "title": "ACS modify on steps/toolCallRequest",
+    "desc": "Narrowed the query to two columns and 100 rows. A full customer export violates the data-protection policy."
+  },
+  "evidences": [
+    {
+      "ai_agent": {
+        "uid": "research-assistant"
+      },
+      "actor": {
+        "session": {
+          "uid": "17a301f1-6d17-4941-8bea-92320f0773aa"
+        }
+      },
+      "api": {
+        "operation": "database_query"
+      }
+    }
+  ],
+  "authorizations": [
+    {
+      "policy": {
+        "uid": "data-protection"
+      }
+    }
+  ]
+}
+```
+
+The policy reference carries no `policy_version`, so its `authorizations` entry has no `version`. Both events carry the same `metadata.correlation_uid`, which is how a SIEM joins a decision to the step it gated. If the step carried Provenance, the step event would also carry `enrichments` named `acs_provenance_origin` and `acs_provenance_source_id`.
+
+## Query the events in a SIEM
+
+SIEM content reads native fields. Join on `metadata.correlation_uid`, filter on `class_uid`, and read `unmapped.acs` for the exact ACS values. An `action_id` of 2 (Denied) records the Guardian's verdict. It does not prove the action was blocked, and a decision event whose `finding_info.types` includes `late_decision_fail_open` or `late_decision_fail_closed` never counts as enforced ([Trace Events](../events.md#ocsf-event-classes)).
+
+### Splunk
+
+```spl
+# Guardian verdicts on tool calls, by tool and disposition
+index=security sourcetype=ocsf class_uid=2004
+| stats count by evidences{}.api.operation, unmapped.acs.decision
+| sort - count
+
+# Each tool step beside the decision that gated it
+index=security sourcetype=ocsf (class_uid=1007 OR class_uid=2004 OR class_uid=6002)
+| stats values(class_uid) as classes, values(unmapped.acs.decision) as decision by metadata.correlation_uid
+
+# Decisions that arrived after the agent stopped waiting
+index=security sourcetype=ocsf class_uid=2004
+    (finding_info.types{}="late_decision_fail_open" OR finding_info.types{}="late_decision_fail_closed")
+| stats count by unmapped.acs.decision
+```
+
+### Elasticsearch
+
+Field names below assume the default dynamic mapping, which adds a `.keyword` subfield to each string.
+
+```json
+{
+  "query": {
+    "term": { "class_uid": 2004 }
+  },
+  "aggs": {
+    "by_tool": {
+      "terms": { "field": "evidences.api.operation.keyword", "size": 10 },
+      "aggs": {
+        "by_decision": {
+          "terms": { "field": "unmapped.acs.decision.keyword" }
+        }
+      }
     }
   }
 }
 ```
 
-### 5. Trace Context
-- Include trace_id and span_id in metadata for workflow correlation
-- Link related events across agent workflows
-- Use parent_span_id for hierarchical relationships
+## Implementation guidelines
 
-### 6. Validation Best Practices
-- Use py-ocsf-models validators for schema compliance
-- Implement custom validation for agent-specific fields
-- Validate events before sending to SIEM
-- Handle validation errors gracefully
+- **Pin the OCSF version.** Set `metadata.version` to `1.9.0`, the version the mapping's class UIDs come from.
+- **Fill native fields first.** Put the join pair in `metadata.correlation_uid`, the agent and tool in `evidences`, and the policies in `authorizations`. Keep `unmapped.acs` as the exact copy for replay.
+- **Treat every value as untrusted.** Agent and tool text can carry content an attacker shaped. Render it as data, never as markup or instructions.
+- **Never let the sink block enforcement.** A failed OCSF write must not change the decision the Observed Agent receives.
+- **Validate against OCSF.** Run each event through an OCSF 1.9.0 validator before you point SIEM content at it.
 
 ## Resources
 
 - [OCSF Schema Documentation](https://schema.ocsf.io/)
-- [py-ocsf-models Repository](https://github.com/prowler-cloud/py-ocsf-models)
 - [OCSF Examples](https://github.com/ocsf/examples)

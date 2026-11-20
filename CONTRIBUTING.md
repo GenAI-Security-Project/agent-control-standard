@@ -24,21 +24,21 @@ or a comment, this wins.
 **In focus.** Work that feeds the runnable Guardian, the interoperability benchmark, or
 the conformance evidence that makes either credible:
 
-- The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
+- The Claude Code, Cursor, and NVIDIA NAT adapters in `adapters/`
 - The AGT reference implementation in `reference-implementations/agt/`
-- Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
+- Ports of that reference implementation to other runtimes: the Go Guardian in `reference-implementations/agt-go/`, and Python, Rust, or Codex
 - Production-hardening it, including span batching and OpenTelemetry collection
-- Resolving the fail-open default in issue #32
-- Conformance claims against the ACS-Core claim template, issues #106 and #136
-- The requirement ledger and behavioral tests in issue #33
-- Closing the Cursor file-read gap in issue #212
+- Bringing the specification text in line with the default-deny decision ([D-036](https://owaspacs.org/docs/decisions/#d-036-default-the-failure-posture-to-deny))
+- Conformance claims against the [ACS-Core claim template](docs/spec/conformance-claim-template.md)
+- A requirement-by-requirement ledger and behavioral tests for ACS-Core
+- Closing the Cursor adapter's file-read gap
 - Conformance and dogfooding reports that document where ACS fails in practice
 - The public site, when a change helps an evaluator find, install, or run the Guardian
 
 **Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
 binding, and AgBOM federation across A2A peers. Negative conformance vectors sit here
-too, in #53.
+too.
 
 One distinction, because it will otherwise get argued in a pull request. *Batching
 semantics in the specification* is deferred. *Batching in the reference implementation*
@@ -59,21 +59,26 @@ quarter is not a finding without value.
 Anyone may open an issue. Only an issue carrying `status:accepted` enters the backlog.
 
 A pull request that changes behavior, alters normative text, or adds code references an
-accepted issue. An editorial correction does not, wherever it lands: a typo, a grammar
-fix, a broken link, or a formatting repair that leaves the meaning untouched needs no
-issue.
+issue labeled `status:accepted` that a lead assigned to its author before the pull request
+opened or reopened. An editorial correction does not, wherever it lands: a typo, a grammar fix, a
+broken link, or a formatting repair that leaves the meaning untouched needs no issue.
+[Start From an Assigned Issue](./CODE_OF_CONDUCT.md#start-from-an-assigned-issue) in the
+Code of Conduct owns this rule.
 
 In the pull request's issue section, write `Closes`, `Fixes`, or `Resolves` before an issue
 the change completes, and `Part of`, `Refs`, or `Contributes to` before one it only
 advances, because the roadmap counts a closed issue as delivered.
 
-If you open a pull request nobody asked for, it waits and nothing about it is rejected. A
-bot adds `status:needs-triage` and one comment unless you are a lead in
-[GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull request
-references, or a lead has reviewed it. A pull request that sits untriaged for a long time
-may be closed with an invitation to reopen once a lead asks for the work. Start from an
-issue labeled `help wanted`, and ask a lead to assign it to you, if you want work that is
-already accepted.
+A pull request opened before a lead assigned the work gets closed, with an invitation to
+reopen once a lead assigns it. A bot adds `status:needs-triage` and one comment unless you
+are a lead in [GOVERNANCE.md](./GOVERNANCE.md), a lead assigned you to an issue the pull
+request references, or a lead has reviewed it. Start from an issue labeled `help wanted`,
+and ask a lead to assign it to you, if you want work that is already accepted.
+
+The Code of Conduct also limits how much you hold open at once, in
+[Keep Your Queue Small](./CODE_OF_CONDUCT.md#keep-your-queue-small), and when you approve
+or request changes, in
+[Review When Asked, and Show Your Work](./CODE_OF_CONDUCT.md#review-when-asked-and-show-your-work).
 
 We try to reply to new issues within about a week.
 
@@ -83,7 +88,13 @@ which is what makes the rule hold rather than depend on everyone remembering it.
 
 ## Code of Conduct
 
-This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
+This project follows our [Code of Conduct](./CODE_OF_CONDUCT.md). By participating, you agree to
+uphold it.
+
+It has two parts. Part 1 covers how we treat each other.
+[Part 2](./CODE_OF_CONDUCT.md#part-2-how-work-enters-the-repository) covers how work enters the
+repository: start from an assigned issue, keep your queue small, review when asked, and answer
+for everything your account posts. Leads close work that falls outside it.
 
 ## How to Contribute
 
@@ -110,22 +121,58 @@ The guards in `tests/` check things the build itself will not catch, including s
 
 Put new guards in `tests/`. Collection is scoped there by `testpaths` in `pyproject.toml`, so a test written anywhere else never runs in CI and will pass review looking like coverage it does not provide. A suite that needs dependencies outside `uv.lock` belongs in its own workflow with its own environment, because the deploy gate installs only what the lockfile carries.
 
+For changes under `adapters/` (the reference adapters, example Guardian, and their test suites), run the adapter conformance gate before opening a PR — it lives in its own workflow (`.github/workflows/adapter_tests.yml`) with its own environment, per the rule above:
+
+```bash
+cd adapters                                         # its own uv project and lockfile
+uv sync --locked --extra nat --group test
+uv run python run_conformance.py claude cursor nat  # shared checks + those adapter suites
+```
+
+Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. See `adapters/README.md` for what the suite proves and its scope.
+
+`run_conformance.py` is not every adapter check. The same workflow also runs the example Guardian's suite (OPA backend, decision signing, `acs-verify`), the import-boundary check, the ML-DSA-65 and Go interop check, and the gateway's own suite, and it builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). Run the ones that cover your change:
+
+```bash
+cd adapters
+uv run pytest tests/guardian -q                     # the example Guardian, OPA, signing, acs-verify
+uv run lint-imports                                 # integrations -> client -> core
+cd gateway && uv sync --locked && uv run pytest -v  # the gateway, its own uv project
+```
+
+The interop check needs the `pqc` extra and Go 1.27 or later. `adapters/README.md` lists the full set under "Run the checks".
+
+For changes under `reference-implementations/`, each Guardian has its own toolchain and its own workflow:
+
+```bash
+cd reference-implementations/agt-go   # the Go Guardian
+make setup                            # once: builds AGT's runtime library, fetches the pinned OPA
+make check                            # the full quality gate, the shared conformance harness included
+
+cd reference-implementations/agt      # the TypeScript Guardian
+bun install --frozen-lockfile
+bun test
+```
+
+The [Go Guardian README](./reference-implementations/agt-go/README.md) and the [TypeScript Guardian README](./reference-implementations/agt/README.md) list the toolchain versions each one needs.
+
 For prose contributions, follow the [editorial style guide](./STYLE.md). For schema contributions, validate `specification/v0.1.0/acs_schema.json` against the JSON Schema spec before submitting.
 
 All submissions go through GitHub pull request review. See [GitHub's PR guide](https://docs.github.com/en/pull-requests) if you're new to the workflow.
 
 ## Development Process
 
-1. **Fork the repository** and clone your fork
-2. **Branch from `integration`.** Use `spec/`, `refimpl/`, `fix/`, or `docs/` followed by
+1. **Get the issue assigned to you** by a lead. Editorial fixes skip this step
+2. **Fork the repository** and clone your fork
+3. **Branch from `integration`.** Use `spec/`, `refimpl/`, `fix/`, or `docs/` followed by
    a short description
-3. **Make your changes** following the style guide
-4. **Sync with `integration` and run the guards** before you open anything. `uv run
+4. **Make your changes** following the style guide
+5. **Sync with `integration` and run the guards** before you open anything. `uv run
    pytest -v` and `uv run mkdocs build --strict` both have to pass on your machine
-5. **Sign your commits** with `git commit -s` (required by the DCO below). See
+6. **Sign your commits** with `git commit -s` (required by the DCO below). See
    [How to sign your commits](#how-to-sign-your-commits)
-6. **Open a pull request against `integration`**
-7. **Address review feedback** to land your change
+7. **Open a pull request against `integration`**
+8. **Address review feedback** to land your change
 
 A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
 targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
@@ -144,7 +191,7 @@ Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.m
 `overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
 page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
 
-For changes to the spec itself (`acs_schema.json`, hooks, events), open a
+For changes to the schemas under `specification/`, the hook set, or the event catalog, open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
 before submitting a PR. These affect downstream implementers and warrant a longer
 conversation.
@@ -258,9 +305,13 @@ A release is tagged automatically. When a change to `version.txt` reaches `main`
 `pyproject.toml`, and `uv.lock` disagree, so a mismatched release fails loudly instead of
 shipping.
 
+The release version also lives in four more files that the workflow does not check:
+`adapters/pyproject.toml`, `adapters/uv.lock`, `adapters/gateway/pyproject.toml`, and
+`adapters/gateway/uv.lock`. A release changes all seven together, so check the four by hand.
+
 ## Reporting Security Issues
 
-**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) sets the response times, and we coordinate a fix and disclosure timeline with you.
+**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) says how quickly we aim to respond, and we coordinate a fix and disclosure timeline with you.
 
 ## Developer's Certificate of Origin 1.1
 
@@ -286,16 +337,6 @@ By making a contribution to this project, I certify that:
 By contributing, you agree that your contributions will be licensed under the license that governs the file you touch. Code and schemas fall under the [Apache License 2.0](./LICENSE). Documentation falls under [CC BY-SA 4.0](./LICENSE-DOCS). See [LICENSING.md](./LICENSING.md) for the scope map.
 
 This guide is based on [github-contributing](https://raw.githubusercontent.com/standard/.github/refs/heads/master/CONTRIBUTING.md).
-
-## Before the first Pages deploy
-
-`.github/workflows/deploy-pages.yml` and `.github/workflows/monitor-pages.yml` both
-assume GitHub Pages is already enabled for this repository. Until it is, the deploy fails
-at the Configure Pages step and the monitor fails on its schedule.
-
-Enabling it is a one-time repository setting, done by an administrator: Settings, then
-Pages, then set Build and deployment Source to GitHub Actions. Do this before merging any
-change that turns those workflows on, not after.
 
 ## Community
 
