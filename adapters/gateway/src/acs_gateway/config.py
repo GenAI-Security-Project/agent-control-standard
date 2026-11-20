@@ -140,7 +140,7 @@ class GatewayConfig:
     otlp_endpoint: str | None = None
     # The pinned Guardian decision key (acs.client ResponseKeys), or None for HMAC-SHA256 answers as before.
     response_keys: ResponseKeys | None = None
-    # The model port's client bearer token (final review R8, issue #588). None leaves the port open, as before.
+    # The model port's client bearer token, so only its holders spend the model key. None leaves the port open.
     client_token_file: Path | None = None
 
     @classmethod
@@ -183,7 +183,7 @@ class GatewayConfig:
         key_shared = key_file is not None and not _loopback(listen_host)
         if key_shared and shared != "1":
             # Off loopback, more than this host's processes can reach the model port, so the operator says so
-            # (security scan F1 and F2). The client token below still gates every call. Lab convention: the lab bundle
+            # explicitly. The client token below still gates every call. Lab convention: the lab bundle
             # binds every address on a container network that only the lab's containers and the host itself can reach,
             # and says so with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
             raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got "

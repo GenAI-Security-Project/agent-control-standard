@@ -12,7 +12,7 @@ def config(tmp_path, **env):
     return GatewayConfig.from_env({"ACS_GATEWAY_STATE_DIR": str(tmp_path), **env})
 
 
-# A key file needs the model port's client token (final review R8). Config records only the path.
+# A key file needs the model port's client token, or the gateway refuses to start. Config records only the path.
 TOKEN_ENV = {"ACS_GATEWAY_CLIENT_TOKEN_FILE": "/run/acs/client.token"}
 
 
@@ -126,7 +126,7 @@ def test_capture_off_contradicting_capture_mode_is_refused(tmp_path):
 
 @pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "gateway.lab"])
 def test_a_key_file_refuses_a_model_port_off_loopback(tmp_path, host):
-    """Security scan F1 and F2: off loopback, more than this host's processes can reach the model port, so the key file
+    """Off loopback, more than this host's processes can reach the model port, so the key file
     needs the operator's explicit opt-in. The message says the client token still gates who spends the key."""
     with pytest.raises(ValueError, match="ACS_GATEWAY_HOST") as raised:
         config(tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_HOST=host)

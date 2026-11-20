@@ -1,7 +1,7 @@
-"""The model port's client token (final review R8, issue #588).
+"""The model port's client token.
 
 With a key file, anyone who reaches the model port spends the operator's key. On a Linux host that is every local user,
-through the bridge network, so the port takes a per-lab bearer token from ACS_GATEWAY_CLIENT_TOKEN_FILE, checked before
+through the bridge network, so the port takes a bearer token from ACS_GATEWAY_CLIENT_TOKEN_FILE, checked before
 any upstream call or key swap, in replay as in live.
 """
 import json

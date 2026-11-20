@@ -27,7 +27,7 @@ TOKEN = "t" * 64
 
 
 def token_file(tmp_path):
-    # A key file needs the model port's client token, which the client sends in place of a key (final review R8).
+    # A key file needs the model port's client token, which the client sends in place of a key.
     path = tmp_path / "client.token"
     path.write_text(TOKEN + "\n")
     path.chmod(0o600)

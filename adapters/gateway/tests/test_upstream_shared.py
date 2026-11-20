@@ -33,7 +33,7 @@ def test_a_bad_key_file_exits_2_naming_the_file(monkeypatch, capsys, tmp_path):
     key.parent.mkdir()
     key.write_text("sk-test-" + "k" * 40)
     key.chmod(0o644)
-    # A valid client token, which a key file needs (final review R8), so the key file is what fails.
+    # A valid client token, which a key file needs, so the key file is what fails.
     token = tmp_path / "client.token"
     token.write_text("t" * 64)
     token.chmod(0o600)

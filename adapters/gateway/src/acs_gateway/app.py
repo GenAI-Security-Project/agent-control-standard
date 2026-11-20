@@ -1477,7 +1477,7 @@ def _parse(raw: bytes) -> Any:
 
 
 class ClientTokenGate:
-    """The model port's client check (final review R8, issue #588), in front of every route.
+    """The model port's client check, in front of every route, so only a client holding the token spends the model key.
 
     A request passes only with `Authorization: Bearer <token>`, compared in constant time. Anything else gets the
     Responses API's own 401 before the gateway reads the body, so a refused call reaches no upstream, never has the
@@ -1494,7 +1494,7 @@ class ClientTokenGate:
             await self.app(scope, receive, send)
             return
         if scope["type"] != "http":
-            # Fail closed on every other scope (final review m-4). No route serves a websocket today, so refusing here
+            # Fail closed on every other scope. No route serves a websocket today, so refusing here
             # keeps one added later from going ungated. Closing before accept makes the server answer 403.
             if scope["type"] == "websocket":
                 _audit("client_unauthorized", cause="websocket", path=scope.get("path"))
