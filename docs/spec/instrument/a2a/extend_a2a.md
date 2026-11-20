@@ -1,5 +1,7 @@
 # Extending A2A
 
+> **Non-normative v0.2 deferral.** ACS v0.1 reserves the `protocols/A2A/*` namespace but does not define A2A wrapping. This page is illustrative only and does not add v0.1 conformance requirements.
+
 ## A2A protocol
 [A2A](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/) is a communication protocol that enables AI agents or autonomous systems to exchange information, coordinate actions, or delegate tasks in a structured and secure way.<br><br>
 It defines how two or more agents exchange messages, requests, responses or task results and enables AI agents, built on diverse frameworks by different companies running on separate servers, to communicate and collaborate effectively.<br><br>
@@ -13,8 +15,8 @@ Securing A2A means securing outbound and inbound communications/messages.<br>
 Observed agent can be either [client agent](https://google-a2a.github.io/A2A/latest/specification/#12-guiding-principles) (agent that initiates A2A requests to the server agent), [server (remote) agent](https://google-a2a.github.io/A2A/latest/specification/#12-guiding-principles) (an agent that exposes an A2A-compliant HTTP endpoint, processing tasks and providing responses) or both.
 
 #### To extend A2A protocol:
-1. Agents using A2A ***must*** use ACS as a transport protocol to deliver A2A messages to the guardian agent.
-2. Agents using A2A ***must*** understand and enforce ACS responses. <br><br>
+1. Agents using A2A can use ACS as a transport protocol to deliver A2A messages to the guardian agent.
+2. Agents using A2A should understand and enforce ACS responses. <br><br>
 
 ![Extend A2A protocol](../../../assets/extend_a2a.png "Extend A2A protocol illustration")
 
@@ -72,12 +74,12 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
    }
    ```
 
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` message 
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` message
    ```json
    {
         "jsonrpc": "2.0",
         "id": 70,
-        "method": "message/send",
+        "method": "protocols/A2A/message/send",
         "params": {
             "payload": {
                 "jsonrpc": "2.0",
@@ -180,12 +182,12 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
         }
     }
    ```
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` message with sensitive info
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` message with sensitive info
    ```json
     {
         "jsonrpc": "2.0",
         "id": 80,
-        "method": "message/send",
+        "method": "protocols/A2A/message/send",
         "params": {
             "payload": {
                 "jsonrpc": "2.0",
@@ -362,12 +364,12 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
    ```
 
 
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` with disallowed content
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` with disallowed content
    ```json
    {
         "jsonrpc": "2.0",
         "id": 100,
-        "method": "message/send",
+        "method": "protocols/A2A/message/send",
         "params": {
             "payload": {
                 "jsonrpc": "2.0",
