@@ -14,6 +14,14 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 ## Decisions
 
+### D-051: Adopt Part 2 of the Code of Conduct
+
+**Date:** 2026-11-20 · **Decided by:** project leads · **Status:** decided
+
+[Part 2 of the Code of Conduct](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CODE_OF_CONDUCT.md#part-2-how-work-enters-the-repository) sets how work enters the repository. It caps how many open pull requests and assigned issues one account holds, and it sets a review bar: an approval names the commit, what the reviewer ran, and what they did not check. A person answers for everything their account posts, and nothing posts unattended. Repeated breaches follow an enforcement ladder of notice, restriction, and removal. Part 2 enforces [D-041](#d-041-review-a-pull-request-only-when-it-closes-assigned-accepted-work) and [D-042](#d-042-start-schema-hook-and-event-changes-with-a-discussion), and it ends assignment after the fact, so a pull request opened before a lead assigns the work is closed with an invitation to reopen.
+
+**Source:** [PR #636](https://github.com/GenAI-Security-Project/agent-control-standard/pull/636).
+
 ### D-050: Require an SDK for 1.0
 
 **Date:** 2026-11-12 · **Decided by:** project leads · **Status:** decided
