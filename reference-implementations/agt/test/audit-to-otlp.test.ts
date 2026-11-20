@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { appendFileSync, existsSync, linkSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toSessionUuid, type Hookmap } from "host-adapter";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { applyFailurePosture, auditUngovernedStep, createAuditSink, createGuardianClient, governStep, toInvocationRequestId, toSessionUuid, type Hookmap } from "host-adapter";
 import {
   CONVERTER_SERVICE_NAME,
   convertAuditLog,
@@ -11,6 +12,8 @@ import {
   failureClassOf,
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
+import { createDeploymentBridge } from "../packages/guardian/src/deployment-bridge.ts";
+import { startGuardian } from "../packages/guardian/src/index.ts";
 import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
 
 /**
@@ -21,6 +24,9 @@ import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/gua
  * exporter writes. Here, because it uses two packages: the adapter writes
  * the log for real, against a port nothing listens on, and the converter
  * in the guardian package reads it back.
+ *
+ * One block is the exception. The join test starts a Guardian, so that one
+ * step is in both files and the ids can be compared.
  *
  * The same deliberately synthetic hookmap packages/host-adapter/test/govern-step.test.ts
  * uses, naming no real host's fields.
@@ -49,7 +55,7 @@ const payload = { session_id: "sess-1", tool_name: "Bash", tool_input: { command
 
 type OtlpAttribute = { key: string; value: { stringValue?: string } };
 type OtlpEvent = { name: string; attributes?: OtlpAttribute[] };
-type OtlpSpan = { name: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[] };
+type OtlpSpan = { name: string; startTimeUnixNano?: string; attributes?: OtlpAttribute[]; events?: OtlpEvent[] };
 type OtlpRequest = { resourceSpans: { scopeSpans: { spans: OtlpSpan[] }[] }[] };
 
 function spansIn(path: string): OtlpSpan[] {
@@ -254,7 +260,7 @@ describe("audit-to-otlp: review fixes", () => {
       expect(summary.written).toBe(5000);
       expect(spansIn(otelPath)).toHaveLength(5000);
     });
-  });
+  }, 30_000);
 
   // The Guardian's spans carry the derived UUID and the request id; a
   // converter span has to carry the same pair, or #228's pair rules can't
@@ -339,6 +345,115 @@ describe("audit-to-otlp: review fixes", () => {
       if (saved === undefined) delete process.env.OTEL_TRACES_SAMPLER;
       else process.env.OTEL_TRACES_SAMPLER = saved;
     }
+  });
+
+  // Issue #284 item 6: the posture and parsing paths, which no test read.
+
+  // The refusal case above has outcome blocked under a proceed posture. This
+  // is the opposite pair. The host adapter does not write it, and that is why
+  // it is here: an event built from outcome would say fail_open for it.
+  it("reports fail_closed for a deny posture even when the outcome is proceeded", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ outcome: "proceeded", posture: "deny" }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.written).toBe(1);
+      const failure = spansIn(otelPath)[0]?.events?.find((event) => event.name === "acs.decision.failure");
+      expect(attribute(failure, "acs.failure.posture")).toBe("fail_closed");
+    });
+  });
+
+  // Both fields are closed sets. A value outside them is a log this
+  // converter does not understand, and a posture guessed for it would be a
+  // claim about the deployment that nothing recorded.
+  it("counts an entry as unreadable when its outcome or its posture is not a value the host writes", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, entryLine({ seq: 1, outcome: "maybe" }));
+      appendFileSync(auditPath, entryLine({ seq: 2, posture: "maybe" }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.skippedUnreadable).toBe(2);
+      expect(summary.written).toBe(0);
+      expect(spansIn(otelPath)).toHaveLength(0);
+    });
+  });
+
+  // The host's own code writes these entries, so the messages are the ones a
+  // real log holds. An error object that came back is recorded as one of two
+  // messages with its code in it: one for a code that means the Guardian
+  // refused the envelope, one for any other code. A thrown error's text is
+  // recorded as it came, and the third entry is such a text.
+  it("reads the error code from both messages the host writes, and from no other text", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const audit = createAuditSink({ path: auditPath });
+      for (const failure of [
+        { code: -32020, message: "evaluation failed" },
+        { code: -32603, message: "internal error" },
+        new Error("a proxy said error -7: x"),
+      ]) {
+        applyFailurePosture({
+          failure,
+          session: { config: { timeout_config: { default_ms: 1000 }, on_decision_failure: "proceed" }, failure: undefined },
+          sessionId: "sess-1",
+          method: "steps/toolCallRequest",
+          rpcId: crypto.randomUUID(),
+          audit,
+        });
+      }
+      expect(auditLines(auditPath).map((line) => line.failure?.message)).toEqual([
+        "guardian refused the envelope with error -32020: evaluation failed",
+        "guardian returned error -32603: internal error",
+        "a proxy said error -7: x",
+      ]);
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.written).toBe(3);
+      const failures = spansIn(otelPath).map((span) => span.events?.find((event) => event.name === "acs.decision.failure"));
+      // All three spans have the event, so the third is an event with no code.
+      expect(failures.map((failure) => attribute(failure, "acs.failure.class"))).toEqual(["guardian_error", "guardian_error", "other"]);
+      expect(failures.map((failure) => numberAttribute(failure, "acs.failure.error_code"))).toEqual([-32020, -32603, undefined]);
+    });
+  });
+
+  // A line that is not JSON and JSON that is not an object are both lines
+  // the converter cannot read as an entry. Each one is counted, and the
+  // entry after them is still converted.
+  it("counts not json, [1], 42 and null as unreadable, and converts the entry after them", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(auditPath, "not json\n[1]\n42\nnull\n");
+      appendFileSync(auditPath, entryLine({ seq: 5 }));
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary.skippedUnreadable).toBe(4);
+      expect(summary.written).toBe(1);
+      expect(spansIn(otelPath)).toHaveLength(1);
+    });
+  });
+
+  // The entry is still a decision failure, so it keeps its span, timed at
+  // the conversion. The first entry shows the other path: a recorded_at that
+  // can be read is the span's time.
+  it("times a span at now when recorded_at is not a date, and at recorded_at when it is", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      const recordedAt = "2026-10-15T00:00:00.000Z";
+      appendFileSync(auditPath, entryLine({ seq: 1, recorded_at: recordedAt }));
+      appendFileSync(auditPath, entryLine({ seq: 2, recorded_at: "not a date" }));
+
+      const before = Date.now();
+      const summary = await convertAuditLog(auditPath, otelPath);
+      const after = Date.now();
+
+      expect(summary.written).toBe(2);
+      // OTLP/JSON carries the time as a string of nanoseconds.
+      const [dated, undated] = spansIn(otelPath).map((span) => Math.round(Number(span.startTimeUnixNano) / 1e6));
+      expect(dated).toBe(Date.parse(recordedAt));
+      expect(undated).toBeGreaterThanOrEqual(before);
+      expect(undated).toBeLessThanOrEqual(after);
+    });
   });
 });
 
@@ -494,4 +609,109 @@ describe("audit-to-otlp: refuses an output that already exists", () => {
       expect(statSync(out).mode & 0o777).toBe(0o600);
       expect(statSync(join(dir, "new-dir")).mode & 0o777).toBe(0o700);
     }));
+});
+
+// Issue #284 item 6. A reader joins the host's failure to the Guardian's span
+// by the pair of acs.session.id and acs.request_id. Every test above writes
+// one of the two files and checks its ids against a value. This one writes
+// both files from one step, with a real Guardian, the real host adapter and
+// the converter, and compares what each file holds.
+describe("audit-to-otlp: the converter's span joins the Guardian's span for the same step", () => {
+  const MANIFEST = fileURLToPath(new URL("../policy/manifest.yaml", import.meta.url));
+  // A host that names its own call id, as both shipped hookmaps do. The
+  // request id is then derived from it and the JSON-RPC id is a different
+  // value, so a converter that joined on rpc_id would miss.
+  const pairedHookmap: Hookmap = { host: "test-host", hooks: { OnStep: { ...ON_STEP, call_id: "$.call_id" } } };
+  const step = { ...payload, call_id: "call-1" };
+
+  // The step has to be one both sides record, and a late decision is. The
+  // Guardian decides, so it writes a span. The host stopped waiting first, so
+  // it writes an audit entry. The policy is the real one, held back until the
+  // host has given up, so the order is certain and no sleep has to outlast a
+  // timeout.
+  it("gives a late decision the same acs.session.id and acs.request_id in both files", async () => {
+    await withScratch(async (auditPath, converterTrace) => {
+      const guardianTrace = join(dirname(auditPath), "guardian.jsonl");
+      let hostGaveUp: () => void = () => {};
+      const afterHostGaveUp = new Promise<void>((resolve) => {
+        hostGaveUp = resolve;
+      });
+      let decided: () => void = () => {};
+      const guardianDecided = new Promise<void>((resolve) => {
+        decided = resolve;
+      });
+      const real = createDeploymentBridge(MANIFEST);
+      const late = {
+        async evaluate(point: string, snapshot: Record<string, unknown>) {
+          await afterHostGaveUp;
+          try {
+            return await real.evaluate(point, snapshot);
+          } finally {
+            decided();
+          }
+        },
+      };
+      const guardian = await startGuardian({ port: 0, manifestPath: MANIFEST, bridge: late, otelTraceFile: guardianTrace });
+      try {
+        try {
+          const governed = await governStep({
+            hookEventName: "OnStep",
+            payload: step,
+            hookmap: pairedHookmap,
+            guardian: createGuardianClient(guardian.url),
+            session: { config: { timeout_config: { default_ms: 500 }, on_decision_failure: "proceed" }, failure: undefined },
+            sessionId: step.session_id,
+            audit: createAuditSink({ path: auditPath }),
+          });
+          expect(governed.stage).toBe("delivery");
+          // Checked before the wait below. For a failure other than a timeout
+          // the Guardian may never decide, and the wait would not end.
+          expect(auditLines(auditPath).map((line) => line.failure?.kind)).toEqual(["timeout"]);
+          hostGaveUp();
+          // Closed only after the Guardian has answered. close() ends a step
+          // that is still open as a failure of its own, and what Bun's
+          // stop(true) waits for differs between versions. The Guardian ends
+          // the span in the turn its bridge answers, so one more turn is
+          // enough.
+          await guardianDecided;
+          await new Promise((resolve) => setImmediate(resolve));
+        } finally {
+          // Released on a failure above too, so close() is not left waiting
+          // on a held request. Closing is what writes the Guardian's file.
+          hostGaveUp();
+          await guardian.close();
+        }
+
+        const summary = await convertAuditLog(auditPath, converterTrace);
+
+        expect(summary.written).toBe(1);
+        const fromGuardian = spansIn(guardianTrace);
+        const fromConverter = spansIn(converterTrace);
+        expect(fromGuardian).toHaveLength(1);
+        expect(fromConverter).toHaveLength(1);
+        // Each file holds its own half: the Guardian's decision, and the
+        // host's report that it did not arrive in time.
+        const decision = fromGuardian[0]?.events?.find((event) => event.name === loadOtelMapping().decisionEventName);
+        expect(attribute(decision, "acs.decision")).toBe("allow");
+        const failure = fromConverter[0]?.events?.find((event) => event.name === "acs.decision.failure");
+        expect(attribute(failure, "acs.failure.class")).toBe("timeout");
+        expect(attribute(failure, "acs.failure.reported_by")).toBe("observed_agent");
+
+        const sessionId = toSessionUuid(step.session_id);
+        const pair = { "acs.session.id": sessionId, "acs.request_id": toInvocationRequestId(sessionId, step.call_id) };
+        for (const [name, value] of Object.entries(pair)) {
+          expect({ name, guardian: attribute(fromGuardian[0], name), converter: attribute(fromConverter[0], name) }).toEqual({
+            name,
+            guardian: value,
+            converter: value,
+          });
+        }
+      } finally {
+        // withScratch removes its own two files. This third one is the test's.
+        if (existsSync(guardianTrace)) {
+          unlinkSync(guardianTrace);
+        }
+      }
+    });
+  });
 });
