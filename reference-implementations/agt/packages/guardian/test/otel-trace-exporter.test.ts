@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
+import { ExportResultCode } from "@opentelemetry/core";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
@@ -21,6 +22,7 @@ import {
   NULL_OTEL_TRACE_EXPORTER,
   OTEL_SERVICE_NAME,
   REJECTED_SPAN_NAME,
+  SPAN_BYTE_LIMIT,
   STEP_ATTRIBUTE_SOURCES,
   type CreateOtelTraceExporterOptions,
   type OtelTraceExporter,
@@ -62,6 +64,21 @@ function memoryExporter(options: Partial<CreateOtelTraceExporterOptions> = {}): 
   const memory = new InMemorySpanExporter();
   const exporter = createOtelTraceExporter({ spanExporter: memory, methodsEvaluated: METHODS_EVALUATED, ...options });
   return { exporter, spans: () => memory.getFinishedSpans() };
+}
+
+const undo: (() => void)[] = [];
+afterEach(() => {
+  for (const restore of undo.splice(0)) restore();
+});
+
+/** Every line the exporter prints on stderr from here on, in order. */
+function stderrLines(): string[] {
+  const lines: string[] = [];
+  const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  });
+  undo.push(() => spy.mockRestore());
+  return lines;
 }
 
 /** A span exporter that fails on every export, the way an unwritable file or
@@ -320,7 +337,8 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   // The whole reason the exporter is total: a broken output must cost
   // observability, never a decision.
-  it("never throws when the span exporter throws, reports once, and goes quiet", async () => {
+  it("never throws when the span exporter throws, reports the cause once, and the count at shutdown", async () => {
+    const lines = stderrLines();
     const errors: unknown[] = [];
     const exporter = createOtelTraceExporter({
       spanExporter: throwingSpanExporter(),
@@ -336,6 +354,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     await exporter.shutdown();
 
     expect(errors).toHaveLength(1);
+    expect(lines).toEqual(["otel trace export to span exporter dropped 2 of 2 span(s)."]);
   });
 
   it("never throws when the file path is unwritable, and reports once", async () => {
@@ -362,8 +381,10 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 
   // The lab reads the file. A collector that is down, restarting or
   // answering 4xx must cost the endpoint and nothing else: every span still
-  // reaches the file, and the endpoint is reported once.
+  // reaches the file, and the endpoint's failure is reported once. Its count
+  // is printed at shutdown.
   it("keeps writing the file when the HTTP collector rejects every export, and reports that output once", async () => {
+    const lines = stderrLines();
     const dir = mkdtempSync(join(tmpdir(), "acs-otel-isolated-"));
     const path = join(dir, "traces.jsonl");
     const collector = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("bad request", { status: 400 }) });
@@ -387,6 +408,7 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
         TOOL_CALL_SPAN.span_name,
       ]);
       expect(errors).toHaveLength(1);
+      expect(lines).toEqual([`otel trace export to http://127.0.0.1:${collector.port}/v1/traces dropped 3 of 3 span(s).`]);
     } finally {
       collector.stop(true);
       unlinkSync(path);
@@ -915,9 +937,10 @@ describe("Guardian trace export wiring", () => {
       expect((withExporter.result as { decision?: string }).decision).toBe("deny");
       expect(errorSpy).toHaveBeenCalledTimes(1);
     } finally {
-      errorSpy.mockRestore();
       await exporting.close();
       await silent.close();
+      // After the close, which prints the exporter's count.
+      errorSpy.mockRestore();
     }
   });
 
@@ -1099,6 +1122,7 @@ describe("Guardian trace export wiring", () => {
   // connection is retryable in this exporter), and the stub never walked
   // that path. Port 1 is closed on any normal machine.
   it("keeps the file running after the HTTP endpoint dies, answers as with export off, and closes in bounded time", async () => {
+    const lines = stderrLines();
     const dir = mkdtempSync(join(tmpdir(), "acs-otel-dead-endpoint-"));
     const path = join(dir, "traces.jsonl");
     const errors: unknown[] = [];
@@ -1144,6 +1168,7 @@ describe("Guardian trace export wiring", () => {
         expect(requestIds).toContain(requestId);
       }
       expect(errors).toHaveLength(1);
+      expect(lines).toEqual(["otel trace export to http://127.0.0.1:1/v1/traces dropped 4 of 4 span(s)."]);
       // Bounded: the endpoint gives up within its own short timeout, not the
       // exporter's 10 s default, and closing never waits that budget again.
       expect(flushMs).toBeLessThan(5000);
@@ -1410,6 +1435,7 @@ describe("createOtelTraceExporter -- review fixes", () => {
 
   // A stalled output must not hold shutdown, and with it the process, open.
   it("bounds shutdown when an output never finishes, and reports it", async () => {
+    const lines = stderrLines();
     const stuck: SpanExporter = {
       export(): void {},
       shutdown(): Promise<void> {
@@ -1429,6 +1455,7 @@ describe("createOtelTraceExporter -- review fixes", () => {
     await exporter.shutdown();
     expect(performance.now() - started).toBeLessThan(2000);
     expect(errors.length).toBeGreaterThan(0);
+    expect(lines).toEqual(["otel trace export to span exporter dropped 1 of 1 span(s)."]);
   });
 
   // #228 moves the six decision extras into decision_event's own list. The
@@ -1870,4 +1897,645 @@ describe("keepLoopbackOffProxy, routed through a real proxy in a child process",
       proxy.close();
     }
   }, 15_000);
+});
+
+// Issue #282. A failed or stalled output is tried again after a backoff, is
+// handed nothing while one of its exports is stalled, and counts the spans it
+// drops. One span holds a bounded number of bytes.
+describe("createOtelTraceExporter -- issue #282: failed and stalled outputs", () => {
+  /** The processor's batch and queue sizes, which the exporter sets in code.
+   * A full batch leaves at once on the processor's own path, with no flush. */
+  const BATCH = 512;
+  const QUEUE = 2048;
+  const GUARDIAN_README = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+
+  /** Stops performance.now(), the clock the exporter reads, and hands back
+   * the way to move it: a backoff or a minute passes without a wait. It
+   * stops on a whole millisecond, so waits added one after another come to
+   * exactly their sum. */
+  function frozenClock(): { advance(ms: number): void } {
+    let now = Math.ceil(performance.now());
+    const spy = spyOn(performance, "now").mockImplementation(() => now);
+    undo.push(() => spy.mockRestore());
+    return {
+      advance(ms): void {
+        now += ms;
+      },
+    };
+  }
+
+  /** Ends `count` steps with no await between them. Returns their request
+   * ids, in order. */
+  function endSteps(exporter: OtelTraceExporter, count: number): string[] {
+    const requestIds: string[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const requestId = crypto.randomUUID();
+      exporter.end(exporter.start(toolCallEnvelope("ls", { requestId }), "steps/toolCallRequest", TRUSTED), decisionResponse(1, { decision: "allow" }));
+      requestIds.push(requestId);
+    }
+    return requestIds;
+  }
+
+  /** Ends one full batch, which the processor sends at once on its own
+   * path, then lets the processor finish with it: it starts no other batch
+   * on that path until it has. */
+  async function sendBatch(exporter: OtelTraceExporter): Promise<string[]> {
+    const requestIds = endSteps(exporter, BATCH);
+    await Bun.sleep(0);
+    return requestIds;
+  }
+
+  async function until(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!condition()) {
+      if (Date.now() > deadline) {
+        throw new Error(`not true within ${timeoutMs} ms: ${condition}`);
+      }
+      await Bun.sleep(5);
+    }
+  }
+
+  /** A receiver that records the span id of everything it is handed and
+   * answers at once. Told to hold, it keeps the next export unanswered until
+   * the test releases it. `refuse` makes it answer FAILED instead. */
+  function recordingReceiver() {
+    const state = {
+      spanIds: [] as string[],
+      exports: 0,
+      holdNext: false,
+      refuse: false,
+      release: undefined as (() => void) | undefined,
+    };
+    const receiver: SpanExporter = {
+      export(spans, resultCallback): void {
+        state.exports += 1;
+        if (state.refuse) {
+          resultCallback({ code: ExportResultCode.FAILED, error: new Error("refused") });
+          return;
+        }
+        state.spanIds.push(...spans.map((span) => span.spanContext().spanId));
+        const answer = (): void => resultCallback({ code: ExportResultCode.SUCCESS });
+        if (state.holdNext) {
+          state.holdNext = false;
+          state.release = answer;
+        } else {
+          answer();
+        }
+      },
+      async shutdown(): Promise<void> {},
+    };
+    return { receiver, state };
+  }
+
+  /** The largest request the span limits take in full: 64 Provenance
+   * objects, each with two 4096-character fields. */
+  function largestRequest(origin: string, sourceId: string, overrides: { sessionId?: string; requestId?: string } = {}): Record<string, unknown> {
+    const args: Record<string, unknown> = {};
+    for (let i = 0; i < 64; i += 1) {
+      args[`a${i}`] = { value: i, provenance: provenance(origin, { source_id: sourceId }) };
+    }
+    return makeEnvelope("steps/toolCallRequest", { tool: { name: "run_shell" }, arguments: args }, overrides);
+  }
+
+  /** The UTF-8 bytes of every string one span holds: its attributes and its
+   * events' attributes, array elements included. */
+  function spanBytes(span: ReadableSpan): number {
+    return [span.attributes, ...span.events.map((event) => event.attributes ?? {})]
+      .flatMap((attributes) => Object.values(attributes))
+      .flat()
+      .reduce<number>((sum, value) => sum + (typeof value === "string" ? Buffer.byteLength(value, "utf8") : 0), 0);
+  }
+
+  // The acceptance test for a hung output. The receiver answers one export
+  // and then never answers again, the way a write to a hung mount does. It
+  // keeps what it was handed, as a real output keeps the batch it is sending.
+  it("hands a hung output one export and nothing after it, and stays under 256 MB over 1500 largest-size requests", async () => {
+    const lines = stderrLines();
+    let written = 0;
+    let unanswered = 0;
+    const kept: unknown[] = [];
+    const hung: SpanExporter = {
+      export(spans, resultCallback): void {
+        if (written === 0) {
+          written = spans.length;
+          resultCallback({ code: ExportResultCode.SUCCESS });
+          return;
+        }
+        unanswered += 1;
+        kept.push(spans, resultCallback);
+      },
+      async shutdown(): Promise<void> {},
+    };
+    // A 1 ms backoff: every batch after the timeout arrives with the backoff
+    // long past, so only the stalled export keeps it from being a test.
+    const exporter = createOtelTraceExporter({ spanExporter: hung, methodsEvaluated: METHODS_EVALUATED, exportTimeoutMs: 50, retryBackoffMs: 1 });
+    // Parsed anew for every request, as the server parses a body, so each
+    // request brings its own half megabyte of strings.
+    // The fields are ASCII, as in the issue's own example. Text with a
+    // character outside Latin-1 costs up to twice as much to hold.
+    const body = JSON.stringify(largestRequest("o".repeat(4096), "s".repeat(4096)));
+    const rss = (): number => {
+      Bun.gc(true);
+      return process.memoryUsage().rss;
+    };
+
+    // Resident memory, read after a forced collection, every 100 requests.
+    // The largest reading counts, not only the last.
+    const baseline = rss();
+    let growth = 0;
+    for (let i = 0; i < 1500; i += 1) {
+      exporter.end(exporter.start(JSON.parse(body), "steps/toolCallRequest", TRUSTED), decisionResponse(i, DENY));
+      if (i === 99) {
+        await exporter.flush(); // 100 spans, written
+      } else if (i % 100 === 99) {
+        await Bun.sleep(60); // longer than the export timeout
+        growth = Math.max(growth, rss() - baseline);
+      }
+    }
+    await exporter.flush();
+    growth = Math.max(growth, rss() - baseline);
+    await exporter.shutdown();
+
+    expect(written).toBe(100);
+    // One export was handed over and never answered. A full batch on the
+    // processor's own path and the last flush both followed it.
+    expect(unanswered).toBe(1);
+    expect(growth).toBeLessThan(256 * 1024 * 1024);
+    expect(lines).toEqual([
+      `otel trace export to span exporter failed: no answer within 50 ms. Dropping spans until it recovers, ${BATCH} dropped so far.`,
+      `otel trace export to span exporter dropped ${1500 - written} of 1500 span(s).`,
+    ]);
+  }, 60_000);
+
+  // The processor has an export timeout of its own, and when that one fires
+  // the flush rejects and the whole exporter is disabled. So the exporter's
+  // timeout has to answer first, and the other output must not notice.
+  it("returns from a flush behind an output that never answers, and keeps the exporter and the file running", async () => {
+    const lines = stderrLines();
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-hung-flush-"));
+    const path = join(dir, "traces.jsonl");
+    const never: SpanExporter = {
+      export(): void {},
+      async shutdown(): Promise<void> {},
+    };
+    const exporter = createOtelTraceExporter({ filePath: path, spanExporter: never, methodsEvaluated: METHODS_EVALUATED, exportTimeoutMs: 50 });
+    try {
+      const sent = endSteps(exporter, 1);
+      await exporter.flush();
+
+      expect(lines).toEqual(["otel trace export to span exporter failed: no answer within 50 ms. Dropping spans until it recovers, 1 dropped so far."]);
+      // Not disabled: the next step still gets a span, and the file has both.
+      sent.push(...endSteps(exporter, 1));
+      await exporter.shutdown();
+      expect(otlpSpans(otlpFile(path)).map((span) => otlpAttribute(span, "acs.request_id"))).toEqual(sent);
+      expect(lines.slice(1)).toEqual(["otel trace export to span exporter dropped 2 of 2 span(s)."]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // String() throws on an object with no prototype. Building the stderr line
+  // from such a failure must not leave the processor without its answer.
+  it("keeps running when an output fails with a value that cannot be turned into a string", async () => {
+    const lines = stderrLines();
+    const unprintable: SpanExporter = {
+      export(_spans, resultCallback): void {
+        resultCallback({ code: ExportResultCode.FAILED, error: Object.create(null) });
+      },
+      async shutdown(): Promise<void> {},
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: unprintable, methodsEvaluated: METHODS_EVALUATED, exportTimeoutMs: 50 });
+
+    endSteps(exporter, 1);
+    await exporter.flush();
+
+    expect(lines).toEqual([
+      "otel trace export to span exporter failed: an error that cannot be printed. Dropping spans until it recovers, 1 dropped so far.",
+    ]);
+    // Not disabled: the next step still gets a span.
+    expect(exporter.start(toolCallEnvelope("ls"), "steps/toolCallRequest", TRUSTED)).not.toBeNull();
+    await exporter.shutdown();
+  });
+
+  // A real OTLP endpoint on a port nothing listens on, then a collector on
+  // that port. The real exporter gives up on a refused connection only after
+  // about a second of its own retries, which is the wait in this test.
+  it("recovers an endpoint that refused, after the backoff, and delivers the spans ended after it", async () => {
+    const lines = stderrLines();
+    const placeholder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+    const port = placeholder.port;
+    await placeholder.stop(true);
+    const endpoint = `http://127.0.0.1:${port}/v1/traces`;
+    const exporter = createOtelTraceExporter({ endpoint, methodsEvaluated: METHODS_EVALUATED, retryBackoffMs: 50 });
+    let collector: ReturnType<typeof Bun.serve> | undefined;
+    try {
+      await sendBatch(exporter);
+      await until(() => lines.length === 1);
+      expect(lines[0]).toStartWith(`otel trace export to ${endpoint} failed: `);
+      expect(lines[0]).toEndWith(`. Dropping spans until it recovers, ${BATCH} dropped so far.`);
+
+      const received: (string | undefined)[] = [];
+      collector = Bun.serve({
+        hostname: "127.0.0.1",
+        port,
+        async fetch(request) {
+          received.push(...otlpSpans([(await request.json()) as OtlpRequest]).map((span) => otlpAttribute(span, "acs.request_id")));
+          return new Response("{}", { headers: { "content-type": "application/json" } });
+        },
+      });
+      await Bun.sleep(60); // the backoff
+      const test = await sendBatch(exporter);
+      await until(() => lines.length === 2);
+      expect(lines[1]).toBe(`otel trace export to ${endpoint} recovered, ${BATCH} span(s) dropped so far.`);
+
+      const after = endSteps(exporter, 3);
+      await exporter.flush();
+      expect(received).toEqual([...test, ...after]);
+
+      await exporter.shutdown();
+      expect(lines.slice(2)).toEqual([`otel trace export to ${endpoint} dropped ${BATCH} of ${2 * BATCH + 3} span(s).`]);
+    } finally {
+      await exporter.shutdown();
+      await collector?.stop(true);
+    }
+  }, 30_000);
+
+  it("never sends a batch twice: one that timed out is not sent again, and its late answer is counted once", async () => {
+    const lines = stderrLines();
+    const { receiver, state } = recordingReceiver();
+    const exporter = createOtelTraceExporter({
+      spanExporter: receiver,
+      methodsEvaluated: METHODS_EVALUATED,
+      exportTimeoutMs: 50,
+      retryBackoffMs: 20,
+    });
+
+    state.holdNext = true;
+    await sendBatch(exporter);
+    expect(state.exports).toBe(1);
+    await until(() => lines.length === 1);
+    expect(lines[0]).toBe(
+      `otel trace export to span exporter failed: no answer within 50 ms. Dropping spans until it recovers, ${BATCH} dropped so far.`,
+    );
+
+    // The backoff has passed, but the first export is still unanswered, so
+    // this batch is dropped and not handed over as the test.
+    await Bun.sleep(30);
+    await sendBatch(exporter);
+    expect(state.exports).toBe(1);
+
+    // The stalled export answers at last: the receiver does have that batch.
+    state.release?.();
+    await sendBatch(exporter);
+    expect(state.exports).toBe(2);
+    endSteps(exporter, 1);
+    await exporter.flush();
+    await exporter.shutdown();
+
+    expect(state.exports).toBe(3);
+    expect(state.spanIds).toHaveLength(2 * BATCH + 1);
+    expect(new Set(state.spanIds).size).toBe(state.spanIds.length);
+    // Only the batch that arrived during the stall was lost.
+    expect(lines.slice(1)).toEqual([
+      `otel trace export to span exporter recovered, ${BATCH} span(s) dropped so far.`,
+      `otel trace export to span exporter dropped ${BATCH} of ${3 * BATCH + 1} span(s).`,
+    ]);
+  }, 15_000);
+
+  it("does not test a failed output from flush() or shutdown(), however long ago it failed", async () => {
+    const lines = stderrLines();
+    const clock = frozenClock();
+    const errors: unknown[] = [];
+    const { receiver, state } = recordingReceiver();
+    state.refuse = true;
+    const exporter = createOtelTraceExporter({
+      spanExporter: receiver,
+      methodsEvaluated: METHODS_EVALUATED,
+      onError: (error) => errors.push(error),
+    });
+
+    endSteps(exporter, 1);
+    await exporter.flush();
+    expect(state.exports).toBe(1);
+
+    clock.advance(3_600_000);
+    endSteps(exporter, 1);
+    await exporter.flush();
+    expect(state.exports).toBe(1);
+
+    // The same wait lets the processor's own batch through as the test, so
+    // it was the flush that held the batch above back, not the clock.
+    await sendBatch(exporter);
+    expect(state.exports).toBe(2);
+
+    clock.advance(3_600_000);
+    endSteps(exporter, 1);
+    await exporter.shutdown();
+    expect(state.exports).toBe(2);
+
+    // The first drop went to onError, once. The counts still go to stderr:
+    // one for each drop that came an hour after the last line, and the total.
+    expect(errors).toEqual([new Error("refused")]);
+    expect(lines).toEqual([
+      "otel trace export to span exporter is still failing, 2 span(s) dropped so far.",
+      `otel trace export to span exporter is still failing, ${BATCH + 3} span(s) dropped so far.`,
+      `otel trace export to span exporter dropped ${BATCH + 3} of ${BATCH + 3} span(s).`,
+    ]);
+  });
+
+  it("tests a failed output with the next batch after 1 s, then 2 s, doubling up to 60 s", async () => {
+    stderrLines();
+    const clock = frozenClock();
+    const { receiver, state } = recordingReceiver();
+    state.refuse = true;
+    const exporter = createOtelTraceExporter({ spanExporter: receiver, methodsEvaluated: METHODS_EVALUATED });
+
+    await sendBatch(exporter);
+    expect(state.exports).toBe(1);
+    let exports = 1;
+    for (const backoff of [1000, 2000, 4000, 8000, 16_000, 32_000, 60_000, 60_000]) {
+      clock.advance(backoff - 1);
+      await sendBatch(exporter);
+      expect({ backoff, exports: state.exports }).toEqual({ backoff, exports });
+      clock.advance(1);
+      await sendBatch(exporter);
+      exports += 1;
+      expect({ backoff, exports: state.exports }).toEqual({ backoff, exports });
+    }
+
+    // A new outage after a recovery starts from one second again.
+    state.refuse = false;
+    clock.advance(60_000);
+    await sendBatch(exporter);
+    state.refuse = true;
+    await sendBatch(exporter);
+    expect(state.exports).toBe(exports + 2);
+    clock.advance(999);
+    await sendBatch(exporter);
+    expect(state.exports).toBe(exports + 2);
+    clock.advance(1);
+    await sendBatch(exporter);
+    expect(state.exports).toBe(exports + 3);
+    await exporter.shutdown();
+  });
+
+  it("prints the first drop, at most one line a minute while drops go on, the recovery, and the total, as the README quotes them", async () => {
+    const lines = stderrLines();
+    const clock = frozenClock();
+    const { receiver, state } = recordingReceiver();
+    state.refuse = true;
+    const exporter = createOtelTraceExporter({ spanExporter: receiver, methodsEvaluated: METHODS_EVALUATED });
+    const to = "otel trace export to span exporter";
+
+    await sendBatch(exporter);
+    expect(lines).toEqual([`${to} failed: refused. Dropping spans until it recovers, ${BATCH} dropped so far.`]);
+    await sendBatch(exporter);
+    clock.advance(59_999);
+    await sendBatch(exporter);
+    expect(lines).toHaveLength(1);
+    clock.advance(1);
+    await sendBatch(exporter);
+    expect(lines.slice(1)).toEqual([`${to} is still failing, ${4 * BATCH} span(s) dropped so far.`]);
+    await sendBatch(exporter);
+    expect(lines).toHaveLength(2);
+
+    state.refuse = false;
+    clock.advance(60_000);
+    await sendBatch(exporter);
+    expect(lines.slice(2)).toEqual([`${to} recovered, ${5 * BATCH} span(s) dropped so far.`]);
+
+    // A second outage is reported from its own first drop.
+    state.refuse = true;
+    await sendBatch(exporter);
+    expect(lines.slice(3)).toEqual([`${to} failed: refused. Dropping spans until it recovers, ${6 * BATCH} dropped so far.`]);
+    await exporter.shutdown();
+    expect(lines.slice(4)).toEqual([`${to} dropped ${6 * BATCH} of ${7 * BATCH} span(s).`]);
+
+    // The README quotes each of these lines, with placeholders for the
+    // output, the reason and the counts.
+    for (const line of lines) {
+      const quoted = line
+        .replace("span exporter", "<path or URL>")
+        .replace("refused", "<reason>")
+        .replace(/\d+ of \d+/, "<N> of <M>")
+        .replace(/\d+/, "<N>");
+      expect({ quoted, inReadme: GUARDIAN_README.includes(`\`${quoted}\``) }).toEqual({ quoted, inReadme: true });
+    }
+  });
+
+  // The processor's shutdown flushes its queue but does not wait for a batch
+  // it sent earlier on its own path. Counted then, that batch would read as
+  // dropped, and a run that lost nothing would print a total.
+  it("waits at shutdown for a batch that is still out, so a run that dropped nothing prints nothing", async () => {
+    const lines = stderrLines();
+    const order: string[] = [];
+    const slow: SpanExporter = {
+      export(_spans, resultCallback): void {
+        setTimeout(() => {
+          order.push("answered");
+          resultCallback({ code: ExportResultCode.SUCCESS });
+        }, 30);
+      },
+      async shutdown(): Promise<void> {
+        order.push("shut down");
+      },
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: slow, methodsEvaluated: METHODS_EVALUATED });
+
+    endSteps(exporter, BATCH);
+    await exporter.shutdown();
+
+    expect(order).toEqual(["answered", "shut down"]);
+    expect(lines).toEqual([]);
+  });
+
+  // An export that is still out when shutdown gives up has its own timeout
+  // running. That timeout fires after the total was printed, and a "failed"
+  // line then would follow the last word on that output.
+  it("prints nothing after the total, when an export abandoned at the shutdown limit times out later", async () => {
+    const lines = stderrLines();
+    const never: SpanExporter = {
+      export(): void {},
+      async shutdown(): Promise<void> {},
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: never, methodsEvaluated: METHODS_EVALUATED, exportTimeoutMs: 30 });
+
+    endSteps(exporter, 1);
+    await exporter.shutdown();
+    const atShutdown = [...lines];
+    await Bun.sleep(100);
+
+    expect(atShutdown).toEqual([
+      "otel trace exporter shutdown disabled after failure: did not finish within 30 ms; unexported spans were dropped",
+      "otel trace export to span exporter dropped 1 of 1 span(s).",
+    ]);
+    expect(lines).toEqual(atShutdown);
+  });
+
+  it("counts the spans a full queue turned away from a healthy output", async () => {
+    const lines = stderrLines();
+    const { exporter, spans } = memoryExporter();
+
+    // No await: the first full batch leaves, the queue fills behind it, and
+    // the rest find it full. No flush either: the processor sends what it kept.
+    endSteps(exporter, 3000);
+    await until(() => spans().length >= BATCH + QUEUE);
+    const missing = 3000 - spans().length;
+    await exporter.shutdown();
+
+    expect(missing).toBe(3000 - BATCH - QUEUE);
+    expect(lines).toEqual([
+      `otel trace export to span exporter failed: its queue of ${QUEUE} spans is full. Dropping spans until it recovers, 1 dropped so far.`,
+      `otel trace export to span exporter recovered, ${missing} span(s) dropped so far.`,
+      `otel trace export to span exporter dropped ${missing} of 3000 span(s).`,
+    ]);
+  }, 15_000);
+
+  it("reports one first drop for an outage that a full queue began and a stalled export continued", async () => {
+    const lines = stderrLines();
+    const never: SpanExporter = {
+      export(): void {},
+      async shutdown(): Promise<void> {},
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: never, methodsEvaluated: METHODS_EVALUATED, exportTimeoutMs: 50 });
+
+    // The first batch is out and unanswered. The queue fills behind it and
+    // ten more spans find it full, before that export times out.
+    await sendBatch(exporter);
+    endSteps(exporter, QUEUE + 10);
+    await Bun.sleep(80);
+    await exporter.shutdown();
+
+    expect(lines).toEqual([
+      `otel trace export to span exporter failed: its queue of ${QUEUE} spans is full. Dropping spans until it recovers, 1 dropped so far.`,
+      `otel trace export to span exporter dropped ${BATCH + QUEUE + 10} of ${BATCH + QUEUE + 10} span(s).`,
+    ]);
+  });
+
+  it("writes every span, in order, when a flush hands a healthy file more than one batch at once", async () => {
+    const lines = stderrLines();
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-file-burst-"));
+    const path = join(dir, "traces.jsonl");
+    const exporter = createOtelTraceExporter({ filePath: path, methodsEvaluated: METHODS_EVALUATED });
+    try {
+      // The first 512 leave as they end. The flush starts two exports for
+      // the other 788 together, while that first write may still be going.
+      const sent = endSteps(exporter, 1300);
+      await exporter.flush();
+      await exporter.shutdown();
+
+      const requests = otlpFile(path);
+      expect(requests).toHaveLength(3);
+      expect(otlpSpans(requests).map((span) => otlpAttribute(span, "acs.request_id"))).toEqual(sent);
+      expect(lines).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Two-byte and four-byte characters, so a limit counted in characters
+  // would let through two or four times the bytes, and a cut made by index
+  // would split a character.
+  it("holds a span from a largest-size request under SPAN_BYTE_LIMIT, with 64 elements in each column and both ids whole", async () => {
+    const { exporter, spans } = memoryExporter();
+    const origin = "é".repeat(4096);
+    const sourceId = "\u{1F600}".repeat(2048);
+    const sessionId = "s".repeat(4096);
+    const requestId = "r".repeat(4096);
+    exporter.end(
+      exporter.start(largestRequest(origin, sourceId, { sessionId, requestId }), "steps/toolCallRequest", TRUSTED),
+      decisionResponse(1, { ...DENY, reasoning: "because ".repeat(512) }),
+    );
+    await exporter.flush();
+
+    const span = spans()[0]!;
+    expect(spanBytes(span)).toBeLessThanOrEqual(SPAN_BYTE_LIMIT);
+    // Cut to fit, not emptied: nearly all of the limit is used.
+    expect(spanBytes(span)).toBeGreaterThan(SPAN_BYTE_LIMIT * 0.95);
+    expect(span.attributes["acs.session.id"]).toBe(sessionId);
+    expect(span.attributes["acs.request_id"]).toBe(requestId);
+    const origins = span.attributes["acs.provenance.origin"] as string[];
+    const sourceIds = span.attributes["acs.provenance.source_id"] as string[];
+    expect(origins).toHaveLength(64);
+    expect(sourceIds).toHaveLength(64);
+    for (const [column, sent] of [[origins, origin], [sourceIds, sourceId]] as const) {
+      for (const value of column) {
+        expect(value.length).toBeGreaterThan(0);
+        expect(sent.startsWith(value)).toBe(true);
+        expect(value.isWellFormed()).toBe(true);
+      }
+    }
+    const decision = span.events.find((event) => event.name === MAPPING.decisionEventName);
+    expect(decision?.attributes?.["acs.decision"]).toBe("deny");
+    expect(decision?.attributes?.["acs.reason_codes"]).toEqual(["dangerous_command"]);
+  });
+
+  it("leaves out a character that the 4096-character limit would split", async () => {
+    const { exporter, spans } = memoryExporter();
+    const sessionId = `${"a".repeat(4095)}\u{1F600}z`;
+    exporter.end(exporter.start(toolCallEnvelope("ls", { sessionId }), "steps/toolCallRequest", TRUSTED), decisionResponse(1, DENY));
+    await exporter.flush();
+
+    expect(spans()[0]?.attributes["acs.session.id"]).toBe("a".repeat(4095));
+  });
+
+  // Three long values share what the ids and the failure event leave, so
+  // the span comes within two bytes of the limit. A failure event left out
+  // of the count, or an id counted before it is cut, would show.
+  it("counts a late decision's failure event, and an id only after cutting it to the character limit", async () => {
+    const { exporter, spans } = memoryExporter({ timeoutConfig: { default_ms: 50 } });
+    const request = makeEnvelope(
+      "steps/toolCallRequest",
+      { tool: { name: "run_shell" }, arguments: { a: { value: 1, provenance: provenance("o".repeat(4096), { source_id: "s".repeat(4096) }) } } },
+      { sessionId: "中".repeat(20_000), requestId: "中".repeat(4096) },
+    );
+    exporter.end(
+      exporter.start(request, "steps/toolCallRequest", { trusted: true, receivedAt: performance.now() - 100 }),
+      decisionResponse(1, { ...DENY, reasoning: "r".repeat(4096) }),
+    );
+    await exporter.flush();
+
+    const span = spans()[0]!;
+    expect(span.events.map((event) => event.name)).toEqual([MAPPING.decisionEventName, "acs.decision.failure"]);
+    expect(span.attributes["acs.session.id"]).toBe("中".repeat(4096));
+    expect(span.attributes["gen_ai.tool.name"]).toBe("run_shell");
+    expect(spanBytes(span)).toBeLessThanOrEqual(SPAN_BYTE_LIMIT);
+    expect(spanBytes(span)).toBeGreaterThan(SPAN_BYTE_LIMIT - 3);
+  });
+
+  // Shutdown closes a step that got no response, on a path of its own. The
+  // span is cut to the limit there too.
+  it("holds a step that is still open at shutdown under SPAN_BYTE_LIMIT too, with 64 elements in each column", async () => {
+    // Not InMemorySpanExporter, which forgets its spans when it is shut down.
+    const kept: ReadableSpan[] = [];
+    const keeper: SpanExporter = {
+      export(spans, resultCallback): void {
+        kept.push(...spans);
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async shutdown(): Promise<void> {},
+    };
+    const exporter = createOtelTraceExporter({ spanExporter: keeper, methodsEvaluated: METHODS_EVALUATED });
+    const origin = "o".repeat(4096);
+    const sourceId = "s".repeat(4096);
+    exporter.start(largestRequest(origin, sourceId), "steps/toolCallRequest", TRUSTED);
+    await exporter.shutdown();
+
+    expect(kept).toHaveLength(1);
+    const span = kept[0]!;
+    expect(span.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+    expect(spanBytes(span)).toBeLessThanOrEqual(SPAN_BYTE_LIMIT);
+    expect(spanBytes(span)).toBeGreaterThan(SPAN_BYTE_LIMIT * 0.95);
+    expect(span.attributes["gen_ai.tool.name"]).toBe("run_shell");
+    const origins = span.attributes["acs.provenance.origin"] as string[];
+    const sourceIds = span.attributes["acs.provenance.source_id"] as string[];
+    expect(origins).toHaveLength(64);
+    expect(sourceIds).toHaveLength(64);
+    for (const [column, sent] of [[origins, origin], [sourceIds, sourceId]] as const) {
+      for (const value of column) {
+        expect(value.length).toBeGreaterThan(0);
+        expect(sent.startsWith(value)).toBe(true);
+      }
+    }
+  });
 });

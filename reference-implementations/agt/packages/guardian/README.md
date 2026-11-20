@@ -62,7 +62,9 @@ Each step the Guardian trusted becomes one span, named by [`trace/otel-mapping.j
 
 Every span also carries `acs.session.id`, and `acs.request_id` whenever the envelope has one, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` as an array, one element per Provenance object in wire order. `acs.provenance.source_id` is the matching array, with `""` where an object has no `source_id`, and it is left out when no object has one. Both stop at 64 objects. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
 
-Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it.
+Every string attribute is cut at 4096 characters, a long `acs.reasoning` included. One span also holds at most 32 KiB of text, counted in UTF-8 bytes over its attributes and its events' attributes together. When a span would hold more, its longest values are each cut to the same number of bytes, between characters, until it fits. The session and request ids are never cut to fit, and no array loses an element, so the policy and provenance columns still line up by position. With both limits, one large request cannot grow the export queue without bound.
+
+The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it.
 
 The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian doesn't send it.
 
@@ -76,7 +78,13 @@ The reasons are `envelope_invalid`, for an envelope that fails validation, and `
 
 The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian` (the converter below uses `acs-reference-audit-converter`, and both are labels, not attribution). Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch, and so does an output that has not finished three seconds into shutdown: the Guardian reports it on stderr and exits instead of waiting. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
 
-Export never touches a decision. Each output fails on its own: the first failed write or send disables that output for the rest of the process and prints one line on stderr, the other output keeps running, and the response goes out unchanged.
+Export never touches a decision. Each output fails on its own: the other output keeps running, and the response goes out unchanged.
+
+When a write or send fails, or has not answered within three seconds, the Guardian stops handing that output spans. It drops them, counts them, and tries the output again with a later batch: after one second at first, then twice as long after each failed try, up to one minute. An output that has still not answered is handed nothing more until it does. Before those three seconds are up, shutdown still hands it the spans waiting in its queue, at most 2048.
+
+A span that ends while an output's queue already holds 2048 is dropped and counted the same way. A dropped span is not sent later.
+
+The Guardian prints each output's count on stderr at the first drop, at most once a minute while drops go on, when the output recovers, and at shutdown. [Troubleshooting](#troubleshooting) quotes the lines.
 
 The diagram shows the exporter's inside. Look for the split after a span ends: each output gets its own batch processor and its own failure switch, so nothing on one side can stop the other.
 
@@ -89,13 +97,13 @@ flowchart LR
     bspend --> outend["Endpoint output"]
     outfile --> file["ACS_OTEL_FILE"]
     outend --> collector["ACS_OTEL_ENDPOINT"]
-    outfile -.->|"first failure"| off["Output disabled,<br/>one stderr line"]
-    outend -.->|"first failure"| off
+    outfile -.->|"failure or no answer"| off["Spans dropped and counted,<br/>output tried again after a wait"]
+    outend -.->|"failure or no answer"| off
     stop["SIGINT or SIGTERM"] -->|"close open spans, flush, 3 s limit"| bspfile
     stop -->|"close open spans, flush, 3 s limit"| bspend
 ```
 
-Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped.
+Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped. An output that is failing when a flush or the shutdown begins is not tried again then, so closing does not wait on a collector that is already known to be down. Its spans are dropped and counted.
 
 Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too.
 
@@ -134,12 +142,16 @@ That command regenerates it. `test/sample-trace.test.ts` checks the sample again
 
 These are the messages export can print, with what each one means. None of them changes a decision.
 
-- `otel trace export to <path or URL> disabled after failure: <reason>` on the Guardian's stderr. That output failed its first write or send and is off until the Guardian restarts. The other output keeps running. For an endpoint, the usual cause is a collector that wasn't running yet or was restarted: stop the Guardian, start the collector, then start the Guardian again.
+- `otel trace export to <path or URL> failed: <reason>. Dropping spans until it recovers, <N> dropped so far.` on the Guardian's stderr. A write or send to that output failed or got no answer in time, or its queue of 2048 spans was full. The other output keeps running. Don't restart the Guardian: it tries the output again by itself with a later batch of spans. For an endpoint, the usual cause is a collector that isn't running, so start it. `<N>` is how many spans that output has dropped since the Guardian started.
+- `otel trace export to <path or URL> is still failing, <N> span(s) dropped so far.` At most once a minute, while that output keeps dropping spans.
+- `otel trace export to <path or URL> recovered, <N> span(s) dropped so far.` The output took a batch again, and spans that end from here on reach it. The `<N>` dropped ones are not sent later.
+- `otel trace export to <path or URL> dropped <N> of <M> span(s).` at shutdown, only for an output that dropped any. `<M>` spans ended, and `<N>` of them never reached that output.
+- `otel trace export to <path or URL> disabled after failure: <reason>`. That output could not be set up, for example a file path that cannot be created or an endpoint that is not a URL. It is off until the Guardian restarts with a value that works. The other output keeps running.
 - `otel trace exporter disabled after failure: <reason>`, with no output named. The exporter as a whole stopped, for example because `otel-mapping.json` didn't load. No spans reach either output for the rest of the process.
 - `otel trace exporter shutdown disabled after failure: did not finish within 3000 ms; unexported spans were dropped`. An output stalled at shutdown. The spans still in its queue are lost.
 - `otel trace export to <URL>: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt <host>, so on some Bun versions these spans go through the proxy.` at startup. Your shell has `HTTP_PROXY` set, and the loopback host isn't in the proxy exemption list Bun reads. The Guardian adds the host itself, which takes effect on Bun 1.3.14 and later. On older versions, start the Guardian with the host in both `NO_PROXY` and `no_proxy`, as step 1 of [Produce a trace](../../README.md#produce-a-trace) does.
 - `refusing to write <path>: it already exists, perhaps from an earlier or failed run.` from the converter, which then exits with status 1. It never appends. Delete the old output or name a new file.
-- An empty `.acs/otel-collector-traces.jsonl` in the first five seconds after you send a step. That's normal: spans leave in batches about every five seconds, and stopping the Guardian with Ctrl-C sends the last one. If the file still hasn't appeared after about ten seconds, the collector isn't running [`otel-collector.yaml`](../../otel-collector.yaml), or the Guardian printed the `disabled after failure` line above.
+- An empty `.acs/otel-collector-traces.jsonl` in the first five seconds after you send a step. That's normal: spans leave in batches about every five seconds, and stopping the Guardian with Ctrl-C sends the last one. If the file still hasn't appeared after about ten seconds, the collector isn't running [`otel-collector.yaml`](../../otel-collector.yaml), or the Guardian printed one of the `failed` or `disabled after failure` lines above. After a `failed` line the Guardian tries the endpoint again by itself, with a batch that leaves once the wait is over, so send another step after the collector is up and leave the Guardian running until it prints `recovered`. Stopping it before that drops the step's span, because a failing output is not tried at shutdown.
 
 ## Use it in-process
 
