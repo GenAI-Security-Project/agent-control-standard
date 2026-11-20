@@ -460,21 +460,30 @@ def miss_response(model: Any) -> dict[str, Any]:
 
 
 def miss_events(model: Any) -> list[dict[str, Any]]:
-    """The miss as the events FinBot's chat reads (chat.py at 1450fc4), in the Responses API's order."""
+    """The miss as the whole event set a model streams for one message, in the Responses API's order.
+
+    Enforce rebuilds a stream event by event and ends it on text for a message nobody announced (stream.py), so the
+    miss announces its message and its part before the text, as a model does. FinBot's chat (chat.py at 1450fc4)
+    reads only the delta and output_item.done, which is why a shorter stream once looked complete.
+    """
     done = miss_response(model)
     message = done["output"][0]
-    return [
-        {"event": "response.created",
-         "data": {"type": "response.created", "sequence_number": 0,
-                  "response": {**done, "status": "in_progress", "output": []}}},
-        {"event": "response.output_text.delta",
-         "data": {"type": "response.output_text.delta", "sequence_number": 1, "item_id": MISS_MESSAGE_ID,
-                  "output_index": 0, "content_index": 0, "delta": NEUTRAL_LINE, "logprobs": []}},
-        {"event": "response.output_item.done",
-         "data": {"type": "response.output_item.done", "sequence_number": 2, "output_index": 0, "item": message}},
-        {"event": "response.completed",
-         "data": {"type": "response.completed", "sequence_number": 3, "response": done}},
+    part = message["content"][0]
+    where = {"item_id": MISS_MESSAGE_ID, "output_index": 0, "content_index": 0}
+    events: list[dict[str, Any]] = [
+        {"type": "response.created", "response": {**done, "status": "in_progress", "output": []}},
+        {"type": "response.output_item.added", "output_index": 0,
+         "item": {**message, "status": "in_progress", "content": []}},
+        {"type": "response.content_part.added", **where, "part": {**part, "text": ""}},
+        {"type": "response.output_text.delta", **where, "delta": NEUTRAL_LINE, "logprobs": []},
+        {"type": "response.output_text.done", **where, "text": NEUTRAL_LINE, "logprobs": []},
+        {"type": "response.content_part.done", **where, "part": part},
+        {"type": "response.output_item.done", "output_index": 0, "item": message},
+        {"type": "response.completed", "response": done},
     ]
+    return [{"event": event["type"], "data": {"type": event["type"], "sequence_number": number,
+                                              **{k: v for k, v in event.items() if k != "type"}}}
+            for number, event in enumerate(events)]
 
 
 def encode_events(events: list[dict[str, Any]]) -> bytes:

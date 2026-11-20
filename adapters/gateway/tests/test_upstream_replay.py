@@ -5,6 +5,9 @@ import socket
 import pytest
 
 from conftest import NEUTRAL, call_item, finbot_request, message_item, response_body
+from streams import decode, item_events
+
+from acs_gateway import upstream as upstream_module
 
 USER_A, USER_B = "user_AbCdEfGh-_123456", "user_ZyXwVuTs_-987654"
 NS_A, NS_B = "ns_" + USER_A, "ns_" + USER_B
@@ -199,3 +202,63 @@ def test_replay_works_in_enforce_and_gates_the_recorded_call(gateway, guardian, 
     assert reply["output"][0]["content"][0]["text"] == NEUTRAL
     applied = [e for e in audit() if e["acs_audit_event"] == "decision_applied"]
     assert [(e["tool"], e["decision"]) for e in applied] == [("bash", "deny")]
+
+
+def streamed_miss(client):
+    """POST a streamed request no recording fits and return (status, content type, decoded events)."""
+    with client.stream("POST", "/v1/responses", json={**finbot_request(*history(1)), "stream": True}) as response:
+        raw = b"".join(response.iter_bytes())
+        return response.status_code, response.headers.get("content-type", ""), decode(raw)
+
+
+def test_a_streamed_miss_reaches_an_enforce_client_as_the_neutral_line(gateway, guardian, upstream, tmp_path, audit):
+    """PR #633 review: enforce rebuilds every stream, so the miss must announce its message as a model does. The
+    Guardian is a local socket, so the fake upstream staying unused shows no model was called."""
+    write(tmp_path / "rec", line(0, response_body(message_item("only step zero"))))
+    client = replay(gateway, tmp_path, ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    status, kind, received = streamed_miss(client)
+    assert status == 200 and kind.startswith("text/event-stream")
+    assert [e for e in received if e["type"] == "error"] == []
+    assert "".join(e["delta"] for e in received if e["type"] == "response.output_text.delta") == NEUTRAL
+    done = [e["item"] for e in received if e["type"] == "response.output_item.done"]
+    assert [(i["id"], i["content"][0]["text"]) for i in done] == [("msg_replay_miss", NEUTRAL)]
+    assert received[-1]["type"] == "response.completed"
+    assert received[-1]["response"]["id"] == "resp_replay_miss"
+    assert [i["content"][0]["text"] for i in received[-1]["response"]["output"]] == [NEUTRAL]
+    assert [(e["cause"], e["step"], e["stream"]) for e in miss_events(audit)] == [("no_recording", 1, True)]
+    assert [e for e in audit() if e["acs_audit_event"] == "upstream_error"] == []
+    assert "upstream_unreadable" not in json.dumps(received)
+    assert upstream.received == []
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow"])
+def test_a_streamed_miss_reaches_an_ungoverned_client_as_replay_wrote_it(gateway, guardian, upstream, tmp_path,
+                                                                          audit, mode):
+    write(tmp_path / "rec", line(0, response_body(message_item("only step zero"))))
+    env = {} if mode == "off" else {"ACS_LAB_MODE": "shadow", "ACS_GUARDIAN_URL": guardian}
+    status, _, received = streamed_miss(replay(gateway, tmp_path, **env))
+    assert status == 200
+    assert received == [e["data"] for e in upstream_module.miss_events("gpt-5-nano")]
+    assert [e["cause"] for e in miss_events(audit)] == ["no_recording"]
+    assert [e for e in audit() if e["acs_audit_event"] == "upstream_error"] == []
+    assert upstream.received == []
+
+
+def test_the_streamed_miss_has_the_event_set_a_model_streams_for_one_message():
+    """Every event a model sends for a message, in its order and shape, with the text in one delta."""
+    events = upstream_module.miss_events("gpt-5-nano")
+    assert all(e["event"] == e["data"]["type"] for e in events)
+    assert [e["data"]["sequence_number"] for e in events] == list(range(len(events)))
+    message = upstream_module.miss_response("gpt-5-nano")["output"][0]
+    modeled = [e for e in item_events(message, 0) if e["type"] != "response.output_text.delta"]
+    body = [{k: v for k, v in e["data"].items() if k != "sequence_number"} for e in events[1:-1]]
+    assert [e for e in body if e["type"] != "response.output_text.delta"] == modeled
+    assert [e for e in body if e["type"] == "response.output_text.delta"] == [
+        {"type": "response.output_text.delta", "item_id": "msg_replay_miss", "output_index": 0, "content_index": 0,
+         "delta": NEUTRAL, "logprobs": []}]
+    assert [e["event"] for e in events] == [
+        "response.created", "response.output_item.added", "response.content_part.added",
+        "response.output_text.delta", "response.output_text.done", "response.content_part.done",
+        "response.output_item.done", "response.completed"]
+    assert events[0]["data"]["response"]["output"] == [] and events[0]["data"]["response"]["status"] == "in_progress"
+    assert events[-1]["data"]["response"] == upstream_module.miss_response("gpt-5-nano")
