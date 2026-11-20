@@ -1,6 +1,6 @@
 # About ACS
 
-OWASP Agent Control Standard (ACS) creates industry-wide transparency for AI agents.
+OWASP GenAI Security Project Agent Control Standard (ACS) creates industry-wide transparency for AI agents.
 
 ## Mission
 

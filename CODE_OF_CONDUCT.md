@@ -1,6 +1,6 @@
 # Code of Conduct
 
-The Agent Control Standard (ACS) runs on volunteer time. This code protects the people who give that time and the attention they spend here.
+The OWASP GenAI Security Project Agent Control Standard (ACS) runs on volunteer time. This code protects the people who give that time and the attention they spend here.
 
 It has two parts, and both apply to everyone, leads included. Part 1 covers how we treat each other, and OWASP handles reports under it. Part 2 covers how work enters this repository, and the project leads enforce it.
 
