@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Flag a pull request no lead asked for, so the queue is visible.
+"""Flag a pull request no lead asked for, so leads can apply Part 2 of the Code of Conduct.
 
-Version 1.0. Owner: ACS project leads.
+Version 1.1. Owner: ACS project leads.
 
 A pull request is flagged when its author is not a lead in GOVERNANCE.md, no lead assigned
 them on an issue the description references, and no lead reviewed it. A flag is the
-status:needs-triage label and one comment. It blocks nothing, and it always exits 0.
+status:needs-triage label and one comment. Under "Start From an Assigned Issue" in
+CODE_OF_CONDUCT.md, a lead closes a flagged pull request that needed an assigned issue,
+with an invitation to reopen once a lead assigns the work. This check closes nothing
+itself, never fails the pull request, and always exits 0. It does not check when the
+assignment happened or whether the issue carries status:accepted, so a lead reads the
+issue before closing.
 
 The workflow runs this under `python3 -I -S` from the base commit, never the pull request's
 head. The description is untrusted, so only digits are taken from it and nothing from it
@@ -25,10 +30,13 @@ LABEL = "status:needs-triage"
 # this check existed is not commented on again, and a lead's removal of the label sticks.
 SEEN = "queued rather than ignored"
 COMMENT = (
-    f"Thanks for this. It is {SEEN}. A lead has not reviewed this pull request yet. A lead "
-    "will read it when they have time, and we can't promise a date. Nothing here is "
-    "rejected. If a check below fails, please fix it. A pull request that waits a long "
-    "time may be closed, and you can reopen it later."
+    f"Thanks for this. It is {SEEN} until a lead reads it. No lead has reviewed this pull "
+    "request, and it references no issue a lead assigned to you. Under Part 2 of the Code "
+    "of Conduct, a pull request that changes behavior, normative text, or code starts from "
+    "an issue labeled status:accepted that a lead assigned to you before you opened it. "
+    "If this one needed that, a lead will close it, and you can reopen it once a lead "
+    "assigns the work. An editorial fix needs no issue. If a check below fails, please "
+    "fix it."
 )
 REFERENCE = re.compile(r"(?:#|/issues/)(\d{1,7})\b")
 HANDLE = re.compile(r"github\.com/([A-Za-z0-9-]+)")
