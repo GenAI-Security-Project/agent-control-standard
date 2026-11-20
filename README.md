@@ -353,7 +353,8 @@ flowchart LR
     F["Issue form"] --> T["Maintainer triage"]
     T -->|"deferred"| D["scope:deferred<br/>tracked for the next spec release"]
     T -->|"accepted"| A["status:accepted<br/>enters the backlog"]
-    A --> P["Pull request<br/>references the issue"]
+    A --> AS["Lead assigns the issue<br/>to its author"]
+    AS --> P["Pull request<br/>references the issue"]
     E["Editorial fix<br/>typo, broken link"] --> P2["Pull request<br/>needs no issue"]
 ```
 

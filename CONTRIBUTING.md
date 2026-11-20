@@ -60,7 +60,7 @@ Anyone may open an issue. Only an issue carrying `status:accepted` enters the ba
 
 A pull request that changes behavior, alters normative text, or adds code references an
 issue labeled `status:accepted` that a lead assigned to its author before the pull request
-opened. An editorial correction does not, wherever it lands: a typo, a grammar fix, a
+opened or reopened. An editorial correction does not, wherever it lands: a typo, a grammar fix, a
 broken link, or a formatting repair that leaves the meaning untouched needs no issue.
 [Start From an Assigned Issue](./CODE_OF_CONDUCT.md#start-from-an-assigned-issue) in the
 Code of Conduct owns this rule.
@@ -137,16 +137,17 @@ All submissions go through GitHub pull request review. See [GitHub's PR guide](h
 
 ## Development Process
 
-1. **Fork the repository** and clone your fork
-2. **Branch from `integration`.** Use `spec/`, `refimpl/`, `fix/`, or `docs/` followed by
+1. **Get the issue assigned to you** by a lead. Editorial fixes skip this step
+2. **Fork the repository** and clone your fork
+3. **Branch from `integration`.** Use `spec/`, `refimpl/`, `fix/`, or `docs/` followed by
    a short description
-3. **Make your changes** following the style guide
-4. **Sync with `integration` and run the guards** before you open anything. `uv run
+4. **Make your changes** following the style guide
+5. **Sync with `integration` and run the guards** before you open anything. `uv run
    pytest -v` and `uv run mkdocs build --strict` both have to pass on your machine
-5. **Sign your commits** with `git commit -s` (required by the DCO below). See
+6. **Sign your commits** with `git commit -s` (required by the DCO below). See
    [How to sign your commits](#how-to-sign-your-commits)
-6. **Open a pull request against `integration`**
-7. **Address review feedback** to land your change
+7. **Open a pull request against `integration`**
+8. **Address review feedback** to land your change
 
 A new page needs a titled `nav` entry in `mkdocs.yml`, so a pull request that adds a page
 targets `integration`, and the guard rejects a new page aimed at `main`. A page outside
@@ -165,7 +166,7 @@ Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.m
 `overrides/`, `landing/`, `docs/stylesheets/`, and `docs/assets/`. A pull request that adds a
 page is the exception: it also adds a `nav` entry to `mkdocs.yml`, so it targets `integration`.
 
-For changes to the spec itself (`acs_schema.json`, hooks, events), open a
+For changes to the schemas under `specification/`, the hook set, or the event catalog, open a
 [Discussion](https://github.com/GenAI-Security-Project/agent-control-standard/discussions)
 before submitting a PR. These affect downstream implementers and warrant a longer
 conversation.

@@ -30,13 +30,13 @@ LABEL = "status:needs-triage"
 # this check existed is not commented on again, and a lead's removal of the label sticks.
 SEEN = "queued rather than ignored"
 COMMENT = (
-    f"Thanks for this. It is {SEEN} until a lead reads it. No lead has reviewed this pull "
-    "request, and it references no issue a lead assigned to you. Under Part 2 of the Code "
-    "of Conduct, a pull request that changes behavior, normative text, or code starts from "
-    "an issue labeled status:accepted that a lead assigned to you before you opened it. "
-    "If this one needed that, a lead will close it, and you can reopen it once a lead "
-    "assigns the work. An editorial fix needs no issue. If a check below fails, please "
-    "fix it."
+    f"Thanks for this. It is {SEEN} until a lead reads it, and the lead may close it. No "
+    "lead has reviewed this pull request, and it references no issue a lead assigned to "
+    "you. Under Part 2 of the Code of Conduct, a pull request that changes behavior, "
+    "normative text, or code starts from an issue labeled status:accepted that a lead "
+    "assigned to you before you opened or reopened it. If a lead closes this one, you can "
+    "reopen it once a lead assigns the work. An editorial fix needs no issue. If a check "
+    "below fails, please fix it."
 )
 REFERENCE = re.compile(r"(?:#|/issues/)(\d{1,7})\b")
 HANDLE = re.compile(r"github\.com/([A-Za-z0-9-]+)")

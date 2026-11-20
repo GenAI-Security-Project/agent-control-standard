@@ -12,7 +12,8 @@
      A change that alters behavior, normative text, or adds code needs an issue carrying
      `status:accepted` that a lead assigned to you before you opened this PR. If no lead
      has assigned you yet, ask on the issue and wait for the assignment. A PR opened
-     before it is closed, and you can reopen it once a lead assigns the work. See "Start
+     before the assignment is closed, and you can reopen it once a lead assigns the work.
+     See "Start
      From an Assigned Issue" in Part 2 of CODE_OF_CONDUCT.md, and Current Priority Scope
      in CONTRIBUTING.md. -->
 
