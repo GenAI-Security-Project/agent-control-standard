@@ -4,7 +4,9 @@ SPDX 3.0 is one of the three normative AgBOM serializations in v0.1.0. The canon
 
 ## Component-type mapping
 
-Each canonical component becomes one SPDX `software_Package` or `Service` node. Relationships (`DEPENDS_ON`, `DESCRIBES`, `USES`) reflect the agent_capability/tool/mcp_server graph.
+[`format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json) states this mapping, and the tables below restate it. A test (`tests/test_format_mapping_guides.py`) fails when the two disagree, so when they do, the schema wins.
+
+Each canonical component becomes one SPDX Element node. The graph between them is wired with relationships.
 
 | Canonical type | SPDX class | Notes |
 |---|---|---|
@@ -13,18 +15,19 @@ Each canonical component becomes one SPDX `software_Package` or `Service` node. 
 | `a2a_peer` | `Service` | Cross-agent endpoint; `agent_card_ref` flows into `externalRef`. |
 | `tool` | `software_Package` | Agent-callable code unit. |
 | `knowledge_source` | `Service` | Datastore or search endpoint. |
-| `memory_store` | `Service` | Long-lived state store. |
-| `agent_capability` | `software_Package` | Composed capability; its tool/MCP/A2A dependencies become `DEPENDS_ON` relationships. |
+| `memory_store` | `dataset_DatasetPackage` | SPDX 3.0 Dataset profile node for the long-lived state store. |
+| `agent_capability` | `Bundle` | Composed capability; the components it references are its `CONTAINS` targets. |
+| `skill` | `software_Package` | Carries a verified checksum derived from its definition digest; the components and skills it references are its `CONTAINS` targets. |
 
 ## Relationships
 
 | ACS edge | SPDX relationship |
 |---|---|
-| `agent_capability.tools[]` | `agent_capability USES tool` |
-| `agent_capability.mcp_servers[]` | `agent_capability USES mcp_server` |
-| `agent_capability.a2a_peers[]` | `agent_capability USES a2a_peer` |
-| `mcp_server.tools[]` | `mcp_server CONTAINS tool` |
-| Root agent → all components | `agent DEPENDS_ON <component>` |
+| `agent_capability.tools[]` | `agent_capability CONTAINS tool` |
+| `agent_capability.mcp_servers[]` | `agent_capability CONTAINS mcp_server` |
+| `agent_capability.a2a_peers[]` | `agent_capability CONTAINS a2a_peer` |
+| `skill.tools[]`, `skill.mcp_servers[]`, `skill.a2a_peers[]`, `skill.composed_skills[]` | `skill CONTAINS <component or skill>` |
+| `mcp_server.tools[]` | `mcp_server EXPOSES tool` |
 
 ## Status
 
