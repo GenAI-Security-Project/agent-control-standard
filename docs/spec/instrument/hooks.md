@@ -85,7 +85,7 @@ The decision envelope shape is documented in [Specification §6](./specification
 
 Schema: [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json).
 
-Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and the initial `Intent` (when IBAC is the enforcement paradigm).
+Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and the initial `Intent` (when the deployment uses Intent or an IBAC-style policy).
 
 **Payload:** session-level identity descriptors, declared policy mode, `intent` (optional, with `parser_provenance`), platform context.
 
