@@ -1,0 +1,35 @@
+{
+  "description": "s6: send_email's declaration changed, so its digest isn't pinned",
+  "input": {
+    "method": "steps/toolCallRequest",
+    "payload": {
+      "tool": {
+        "name": "finmail__send_email",
+        "version": "sha256:63f54bd7ffbc14c0c62cfbc06d43f8004618c3180fc67ea53dc2648a642335b2"
+      },
+      "arguments": {
+        "to": {
+          "value": [
+            "admin@ns_user_abc.finbot"
+          ]
+        },
+        "subject": {
+          "value": "Hi"
+        },
+        "body": {
+          "value": "Hello"
+        },
+        "message_type": {
+          "value": "general"
+        }
+      }
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "deny",
+    "reason_codes": [
+      "tool_content_hash_mismatch"
+    ]
+  }
+}

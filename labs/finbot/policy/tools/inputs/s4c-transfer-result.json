@@ -1,0 +1,26 @@
+{
+  "description": "s4c: the result of a transfer the policy allowed is not judged on arguments it does not carry",
+  "input": {
+    "method": "steps/toolCallResult",
+    "payload": {
+      "tool": {
+        "name": "finstripe__create_transfer",
+        "version": "sha256:5ab7ec8469ca339bff853308d4a00f7afcc764ee9107d4170565855833ea9b8c"
+      },
+      "exit_status": "success",
+      "outputs": [
+        {
+          "value": {
+            "transfer_id": "tr_1",
+            "status": "completed",
+            "amount": 100
+          }
+        }
+      ]
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "allow"
+  }
+}

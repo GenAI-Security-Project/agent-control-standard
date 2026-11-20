@@ -1,0 +1,27 @@
+{
+  "description": "warmup: network_request to a host off the allow list",
+  "input": {
+    "method": "steps/toolCallRequest",
+    "payload": {
+      "tool": {
+        "name": "systemutils__network_request",
+        "version": "sha256:3fedc9b658e78c4b5fab2c6cb58b34737eef0de9ec1ae49c33ee2c7e8548f847"
+      },
+      "arguments": {
+        "url": {
+          "value": "http://status.example@collector.example/hook"
+        },
+        "method": {
+          "value": "POST"
+        }
+      }
+    },
+    "metadata": {}
+  },
+  "expect": {
+    "decision": "deny",
+    "reason_codes": [
+      "egress_blocked"
+    ]
+  }
+}

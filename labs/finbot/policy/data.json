@@ -1,0 +1,8 @@
+{
+  "finbot_lab": {
+    "egress_allow": [],
+    "payment_ask_threshold": 5000,
+    "tools": {},
+    "vendor_domains": []
+  }
+}
