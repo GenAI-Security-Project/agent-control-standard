@@ -39,7 +39,8 @@
         "steps/skillLoad": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 1, "_note": "OCSF defines Module Activity as a process loading or unloading a module, and its required module object is the skill itself — not Process Activity, which needs a launched or terminated process that a skill load does not have; keeping loads off 1007 lets a reader tell a skill loading from the tool calls its actions raise." },
         "steps/skillUnload": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 2 },
         "agbom/snapshot": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 },
-        "agbom/changed": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 }
+        "agbom/changed": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 },
+        "protocols/MCP/*": { "class_uid": 6003, "class_name": "API Activity", "_note": "One entry covers every method in the namespace. A wrapped MCP message is an API call between the agent and an MCP server, so it is modeled as API Activity. activity_id is left to the exporter, because MCP methods span create, read, update and delete semantics. unmapped.acs.mcp carries method, direction, and, when the payload has them, id, server_id, transport and protocol_version." }
       }
     },
     "decision_class": {

@@ -16,6 +16,7 @@ ACS events map to OCSF 1.9.0 event classes. The normative class assignments and 
 | Decision (deny/modify/ask/defer) | Detection Finding | 2004 |
 | Decision (allow) | Application Lifecycle | 6002 |
 | `agbom/snapshot`, `agbom/changed` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
+| `protocols/MCP/*` | API Activity | 6003 (no fixed `activity_id`) |
 | `steps/skillRegister` | Device Inventory Info | 5001 (`activity_id` 2, Collect) |
 
 ## Severity mapping

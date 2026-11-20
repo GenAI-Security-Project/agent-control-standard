@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/protocols/mcp-payload.json",
+  "title": "protocols/MCP/* payload",
+  "description": "Payload for a wrapped MCP message. It is the `params.payload` of a request-envelope.json request whose `method` is `protocols/MCP/<mcp_method>` (or the explicit-version form `wrapped:mcp-<version>/<mcp_method>`). The payload carries one MCP JSON-RPC message in decomposed form, so the ACS envelope never nests a second JSON-RPC envelope. `mcp_method` MUST equal the part of the ACS `method` after `protocols/MCP/` (or after `wrapped:mcp-<version>/`). `direction` says which MCP message the payload carries: `request` is a message the Observed Agent is about to send to the MCP server, `response` is a message the MCP server returned and the Observed Agent has not yet consumed, and `notification` is an MCP notification in either direction. The Guardian answers every wrapped message with an AcsResult (mcp-result.json), including a notification, because the ACS request carries its own JSON-RPC `id`.",
+  "type": "object",
+  "required": ["direction", "mcp_method"],
+  "properties": {
+    "direction": {
+      "type": "string",
+      "enum": ["request", "response", "notification"],
+      "description": "Which MCP message this payload carries. 'request': agent to MCP server, held until the Guardian decides. 'response': MCP server to agent, held until the Guardian decides. 'notification': an MCP notification, which has no MCP id and no MCP response."
+    },
+    "mcp_method": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\s]+$",
+      "description": "The MCP method name, for example 'tools/call', 'resources/read', 'prompts/get', 'initialize' or 'notifications/resources/updated'. A 'response' repeats the method of the request it answers, so the Guardian does not have to look the request up."
+    },
+    "mcp_id": {
+      "oneOf": [{ "type": "string" }, { "type": "integer" }],
+      "description": "The MCP JSON-RPC id. Required on 'request' and 'response'. Absent on 'notification'. It is the MCP id, not the ACS id: the two are unrelated and a Guardian MUST NOT assume they are equal."
+    },
+    "mcp_params": {
+      "type": "object",
+      "description": "The MCP `params` object, unmodified. Present on a 'request' or 'notification' when the MCP message has params. Absent on a 'response'."
+    },
+    "mcp_result": {
+      "type": "object",
+      "description": "The MCP `result` object, unmodified. Present on a successful 'response'. Exactly one of mcp_result and mcp_error is present on a 'response'."
+    },
+    "mcp_error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "type": "integer" },
+        "message": { "type": "string" },
+        "data": {}
+      },
+      "description": "The MCP JSON-RPC error object, unmodified. Present on a failed 'response'."
+    },
+    "server_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Deployment-chosen identifier of the MCP server the message goes to or came from. Lets a Guardian key policy on the server. It SHOULD match the AgBOM component identifier for that server when the deployment emits an AgBOM."
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["stdio", "streamable-http", "sse"],
+      "description": "The MCP transport between the Observed Agent and the MCP server. This is not the ACS transport negotiated in the handshake."
+    },
+    "protocol_version": {
+      "type": "string",
+      "description": "The MCP protocol version in use on that connection (for example '2025-06-18'). It SHOULD be one of the versions the Observed Agent declared in `wrapped_protocols` at handshake."
+    },
+    "provenance": {
+      "$ref": "../provenance.json",
+      "description": "OPTIONAL. Provenance of the content a 'response' carries. For resources/read, prompts/get and tools/call results the Observed Agent labels the content with the origin the channel gives it (for example 'retrieved' or 'tool_output'), so the Guardian can apply policy keyed on origin and source_id before the content reaches the model."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "direction": { "const": "request" } }, "required": ["direction"] },
+      "then": {
+        "required": ["mcp_id"],
+        "not": { "anyOf": [{ "required": ["mcp_result"] }, { "required": ["mcp_error"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "direction": { "const": "notification" } }, "required": ["direction"] },
+      "then": {
+        "not": { "anyOf": [{ "required": ["mcp_id"] }, { "required": ["mcp_result"] }, { "required": ["mcp_error"] }] }
+      }
+    },
+    {
+      "if": { "properties": { "direction": { "const": "response" } }, "required": ["direction"] },
+      "then": {
+        "required": ["mcp_id"],
+        "not": { "required": ["mcp_params"] },
+        "oneOf": [{ "required": ["mcp_result"] }, { "required": ["mcp_error"] }]
+      }
+    }
+  ]
+}
