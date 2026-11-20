@@ -14,6 +14,12 @@ def load_secret_file(path: Path, name: str) -> str:
     The checks and the read use one descriptor opened with O_NOFOLLOW, so the file can't be swapped between them, and
     O_NONBLOCK keeps a FIFO from stalling startup. Callers add their own length and format rules.
     """
+    return read_secret_text(path, name).strip()
+
+
+def read_secret_text(path: Path, name: str, max_bytes: int | None = None) -> str:
+    """The file's text exactly as written, under load_secret_file's rules. With max_bytes, a larger file is refused
+    before it is read, so a mistaken path to a large file can't exhaust memory at startup."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as e:
@@ -30,8 +36,13 @@ def load_secret_file(path: Path, name: str) -> str:
             raise ValueError(f"{name} {path} must be mode 0600 or 0400")
         if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
             raise ValueError(f"{name} {path} is owned by uid {info.st_uid}, not the gateway's uid {os.geteuid()}")
-        raw = f.read()
+        if max_bytes is not None and info.st_size > max_bytes:
+            raise ValueError(f"{name} {path} must hold at most {max_bytes} bytes")
+        # Read one byte past the cap, so a file that grew after fstat is still caught.
+        raw = f.read() if max_bytes is None else f.read(max_bytes + 1)
+    if max_bytes is not None and len(raw) > max_bytes:
+        raise ValueError(f"{name} {path} must hold at most {max_bytes} bytes")
     try:
-        return raw.decode("utf-8").strip()
+        return raw.decode("utf-8")
     except UnicodeDecodeError:
         raise ValueError(f"{name} {path} is not UTF-8 text") from None

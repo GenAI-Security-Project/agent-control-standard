@@ -20,6 +20,7 @@ import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.background import BackgroundTask
+from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
@@ -1475,13 +1476,51 @@ def _parse(raw: bytes) -> Any:
         return None
 
 
+class ClientTokenGate:
+    """The model port's client check, in front of every route, so only a client holding the token spends the model key.
+
+    A request passes only with `Authorization: Bearer <token>`, compared in constant time. Anything else gets the
+    Responses API's own 401 before the gateway reads the body, so a refused call reaches no upstream, never has the
+    model key swapped in, and leaves no model input line. The refusal is audited without the header's value. Only
+    lifespan passes untouched. A websocket is refused, token or not, and any other scope type gets nothing.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode("utf-8")
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # Fail closed on every other scope. No route serves a websocket today, so refusing here
+            # keeps one added later from going ungated. Closing before accept makes the server answer 403.
+            if scope["type"] == "websocket":
+                _audit("client_unauthorized", cause="websocket", path=scope.get("path"))
+                await send({"type": "websocket.close", "code": 1008})
+            return
+        given = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
+        # One header, exactly the expected bytes. compare_digest runs in time that doesn't depend on where they differ.
+        if len(given) == 1 and hmac.compare_digest(given[0], self.expected):
+            await self.app(scope, receive, send)
+            return
+        _audit("client_unauthorized", cause="missing" if not given else "wrong", method=scope.get("method"),
+               path=scope.get("path"))
+        response = openai_error(401, "Incorrect API key provided.", "invalid_request_error", "invalid_api_key")
+        await response(scope, receive, send)
+
+
 def create_app(config: GatewayConfig) -> Starlette:
+    # Read first, so a bad token file stops startup before anything else is built.
+    token = load_client_token(config.client_token_file) if config.client_token_file is not None else None
     gateway = Gateway(config)
     routes = [
         Route("/v1/responses", gateway.responses, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
         Route("/{path:path}", gateway.not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
     ]
-    app = Starlette(routes=routes, lifespan=gateway.lifespan)
+    middleware = [Middleware(ClientTokenGate, token=token)] if token is not None else []
+    app = Starlette(routes=routes, middleware=middleware, lifespan=gateway.lifespan)
     app.state.gateway = gateway
     return app
 
@@ -1504,6 +1543,47 @@ def load_secret_file(path: Path, name: str) -> str:
     if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
         raise ValueError(f"{name} {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
     return token
+
+
+MAX_CLIENT_TOKEN_BYTES = 4096
+
+
+def load_client_token(path: Path) -> str:
+    """The model port's client token: load_secret_file's rules, at most 4096 bytes, and one printable line.
+
+    One trailing newline is dropped, since editors and `echo` add it. Anything else that is whitespace or not
+    printable is refused, because a client can't send it in a header and every request would then get a 401 with
+    nothing to tell the operator why. No message carries the token.
+    """
+    name = "ACS_GATEWAY_CLIENT_TOKEN_FILE"
+    text = secretfile.read_secret_text(path, name, MAX_CLIENT_TOKEN_BYTES)
+    token = text[:-1] if text.endswith("\n") else text
+    if any(c.isspace() or not c.isprintable() for c in token):
+        raise ValueError(f"{name} {path} must hold the token on one line, with no spaces or control characters")
+    if len(token.encode("utf-8")) < MIN_ADMIN_TOKEN_BYTES:
+        raise ValueError(f"{name} {path} must hold at least {MIN_ADMIN_TOKEN_BYTES} bytes")
+    return token
+
+
+def check_distinct_tokens(config: GatewayConfig) -> None:
+    """Refuses a client token equal to the admin or approver token. The model port's client is the governed agent,
+    so with the approver secret it could release its own held calls, and with the admin secret reset the epoch.
+    The error names the two settings, never the values.
+
+    Each file is read only when its listener runs, as cli.main reads it: the admin token with an admin port, the
+    approver token with an approver port in enforce. A file left set for an unused listener never stops startup."""
+    if config.client_token_file is None:
+        return
+    client = load_client_token(config.client_token_file).encode("utf-8")
+    approver_runs = config.mode == "enforce" and config.approver_port is not None
+    others = [("ACS_GATEWAY_ADMIN_TOKEN_FILE", config.admin_token_file if config.admin_port is not None else None),
+              ("ACS_GATEWAY_APPROVER_TOKEN_FILE", config.approver_token_file if approver_runs else None)]
+    for name, path in others:
+        if path is None:
+            continue
+        if hmac.compare_digest(client, load_secret_file(path, name).encode("utf-8")):
+            raise ValueError(f"ACS_GATEWAY_CLIENT_TOKEN_FILE and {name} hold the same token. The model port's "
+                             "clients must not hold a secret that governs the gateway, so give each its own token")
 
 
 def create_admin_app(gateway: Gateway, token: str) -> Starlette:
