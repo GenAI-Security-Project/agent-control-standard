@@ -31,7 +31,7 @@
     "derived_from": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Lineage edges. Array of provenance_ids this data was derived from."
+      "description": "Lineage edges. Array of provenance_ids this data was derived from. On a memoryContextRetrieval result, also the lineage_id of the stored entry the data came back from, because a provenance_id resolves only within its own session (Specification section 7.3)."
     }
   }
 }

@@ -30,7 +30,7 @@ The fact is bound by a signature or a hash chain and is verifiable without trust
 
 When a fact is summarized, written to memory, or passed across a boundary, its trust basis must travel with it. A derivation of asserted content is asserted; it does not become attested by being restated. This is the same rule that makes [Provenance](./provenance.md) lineage transitive, viewed from the trust side: dropping the basis at a boundary lets asserted content be treated as if it were attested, trust laundering up the spectrum.
 
-*Example.* An agent reads an untrusted email (asserted) and writes a summary to memory. If the summary keeps the email's basis, a second agent that retrieves it still treats it as asserted. If the basis is dropped, the memory reads like trusted recall.
+*Example.* An agent reads an untrusted email (asserted) and writes a summary to memory. If the summary keeps the email's basis, a second agent that retrieves it still treats it as asserted. If the basis is dropped, the memory reads like trusted recall. The wire carries the basis across the store through the write's `lineage`; see [Specification §7.3](../spec/instrument/specification.md#73-memory-lineage-across-sessions-normative).
 
 ## Availability in v0.1
 

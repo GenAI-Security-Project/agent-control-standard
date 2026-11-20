@@ -163,7 +163,9 @@ Schema: [`hooks/memory-context-retrieval.json`](https://genai-security-project.g
 
 Memory read — long-term, session-scoped, or user-scoped — into the agent's working context. Provenance: `origin: retrieved`, `source_id` identifies the memory store.
 
-**Payload:** memory entries pulled into context.
+**Payload:** `query`, `memory_store` (`name`, `scope`), and `results`. Each result carries `value`, `memory_id`, `stored_at`, `provenance`, and `lineage` (`lineage_id`, `origin_session_id`, the stored `provenance`, and the writer's `provenance_summary`). `memory_id` is required on every result when the scope is `user`, `tenant` or `global`.
+
+**Cross-session lineage.** An entry written in one session is read in another, and its trust basis has to survive the trip. The rules are normative in [Specification §7.3](./specification.md#73-memory-lineage-across-sessions-normative): the result's `provenance.derived_from` includes `lineage.lineage_id`, the Guardian classifies the entry by `lineage.provenance` rather than by the read's `origin: retrieved`, and a result without lineage is never treated as fresh or trusted.
 
 **Decision:** ALLOW / DENY / MODIFY.
 
@@ -175,7 +177,9 @@ Schema: [`hooks/memory-store.json`](https://genai-security-project.github.io/age
 
 Memory write. The standard sink for cross-session influence; mediating it prevents memory poisoning.
 
-**Payload:** entries to be written, target store, scope (`session`/`user`/`tenant`/`global`), TTL.
+**Payload:** `memory_id`, `memory_store` (`name`, `scope`: `session`/`user`/`tenant`/`global`), `operation` (`create`/`update`/`delete`), `content` (`value` and `provenance`), `lineage` (`lineage_id`, `origin_session_id`, and the writing session's `provenance_summary`), and `metadata`. `memory_id` is required when the scope is `user`, `tenant` or `global`.
+
+**Cross-session lineage.** The write is where the trust basis is captured. Under ACS-Provenance the write carries `lineage`, and the store keeps it with the entry so every later read can echo it. See [Specification §7.3](./specification.md#73-memory-lineage-across-sessions-normative).
 
 **Decision:** ALLOW / DENY / MODIFY.
 

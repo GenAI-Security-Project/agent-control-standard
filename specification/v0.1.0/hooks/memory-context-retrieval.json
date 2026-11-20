@@ -5,6 +5,24 @@
   "description": "Payload for the memoryContextRetrieval hook. Fires when the agent reads from persistent memory.",
   "type": "object",
   "required": ["results"],
+  "allOf": [
+    {
+      "if": {
+        "required": ["memory_store"],
+        "properties": {
+          "memory_store": {
+            "required": ["scope"],
+            "properties": { "scope": { "enum": ["user", "tenant", "global"] } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "results": { "items": { "required": ["value", "memory_id"] } }
+        }
+      }
+    }
+  ],
   "properties": {
     "query": {
       "type": "object",
@@ -25,13 +43,49 @@
       "items": {
         "type": "object",
         "required": ["value"],
+        "if": { "required": ["lineage"] },
+        "then": {
+          "properties": {
+            "provenance": {
+              "properties": { "origin": { "const": "retrieved" } }
+            }
+          }
+        },
         "properties": {
-          "memory_id": { "type": "string" },
+          "memory_id": {
+            "type": "string",
+            "description": "Identifier of the entry, as sent on the memoryStore write. REQUIRED on every result when memory_store.scope is user, tenant or global."
+          },
           "value": {},
           "stored_at": { "type": "string", "format": "date-time" },
           "provenance": {
             "$ref": "../provenance.json",
-            "description": "OPTIONAL in the base schema; REQUIRED on every result under provenance_producer: deterministic (ACS-Provenance). Validate against memory-context-retrieval.acs-provenance.json when the profile is claimed. See Specification section 7."
+            "description": "Provenance of this read: a new node with origin: retrieved and source_id naming the store. OPTIONAL in the base schema; REQUIRED on every result under provenance_producer: deterministic (ACS-Provenance). When the result carries lineage, origin MUST be retrieved and derived_from MUST include lineage.lineage_id. Validate against memory-context-retrieval.acs-provenance.json when the profile is claimed. See Specification section 7."
+          },
+          "lineage": {
+            "type": "object",
+            "description": "The lineage the entry had when it was stored, echoed from the memoryStore write so the trust basis crosses the session boundary. Set by deterministic framework code, never by the LLM. OPTIONAL in the base schema; REQUIRED on every result under ACS-Provenance. A result without it has no known basis; a Guardian MUST NOT treat it as fresh or trusted. See Specification section 7.3.",
+            "required": ["lineage_id", "origin_session_id"],
+            "properties": {
+              "lineage_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The lineage_id the memoryStore write carried."
+              },
+              "origin_session_id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The session that wrote the entry. The provenance_ids in lineage.provenance resolve in that session."
+              },
+              "provenance": {
+                "$ref": "../provenance.json",
+                "description": "The Provenance the content carried when it was stored (the write's content.provenance). This, not the origin of the read, is what a Guardian classifies the entry by."
+              },
+              "provenance_summary": {
+                "$ref": "../provenance-summary.json",
+                "description": "The writing session's provenance summary at write time, echoed from the write. The reading session's own summary starts from at least these origins for this entry."
+              }
+            }
           }
         }
       }

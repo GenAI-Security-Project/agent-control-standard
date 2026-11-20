@@ -5,10 +5,24 @@
   "description": "Payload for the memoryStore hook. Fires before the agent writes to persistent memory.",
   "type": "object",
   "required": ["content"],
+  "allOf": [
+    {
+      "if": {
+        "required": ["memory_store"],
+        "properties": {
+          "memory_store": {
+            "required": ["scope"],
+            "properties": { "scope": { "enum": ["user", "tenant", "global"] } }
+          }
+        }
+      },
+      "then": { "required": ["memory_id"] }
+    }
+  ],
   "properties": {
     "memory_id": {
       "type": "string",
-      "description": "Identifier for the memory entry being written or updated"
+      "description": "Identifier for the memory entry being written or updated. REQUIRED when memory_store.scope is user, tenant or global, so a later read in another session can be joined to this write. See Specification section 7.3."
     },
     "memory_store": {
       "type": "object",
@@ -29,6 +43,27 @@
         "provenance": {
           "$ref": "../provenance.json",
           "description": "OPTIONAL in the base schema; REQUIRED under provenance_producer: deterministic (ACS-Provenance). Validate against memory-store.acs-provenance.json when the profile is claimed. See Specification section 7."
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "description": "Cross-session lineage the stored entry carries, so a read in a later session can recover the facts the write was made on. Set by deterministic framework code, never by the LLM. OPTIONAL in the base schema; REQUIRED under provenance_producer: deterministic (ACS-Provenance). See Specification section 7.3.",
+      "required": ["lineage_id", "origin_session_id"],
+      "properties": {
+        "lineage_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier for this entry's lineage that survives the session, unlike provenance_id. Minted by the framework on each write and echoed by every memoryContextRetrieval result for the entry."
+        },
+        "origin_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The session that produced the content. The provenance_ids in content.provenance resolve in that session, so the pair (origin_session_id, provenance_id) addresses a node across sessions."
+        },
+        "provenance_summary": {
+          "$ref": "../provenance-summary.json",
+          "description": "The writing session's cumulative provenance summary at write time. A reading session starts from at least these origins for the entry. REQUIRED under ACS-Provenance."
         }
       }
     },
