@@ -53,6 +53,10 @@ A stream the gateway can't accept ends in enforce with one `error` event, `{"typ
 
 Shadow relays the upstream byte for byte, injects nothing, and applies no idle timeout or limit. After the final event it keeps relaying, whatever the chunking, until the upstream closes or sends nothing for one second, so a trailing `data: [DONE]` still goes out. An upstream that goes silent after the final event releases the session's lock a second later. One that keeps sending after it, keepalives included, holds the session's lock in shadow until it stops or closes, since shadow sets no overall deadline. Enforce sends nothing after the final event. It records a `shadow_decision` for each finished call on a task of its own, at most 256 waiting at once (past that each one is audited as `shadow_decisions_dropped`), and the stream's cleanup waits for those decisions before it releases the session's lock, so the session's steps stay in order. Cleanup stops the recorder on any exit before the lock is released. After an event it can't read, shadow relays the rest ungated.
 
+## Upgrading from release 0.1.5
+
+This release changes the gateway's configuration in a way that breaks an existing deployment. A gateway that sets `ACS_UPSTREAM_KEY_FILE` now refuses to start unless `ACS_GATEWAY_CLIENT_TOKEN_FILE` names a client token file as well. Before you upgrade, create that file (a regular file owned by the gateway's user, mode 0600 or 0400, at least 32 bytes, for example from `openssl rand -hex 32`) and give the token to every client of the model port. Each client sends it as `Authorization: Bearer <token>`, which an OpenAI client does when the token is its API key. Once the token is set, every request on the model port without it gets a 401 `invalid_api_key`, whatever the path or mode, and never reaches the upstream. A gateway without a key file is unchanged, because the client's own key still goes upstream. [The client token](#upstream-modes) has the details.
+
 ## Run it
 
 ```bash
@@ -69,7 +73,7 @@ ACS_LAB_MODE=enforce ACS_GUARDIAN_URL=http://127.0.0.1:8787/ \
 
 `acs-gateway` takes no command-line flags. It reads every setting from the environment, as [Environment](#environment) lists, and any argument, `--help` included, is ignored, so the command starts serving. A setting it can't use stops startup with a one-line message and exit code 2.
 
-Then point the client at `http://127.0.0.1:8080/v1`. The client's own `Authorization` header goes upstream unchanged, unless `ACS_UPSTREAM_KEY_FILE` names a key file (see [Upstream modes](#upstream-modes)).
+Then point the client at `http://127.0.0.1:8080/v1`. The client's own `Authorization` header goes upstream unchanged, unless `ACS_UPSTREAM_KEY_FILE` names a key file. A key file needs `ACS_GATEWAY_CLIENT_TOKEN_FILE`, and the client then sends that token instead of a model key (see [Upstream modes](#upstream-modes)).
 
 Run the tests with `uv run pytest -v`. They start the example Guardian and a fake model upstream on free localhost ports.
 
@@ -370,6 +374,7 @@ Each of these is the gateway's own choice where the specification is silent. Non
 | `ACS_MODEL_INPUT_LOG` names the model input log path | The lab bundle sets it |
 | Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | The gateway's own design for offline lab runs |
 | `ACS_UPSTREAM_KEY_SHARED=1` lets a key file serve a model port off loopback, off by default | The lab bundle sets it for live mode |
+| `ACS_GATEWAY_CLIENT_TOKEN_FILE` gates the model port with one bearer token, required with a key file | The gateway's own design. Without it, any caller that reaches the port spends the operator's model key |
 | Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | The gateway's own design for offline lab runs |
 | A session's trace id is its session_id, and its root span is `acs.session` | The trace mapping leaves the session attributes underspecified |
 | The session span is `invoke_agent` and the model call `chat <model>`, since the mapping names neither | The trace mapping names neither span, and GenAI backends key on `gen_ai.operation.name` |
