@@ -24,12 +24,12 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
 
 ```json
 {
-  "traceId": "13717f291e2368066d2fa3f2434ed2f6",
-  "spanId": "2a7efedbb7ee3881",
+  "traceId": "a2537e45b466e51a3937209d079d59e9",
+  "spanId": "27a07742699f3508",
   "name": "gen_ai.tool.call",
   "kind": 1,
-  "startTimeUnixNano": "1792534253716796645",
-  "endTimeUnixNano": "1792534253780000000",
+  "startTimeUnixNano": "1793284859067311142",
+  "endTimeUnixNano": "1793284859246000000",
   "attributes": [
     {
       "key": "acs.session.id",
@@ -47,6 +47,21 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
       "key": "gen_ai.tool.name",
       "value": {
         "stringValue": "Bash"
+      }
+    },
+    {
+      "key": "acs.provenance.ids",
+      "value": {
+        "arrayValue": {
+          "values": [
+            {
+              "stringValue": "prov-sample-1"
+            },
+            {
+              "stringValue": "prov-sample-2"
+            }
+          ]
+        }
       }
     },
     {
@@ -146,7 +161,7 @@ The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool
         }
       ],
       "name": "acs.decision",
-      "timeUnixNano": "1792534253780000000",
+      "timeUnixNano": "1793284859246000000",
       "droppedAttributesCount": 0
     }
   ],

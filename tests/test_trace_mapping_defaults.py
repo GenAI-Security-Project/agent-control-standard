@@ -191,3 +191,14 @@ def test_failure_classes_are_the_ones_decided_on_issue_37():
         "timeout", "unreachable", "malformed_response", "guardian_error",
         "observed_agent_error", "signature_invalid", "handshake_failure", "other",
     }
+
+
+def test_provenance_join_fields_match_issues_260_and_262():
+    otel_prov = json.loads((TRACE / "otel-mapping.json").read_text(encoding="utf-8"))["properties"]["provenance_attributes"]["properties"]
+    assert otel_prov["required"]["default"] == ["acs.provenance.ids", "acs.provenance.origin"]
+    assert otel_prov["optional"]["default"] == ["acs.provenance.source_id"]
+
+    ocsf_prov = json.loads((TRACE / "ocsf-mapping.json").read_text(encoding="utf-8"))["properties"]["provenance_metadata"]["properties"]
+    assert ocsf_prov["required_fields"]["default"] == ["provenance_id", "origin"]
+    assert ocsf_prov["optional_fields"]["default"] == ["source_id"]
+
