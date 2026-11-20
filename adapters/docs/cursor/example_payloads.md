@@ -122,7 +122,7 @@ Fields not in the public skill docs but present in real payloads: `cursor_versio
 
 ## Adapter response shapes
 
-Per-event output keys differ. See the [mapping table](../mapping.md#disposition-mapping) for the full matrix.
+Per-event output keys differ. See the [mapping table](mapping.md#disposition-mapping) for the full matrix.
 
 ### Allow (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`)
 

@@ -47,6 +47,9 @@ mkdir -p .claude && cp hosts/claude-code/settings.json .claude/settings.json
 claude
 ```
 
+Use Claude Code v2.1.295 or later. Older clients ignore the setting that makes a failed
+hook block the tool call, so a broken hook there lets the tool run with no decision.
+
 Ask Claude Code to run `echo rm -rf /`. AGT's stock destructive-pattern rule denies it,
 and the Inspector prints the denial as it crosses the wire, with the reason code
 `destructive_shell_command_blocked` and the policy reference `agt_stock`. Ask for
@@ -73,9 +76,12 @@ today.
 package. `bun test` passes without it. `bun run conformance`, `bun run watch:upstream`,
 and `bun run verify:pin` stop with an error until you install `trash-cli`.
 
-The Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
-is unreachable stops governing, silently, and the host proceeds as if nothing asked.
-Set `ACS_ON_DECISION_FAILURE=deny` on the Guardian before trusting it to fail closed.
+This Guardian's default failure posture is `proceed`. A Guardian that crashes, hangs, or
+is unreachable stops governing, and the host proceeds as if nothing asked. Only the
+shim's audit log records the bypass. Set `ACS_ON_DECISION_FAILURE=deny` on the Guardian
+before trusting it to fail closed. The project has decided that deny becomes the
+default ([D-036](https://owaspacs.org/docs/decisions/#d-036-default-the-failure-posture-to-deny)),
+and every other component release 0.1.5 ships already denies by default.
 
 ### Where this reference implementation stands
 
@@ -83,12 +89,10 @@ Two gaps sit above the fold on purpose, because a project that hides its own gap
 forfeits the right to be trusted on the rest of it.
 
 The wire is not authenticated. ACS-Core requires a baseline HMAC-SHA256 signature on
-every envelope. The reference Guardian implements none of it, so anything that can reach
-the port can read decisions and cause decisions. That gap is tracked as
-[issue #70](https://github.com/GenAI-Security-Project/agent-control-standard/issues/70).
-The default failure posture is fail-open, covered above and tracked as
-[issue #32](https://github.com/GenAI-Security-Project/agent-control-standard/issues/32)
-and [issue #37](https://github.com/GenAI-Security-Project/agent-control-standard/issues/37).
+every envelope. The TypeScript AGT Guardian implements none of it, so anything that can
+reach the port can read decisions and cause decisions. The Go Guardian and the Python
+example Guardian, both listed below, sign every envelope. The default failure posture
+of this tree is fail-open, as covered above.
 
 The defensible claim for this tree is narrow: one Guardian, two agent clients, one wire
 contract, plus a published matrix of what ACS v0.1.0 can and cannot express of AGT
@@ -105,6 +109,25 @@ When behavior does not match the specification, open an issue at
 [GenAI-Security-Project/agent-control-standard/issues](https://github.com/GenAI-Security-Project/agent-control-standard/issues)
 with four things: what was run, what was expected, the specification section that set
 that expectation, and what happened instead.
+
+## Try the rest of release 0.1.5
+
+Release 0.1.5 implements specification v0.1.0 and ships more than the AGT tree. Each
+part below has its own README with the commands, and the
+[Run a Guardian](https://owaspacs.org/docs/topics/reference-implementations/) page on
+the site maps how they fit together.
+
+| What | Where | What it gives you |
+|---|---|---|
+| Reference adapters | [`adapters/`](adapters/README.md) | Claude Code, Cursor, and NVIDIA NAT 1.7.0 connected to any Guardian through each host's own hook configuration, with no agent code changes. Fail closed by default |
+| Python example Guardian | [`adapters/docs/guardian/`](adapters/docs/guardian/README.md) | A small teaching Guardian, `acs-example-guardian`, with an opt-in OPA policy backend and opt-in ML-DSA-65 decision signing |
+| Go Guardian | [`reference-implementations/agt-go/`](reference-implementations/agt-go/README.md) | The same AGT policies through the AGT runtime, with signed traffic, usable as a Go library, with Codex and OpenCode examples |
+| Gateway | [`adapters/gateway/`](adapters/gateway/README.md) | Governs any OpenAI Responses API client you can't modify. Set `OPENAI_BASE_URL`, run the gateway in shadow or enforce mode (the default is off), and change nothing else |
+| `acs-verify` | [`adapters/docs/acs-verify.md`](adapters/docs/acs-verify.md) | Checks a session transcript offline: the audit chain, every decision signature, and request binding |
+
+ML-DSA-65 signing, the OPA backend, and parts of the gateway are lab conventions. They
+are off by default, make no conformance claim, and may change when the specification
+settles each question. Each README's "Lab conventions" section names them.
 
 ## A hook, on the wire
 
@@ -253,7 +276,7 @@ and `modify`.
 
 ACS organizes its requirements into three pillars. **Instrument** is the hook and
 disposition machinery already shown. **Trace** records every hook and every decision as
-an OpenTelemetry span and an OCSF event, so a security team's existing tooling reads an
+an OpenTelemetry span, an OCSF event, or both, so a security team's existing tooling reads an
 ACS audit trail without new plumbing. **Inspect** produces the AgBOM, a live inventory of
 an agent's models, tools, and dependencies, serialized as CycloneDX, SPDX, or SWID on
 request.
@@ -277,17 +300,20 @@ A reader who only wants to know whether ACS fits their problem can stop here.
 Running the reference implementation is the ask that needs no maintainer decision
 first. These three do, in the order they matter most right now.
 
-### Port it: Python, Go, Rust, Codex
+### Port it to another language
 
-One Guardian exists, written in TypeScript against Bun. Python, Go, Rust, and a Codex
-host shim are open and unclaimed. "Done" for a port means it passes the same
-conformance harness the Bun tree does, `bun run conformance`, which prints the mapping
-table, the coverage matrix, and the trace rows against a live Guardian over HTTP. The
-harness measures the wire, not the language behind it.
+Three Guardians ship in release 0.1.5: the TypeScript AGT Guardian, the Go Guardian,
+which runs the same AGT policies, and the Python example Guardian, a teaching artifact.
+Ports to other languages, Rust among them, are welcome. The Go Guardian shows the bar:
+its answers match the TypeScript Guardian's on 49 recorded sessions, and
+[its conformance map](reference-implementations/agt-go/docs/conformance.md) ties each
+ACS-Core item to its tests. The TypeScript tree's harness, `bun run conformance`, prints
+the mapping table, the coverage matrix, and the trace rows against a live Guardian over
+HTTP. Both measure the wire, not the language behind it.
 
 ### Harden it for production
 
-Two gaps are named and open, not vague. The Guardian writes its envelope and
+Two gaps in the TypeScript tree are named and open, not vague. The Guardian writes its envelope and
 session-context logs, and the host adapter writes its audit log, as synchronous file
 appends on the decision path, with no batching. Trace export is
 partial: set `ACS_OTEL_FILE` or `ACS_OTEL_ENDPOINT` and the Guardian exports OTLP spans
@@ -314,9 +340,13 @@ specification references down into rather than restates. The rules a deployment'
 conformance claim has to satisfy are in
 [Conformance Profiles](docs/spec/conformance.md), which also says plainly that nobody
 verifies a self-declared claim in v0.1.0. The requirement-by-requirement ledger the
-reference implementation measures itself against is the table in
-[its own README](reference-implementations/agt/README.md#what-this-project-is-and-is-not).
-A second implementation would need the same kind of table.
+TypeScript reference implementation measures itself against is the table in
+[its own README](reference-implementations/agt/README.md#what-this-project-is-and-is-not),
+and the Go Guardian keeps the same kind of table in its
+[conformance map](reference-implementations/agt-go/docs/conformance.md). The
+[decision log](https://owaspacs.org/docs/decisions/) records what the project has decided
+and why. Read it before you treat a gap between the code and the specification as a bug,
+because many such gaps are decisions that the specification text does not reflect yet.
 
 ## Contributing right now
 
@@ -363,9 +393,11 @@ taxonomy, and the sign-off every commit needs. Start there, not here.
 
 ## What's next
 
-Specification v0.1.0 ships today. Every tagged release is listed on the
-[tags page](https://github.com/GenAI-Security-Project/agent-control-standard/tags). The
-next specification release, v0.2.0, targets March 2027. A v1.0 date has not been set.
+Release 0.1.5 is current, and it implements specification v0.1.0. The release number
+changes with each release, and the specification version names the schema namespace.
+[CHANGELOG.md](./CHANGELOG.md) says what each release changed, and every tagged release is
+listed on the [tags page](https://github.com/GenAI-Security-Project/agent-control-standard/tags).
+The next specification release, v0.2.0, targets March 2027. A v1.0 date has not been set.
 
 What is in focus right now lives in one place, the Current Priority Scope in
 [CONTRIBUTING.md](./CONTRIBUTING.md).
@@ -373,6 +405,11 @@ What is in focus right now lives in one place, the Current Priority Scope in
 ## Where to go next
 
 - [AGT reference implementation](reference-implementations/agt/README.md): the deep tutorial behind the walkthrough above, the Guardian, both host shims, and the full limits list.
+- [Reference adapters](adapters/README.md): Claude Code, Cursor, and NVIDIA NAT wired to a Guardian by configuration, plus the Python example Guardian.
+- [Go Guardian](reference-implementations/agt-go/README.md): AGT policy with signed traffic, as a server or a Go library.
+- [Gateway](adapters/gateway/README.md): governs an OpenAI Responses API client without changing it.
+- [acs-verify](adapters/docs/acs-verify.md): checks a signed session transcript offline.
+- [Decision log](https://owaspacs.org/docs/decisions/): what the project has decided and why.
 - [Documentation site](https://owaspacs.org/docs/): the specification, concepts, and topic guides.
 - [Specification](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification): the JSON Schemas and normative prose in this repository.
 - [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions): questions and design conversation.

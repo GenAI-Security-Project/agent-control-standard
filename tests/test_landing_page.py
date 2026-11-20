@@ -27,7 +27,8 @@ def page() -> str:
 
 def test_the_hero_diagram_is_present(page):
     assert "<svg" in page
-    for label in ["LLM", "Tool", "Output", "Sub", "Memory", "Code", "ACS"]:
+    # Each node names an ACS hook, and the center names the Guardian that answers them.
+    for label in ["User", "Tool", "Agent", "Sub", "Memory", "Skill", "Guardian"]:
         assert label in page
 
 

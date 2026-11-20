@@ -24,21 +24,21 @@ or a comment, this wins.
 **In focus.** Work that feeds the runnable Guardian, the interoperability benchmark, or
 the conformance evidence that makes either credible:
 
-- The Claude Code, Cursor, and NVIDIA NAT adapters in PR #22
+- The Claude Code, Cursor, and NVIDIA NAT adapters in `adapters/`
 - The AGT reference implementation in `reference-implementations/agt/`
-- Ports of that reference implementation to other runtimes: Python, Go, Rust, Codex
+- Ports of that reference implementation to other runtimes: the Go Guardian in `reference-implementations/agt-go/`, and Python, Rust, or Codex
 - Production-hardening it, including span batching and OpenTelemetry collection
-- Resolving the fail-open default in issue #32
-- Conformance claims against the ACS-Core claim template, issues #106 and #136
-- The requirement ledger and behavioral tests in issue #33
-- Closing the Cursor file-read gap in issue #212
+- Bringing the specification text in line with the default-deny decision ([D-036](https://owaspacs.org/docs/decisions/#d-036-default-the-failure-posture-to-deny))
+- Conformance claims against the [ACS-Core claim template](docs/spec/conformance-claim-template.md)
+- A requirement-by-requirement ledger and behavioral tests for ACS-Core
+- Closing the Cursor adapter's file-read gap
 - Conformance and dogfooding reports that document where ACS fails in practice
 - The public site, when a change helps an evaluator find, install, or run the Guardian
 
 **Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
 binding, and AgBOM federation across A2A peers. Negative conformance vectors sit here
-too, in #53.
+too.
 
 One distinction, because it will otherwise get argued in a pull request. *Batching
 semantics in the specification* is deferred. *Batching in the reference implementation*
@@ -129,7 +129,32 @@ uv sync --locked --extra nat --group test
 uv run python run_conformance.py claude cursor nat  # shared checks + those adapter suites
 ```
 
-Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. The same workflow also builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). See `adapters/README.md` for what the suite proves and its scope.
+Without the NAT runtime, sync without `--extra nat` and leave `nat` off the command. The command reports passes, skips, and failures separately, and fails on any failure or unexpected skip. See `adapters/README.md` for what the suite proves and its scope.
+
+`run_conformance.py` is not every adapter check. The same workflow also runs the example Guardian's suite (OPA backend, decision signing, `acs-verify`), the import-boundary check, the ML-DSA-65 and Go interop check, and the gateway's own suite, and it builds the package and checks the installed wheel outside the repository (`adapters/scripts/check_wheel.py`). Run the ones that cover your change:
+
+```bash
+cd adapters
+uv run pytest tests/guardian -q                     # the example Guardian, OPA, signing, acs-verify
+uv run lint-imports                                 # integrations -> client -> core
+cd gateway && uv sync --locked && uv run pytest -v  # the gateway, its own uv project
+```
+
+The interop check needs the `pqc` extra and Go 1.27 or later. `adapters/README.md` lists the full set under "Run the checks".
+
+For changes under `reference-implementations/`, each Guardian has its own toolchain and its own workflow:
+
+```bash
+cd reference-implementations/agt-go   # the Go Guardian
+make setup                            # once: builds AGT's runtime library, fetches the pinned OPA
+make check                            # the full quality gate, the shared conformance harness included
+
+cd reference-implementations/agt      # the TypeScript Guardian
+bun install --frozen-lockfile
+bun test
+```
+
+The [Go Guardian README](./reference-implementations/agt-go/README.md) and the [TypeScript Guardian README](./reference-implementations/agt/README.md) list the toolchain versions each one needs.
 
 For prose contributions, follow the [editorial style guide](./STYLE.md). For schema contributions, validate `specification/v0.1.0/acs_schema.json` against the JSON Schema spec before submitting.
 
@@ -280,9 +305,13 @@ A release is tagged automatically. When a change to `version.txt` reaches `main`
 `pyproject.toml`, and `uv.lock` disagree, so a mismatched release fails loudly instead of
 shipping.
 
+The release version also lives in four more files that the workflow does not check:
+`adapters/pyproject.toml`, `adapters/uv.lock`, `adapters/gateway/pyproject.toml`, and
+`adapters/gateway/uv.lock`. A release changes all seven together, so check the four by hand.
+
 ## Reporting Security Issues
 
-**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) sets the response times, and we coordinate a fix and disclosure timeline with you.
+**Do not file public issues for security vulnerabilities.** Use GitHub's [private vulnerability reporting](https://github.com/GenAI-Security-Project/agent-control-standard/security/advisories/new) to disclose privately. [SECURITY.md](./SECURITY.md) says how quickly we aim to respond, and we coordinate a fix and disclosure timeline with you.
 
 ## Developer's Certificate of Origin 1.1
 
@@ -308,16 +337,6 @@ By making a contribution to this project, I certify that:
 By contributing, you agree that your contributions will be licensed under the license that governs the file you touch. Code and schemas fall under the [Apache License 2.0](./LICENSE). Documentation falls under [CC BY-SA 4.0](./LICENSE-DOCS). See [LICENSING.md](./LICENSING.md) for the scope map.
 
 This guide is based on [github-contributing](https://raw.githubusercontent.com/standard/.github/refs/heads/master/CONTRIBUTING.md).
-
-## Before the first Pages deploy
-
-`.github/workflows/deploy-pages.yml` and `.github/workflows/monitor-pages.yml` both
-assume GitHub Pages is already enabled for this repository. Until it is, the deploy fails
-at the Configure Pages step and the monitor fails on its schedule.
-
-Enabling it is a one-time repository setting, done by an administrator: Settings, then
-Pages, then set Build and deployment Source to GitHub Actions. Do this before merging any
-change that turns those workflows on, not after.
 
 ## Community
 

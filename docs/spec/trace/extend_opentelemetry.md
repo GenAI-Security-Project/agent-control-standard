@@ -18,7 +18,7 @@ This hierarchy is deterministic — implementations that follow the mapping prod
 
 ## Example: a denied tool call
 
-This is one span the reference Guardian exported, a `steps/toolCallRequest` the stock policy denied, copied from the committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl). Every value in it is synthetic. It's the OTLP/JSON shape the exporter writes, so attribute values are typed (`stringValue`, `arrayValue`).
+This is one span the TypeScript reference Guardian (AGT) exported, a `steps/toolCallRequest` the stock policy denied, copied from the committed [sample trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/samples/trace/acs-trace-sample.jsonl). Every value in it is synthetic. It's the OTLP/JSON shape the exporter writes, so attribute values are typed (`stringValue`, `arrayValue`).
 
 The span carries the join pair (`acs.session.id` and `acs.request_id`), the tool name, and the two Provenance columns. `acs.provenance.source_id` has `""` where the second object has no `source_id`. The decision rides on the span as the `acs.decision` event, with the verdict, the reasoning, the reason codes and the three policy arrays. `acs.policy.versions` is `[""]`, because this Guardian doesn't send a policy version.
 
@@ -164,7 +164,7 @@ To produce a trace like this yourself, follow [Produce a trace](https://github.c
 
 ## How the reference Guardian produces a trace
 
-The span above is real output from the reference Guardian. This section explains the pipeline behind it, so the span hierarchy and the decision events on this page map onto processes and files you can inspect. The [reference Guardian](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/packages/guardian/README.md#export-traces) exports spans for the two hook methods it evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It makes no ACS-Trace conformance claim. The commands to run it live in [Produce a trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/README.md#produce-a-trace), and this section doesn't repeat them.
+The span above is real output from the TypeScript reference Guardian (AGT) in `reference-implementations/agt/`, and this section covers that Guardian only. Release 0.1.5 also ships a Go Guardian and a Python example Guardian, which export no spans, and the gateway, which exports its own trace ([How the gateway produces a trace](#how-the-gateway-produces-a-trace)). This section explains the AGT pipeline, so the span hierarchy and the decision events on this page map onto processes and files you can inspect. The [reference Guardian](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/packages/guardian/README.md#export-traces) exports spans for the two hook methods it evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It makes no ACS-Trace conformance claim. The commands to run it live in [Produce a trace](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/README.md#produce-a-trace), and this section doesn't repeat them.
 
 ### Two streams, joined by a reader
 
@@ -172,7 +172,7 @@ No single process sees every outcome of a step. The Guardian sees each request i
 
 The host sees what the Guardian can't. An unreachable Guardian has nothing to record. A Guardian whose answer arrives after the host stopped waiting can't see what the host did in the meantime. The host adapter records both cases in its own audit log. A converter, `audit-to-otlp.ts`, turns that log into spans of the same OTLP/JSON shape, each with an `acs.decision.failure` event whose `acs.failure.reported_by` is `observed_agent`.
 
-A reader joins the two streams on `acs.session.id` plus `acs.request_id`, the pair every step span carries. The reference exporter makes each step span a root span, with no `acs.session` or `acs.turn` parent, so the join runs on those attributes, not on `traceId`.
+A reader joins the two streams on `acs.session.id` plus `acs.request_id`, the pair every step span carries. The AGT exporter makes each step span a root span, with no `acs.session` or `acs.turn` parent, so the join runs on those attributes, not on `traceId`.
 
 In the diagram, look for the two separate paths out of the host shim. They meet only at the reader.
 
@@ -245,6 +245,16 @@ The committed [sample trace](https://github.com/GenAI-Security-Project/agent-con
 `service.name` tells you which writer claims a span. It isn't authentication. Any process running as the same user, the observed agent included, can write the trace files, the audit log, or the collector's loopback port. In a container, other containers on the same network can reach that port too. A loopback address isn't authentication either.
 
 `acs.failure.reported_by` is the emitter's own claim too. The trace is a record of what each party says happened, not tamper-evident evidence. Treat every value in it as untrusted data, as [Trace Events](./events.md) requires.
+
+## How the gateway produces a trace
+
+The OpenAI Responses API gateway in `adapters/gateway/` exports its own trace when `OTEL_EXPORTER_OTLP_ENDPOINT` is set. It sends spans over OTLP HTTP straight to Jaeger, with no collector between them. Unset, tracing is off. Three things differ from the AGT pipeline above:
+
+- **One trace per session.** An `acs.session` span covers the handshake and `steps/sessionStart`, and the session's step spans sit under it. The trace id is the `session_id` with its dashes removed, so a `session_id` from an audit line finds the trace.
+- **The Observed Agent's side.** The gateway is the Observed Agent, so its step spans carry the verdict it received as an `acs.decision` event. A step with no usable decision carries `acs.decision.failure` with `acs.failure.posture` set to `fail_closed` and `acs.failure.reported_by` set to `observed_agent`.
+- **Extra names.** Each model call gets a `chat <model>` span, and every span carries `gen_ai.operation.name`. Names under `acs.lab.*`, such as the `acs.lab.ask` span that covers an ASK hold and the `acs.lab.shadow_decision` attribute in shadow mode, are lab conventions outside `otel-mapping.json`. A reader that follows the mapping can ignore them.
+
+The gateway's spans never carry a request or response body, a tool's arguments or output, or the Guardian's reasoning. [Traces](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/gateway/README.md#traces) in the gateway README lists every span and shows how to run Jaeger.
 
 ## Provenance attributes
 

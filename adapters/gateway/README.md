@@ -1,6 +1,6 @@
 # acs-gateway
 
-Version 0.1.0. Owner: Rock Lambros (@rocklambros). Built for issue #577, [RefImpl] An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes.
+Version 0.1.5. An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes.
 
 An agent you can't modify can still be governed. Point its `OPENAI_BASE_URL` at this gateway, change nothing else, and every tool call it receives has already passed an ACS Guardian. The gateway sits at the model boundary of an OpenAI Responses API client and acts as that client's ACS Observed Agent.
 
@@ -47,7 +47,7 @@ On the answer side, enforce never relays an upstream byte. Every event the clien
 - The final event is honored whenever it arrives. On `response.completed` the buffered items are gated and built. On `response.incomplete` or `response.failed` they are dropped and the neutral line rule applies. The upstream's own `error` event is rebuilt from its code, message and param, and nothing buffered goes out.
 - `response.created`, `response.in_progress` and the final event are rebuilt with only what a client needs: `id`, `object`, `created_at`, `status`, `model`, the token counts of `usage`, `error` as a code and a message, and `output` set to exactly the items sent so far, so the final response matches the stream. `tools`, `metadata`, `instructions`, `text`, `reasoning` and every other Response field the upstream sends are dropped.
 
-Text therefore reaches the client as the model writes it, before any call is decided, and calls follow at the end. The gateway numbers every event it sends from its own counter, 0, 1, 2 and up, and `output_index` is its own dense count. FinBot reads only `response.output_text.delta` and `response.output_item.done` (PREMORTEM P21), and a client that builds the response from events, as the OpenAI SDK's `responses.stream()` does, always gets each item's full event set. An upstream that interleaves items or sends no `sequence_number` streams the same way.
+Text therefore reaches the client as the model writes it, before any call is decided, and calls follow at the end. The gateway numbers every event it sends from its own counter, 0, 1, 2 and up, and `output_index` is its own dense count. FinBot reads only `response.output_text.delta` and `response.output_item.done`, and a client that builds the response from events, as the OpenAI SDK's `responses.stream()` does, always gets each item's full event set. An upstream that interleaves items or sends no `sequence_number` streams the same way.
 
 A stream the gateway can't accept ends in enforce with one `error` event, `{"type": "error", "code": "upstream_unreadable", ...}`, audited as `upstream_error` with a `detail`. That covers an event that isn't JSON or repeats a key, an unknown event type, an event outside a message's allowlist, an event after its item's done, a repeated `output_index` or item id, a lifecycle or final event of the wrong shape, a message without its done, an upstream that stops before its final event or fails mid-stream, more than `ACS_GATEWAY_MAX_BODY_BYTES` kept at once, an upstream silent for longer than `ACS_GATEWAY_STREAM_IDLE_TIMEOUT_S` (cause `upstream_idle_timeout`), and a stream running past `ACS_GATEWAY_STREAM_DEADLINE_S` (cause `upstream_deadline`). An upstream that answers a streamed request with a whole JSON answer, or with an error status, gets the same treatment as a request that isn't streamed.
 
@@ -66,6 +66,8 @@ uv run acs-example-guardian --port 8787 &
 ACS_LAB_MODE=enforce ACS_GUARDIAN_URL=http://127.0.0.1:8787/ \
   ACS_UPSTREAM_URL=https://api.openai.com/v1 uv run acs-gateway
 ```
+
+`acs-gateway` takes no command-line flags. It reads every setting from the environment, as [Environment](#environment) lists, and any argument, `--help` included, is ignored, so the command starts serving. A setting it can't use stops startup with a one-line message and exit code 2.
 
 Then point the client at `http://127.0.0.1:8080/v1`. The client's own `Authorization` header goes upstream unchanged, unless `ACS_UPSTREAM_KEY_FILE` names a key file (see [Upstream modes](#upstream-modes)).
 
@@ -97,7 +99,7 @@ Shadow mode isn't decision honoring under specification section 6.4. It shows wh
 
 **The model key.** In live and capture, `ACS_UPSTREAM_KEY_FILE` names a file holding the real model key. The gateway replaces the client's `Authorization` header with `Bearer <key>` on the upstream request only, so the client (FinBot sends `lab-dummy`) never holds the key. The file must be a regular file, not a symlink, mode 0600 or 0400, owned by the gateway's uid, one key on one line, and outside any git work tree. The key never reaches a recording, the model input log, an audit line or an error message. Replay refuses a key file. The model port asks callers for no credential, so with a key file anyone who reaches the port spends the key: every local user, and every container that shares the gateway's network namespace. The gateway therefore refuses to start with a key file unless `ACS_GATEWAY_HOST` is a loopback address, or `ACS_UPSTREAM_KEY_SHARED=1` says the operator accepts that. Set it only on a container network where only the lab's containers and the host itself can reach the port, as in the lab bundle. The gateway then writes one startup line saying every client that can reach the model port spends the key.
 
-**Recordings.** Each line is one JSON object (A.8):
+**Recordings.** Each line is one JSON object:
 
 ```json
 {"scenario": "s1", "match": "Pay\\ vendor\\ 7", "turn": 1, "step": 1, "branch": "a,a", "stream": false, "ids": ["user:1", "time:1"], "response": {"id": "resp_...", "output": ["..."]}}
@@ -170,7 +172,7 @@ The Guardian's decision on that resend is what the gateway applies after an appr
 
 Everything else ends the hold with a deny and no resend:
 
-- A rejection denies at once. Its resend could change nothing, so the Guardian learns of it only from the gateway's audit line until issue #175 defines how an answer reaches it.
+- A rejection denies at once. Its resend could change nothing, so the Guardian learns of it only from the gateway's audit line. The specification defines no way for an approver's answer to reach the Guardian.
 - No answer before the deadline.
 - The client disconnecting, during the wait or the approved resend. Both paths read one disconnect signal, set the moment the request's receive channel reports the disconnect. After an approval the gateway waits up to 100 ms for a disconnect already on its way, so a click that lands just after the client left sends nothing.
 - An epoch bump or a retired session during the wait, since the call's session is gone.
@@ -210,7 +212,7 @@ One gap remains by design. When an epoch bump lands between a turn's calls and t
 {"dir": "resp", "envelope": {"jsonrpc": "2.0", "result": {"decision": "deny", "...": "..."}}}
 ```
 
-The lines come from acs.client's `on_wire` hook (issue #576), so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`, and ends with `steps/sessionEnd` once the gateway drops the session. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
+The lines come from acs.client's `on_wire` hook, so each envelope is written exactly once, as it went over the wire. The file starts with the ClientHello and the Guardian's ServerHello, then `steps/sessionStart`, and ends with `steps/sessionEnd` once the gateway drops the session. Each request line is written before the request is sent, so the file holds the chain in the order the Guardian built it. Every answer that comes back as a JSON-RPC envelope is written verbatim, a refusal, an error, or a tampered or mis-bound answer included, so a verifier judges the answer itself.
 
 Any other body that decodes to a JSON object, whatever its HTTP status, is written verbatim too, with `"cause"` set to how acs.client settled it. A 429's `{"detail": ...}` gets `http_429_error`, and a 200 that isn't a JSON-RPC answer gets `malformed_response`. When a request went out and no JSON object came back (a timeout, a lost connection, or a body that isn't JSON or isn't an object), its response line is `{"dir": "resp", "envelope": null, "cause": "<cause>"}`. The ClientHello follows the same rules. A request acs.client refused before sending, such as one over the Guardian's body cap, leaves no line, since nothing reached the Guardian.
 
@@ -220,7 +222,7 @@ An answer that arrived after the deadline keeps its envelope, since the Guardian
 {"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}
 ```
 
-`discards` names the request whose answer, on the line before, the gateway did not carry out. This cause line is a lab convention until issue #577 settles it. When the discards line itself can't be written, the step still denies as `decision_timeout` and the session retires (`session_retired` with cause `discard_unwritten`), so no later line follows the unmarked answer, sessionEnd included.
+`discards` names the request whose answer, on the line before, the gateway did not carry out. This cause line is the gateway's own lab convention, since the specification defines no transcript format. When the discards line itself can't be written, the step still denies as `decision_timeout` and the session retires (`session_retired` with cause `discard_unwritten`), so no later line follows the unmarked answer, sessionEnd included.
 
 **Audit.** The gateway writes audit lines through acs.client `audit_event`, as `ACS_AUDIT {json}` on stderr and in `ACS_AUDIT_FILE`. The `acs_audit_event` field names the event:
 
@@ -261,9 +263,9 @@ An answer that arrived after the deadline keeps its envelope, since the Guardian
 
 ## Traces
 
-Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the gateway sends OpenTelemetry spans over OTLP HTTP to `<endpoint>/v1/traces`, or to the endpoint as given when it already ends in `/v1/traces`. Unset, tracing is off: no exporter, no network call, and no OpenTelemetry module loads. Spans go straight to Jaeger's OTLP port with no collector between them, because a collector on the lab's pass path was one more thing to fail (PREMORTEM P22). That replaces the collector configuration issue #582 first asked for.
+Set `OTEL_EXPORTER_OTLP_ENDPOINT` and the gateway sends OpenTelemetry spans over OTLP HTTP to `<endpoint>/v1/traces`, or to the endpoint as given when it already ends in `/v1/traces`. Unset, tracing is off: no exporter, no network call, and no OpenTelemetry module loads. Spans go straight to Jaeger's OTLP port with no collector between them, because a collector on the lab's path was one more thing to fail.
 
-Each ACS session is one trace, and its trace id is the session_id with the dashes removed, so the `session_id` in an audit line or a transcript file name finds the trace in Jaeger. Every span carries `gen_ai.operation.name`, which GenAI backends key on (issue #520):
+Each ACS session is one trace, and its trace id is the session_id with the dashes removed, so the `session_id` in an audit line or a transcript file name finds the trace in Jaeger. Every span carries `gen_ai.operation.name`, which GenAI backends key on:
 
 | Span | `gen_ai.operation.name` | What it covers |
 |---|---|---|
@@ -310,7 +312,7 @@ Then open `http://127.0.0.1:16686` and pick the `acs-gateway` service, or paste 
 | `ACS_SESSION_STATE_DIR`, `ACS_HANDSHAKE_CACHE` | `<state dir>/sessions`, `<state dir>/handshakes` | acs.client's session and handshake records. A path under the home directory is refused |
 | `ACS_TRANSCRIPT_DIR` | `<state dir>/transcripts` | Where transcripts go |
 | `ACS_AUDIT_FILE` | None | Where audit lines go, besides stderr |
-| `ACS_RESPONSE_ALGORITHMS` | Unset | The algorithm every Guardian answer must be signed with. Unset or `HMAC-SHA256` verifies HMAC under the session key, as before. `ML-DSA-65` verifies every answer, the ServerHello included, under the key the key document holds for the pinned key_id, never a key the answer names (issue #308, RFC 8725 section 3.1). It takes exactly one value. Needs `uv sync --extra pqc`. Read once at startup in shadow and enforce, and any problem stops the gateway. Lab convention until issue #316 |
+| `ACS_RESPONSE_ALGORITHMS` | Unset | The algorithm every Guardian answer must be signed with. Unset or `HMAC-SHA256` verifies HMAC under the session key, as before. `ML-DSA-65` verifies every answer, the ServerHello included, under the key the key document holds for the pinned key_id, never a key the answer names (RFC 8725 section 3.1). It takes exactly one value. Needs `uv sync --extra pqc`. Read once at startup in shadow and enforce, and any problem stops the gateway. Lab convention, because the specification doesn't yet say which algorithms a verifier accepts |
 | `ACS_GUARDIAN_KEYS` | None | The Guardian's key document (`acs-lab-keys/1`), required with `ML-DSA-65`. Not writable by group or others, and not a symlink |
 | `ACS_GUARDIAN_KEY_ID` | None | The key_id to pin. Unset, the document must hold exactly one live key |
 | `ACS_GUARDIAN_KEY_FINGERPRINT` | None | When set, the pinned key's `sha256:` fingerprint must match it |
@@ -339,54 +341,32 @@ The gateway ignores `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE` and `ACS_DISABLED`
 
 ## Lab conventions
 
-Each of these is the gateway's own choice where the specification is silent or a later item takes over. None changes the Claude Code, Cursor or NAT adapters.
+Each of these is the gateway's own choice where the specification is silent. None changes the Claude Code, Cursor or NAT adapters.
 
-| Convention | Settled by |
+| Convention | Why |
 |---|---|
-| The three modes and `ACS_LAB_MODE` | Issue #577. Shadow isn't decision honoring under section 6.4 |
-| A decision after the timeout is discarded, and the step is audited as `decision_timeout` | Issue #435 |
-| The gateway denies on any decision failure whatever the ServerHello says, a missing posture included | D-045 and issue #32 |
-| The neutral line stands in for a removed call or a denied output | Issue #577 |
-| DEFER denies, and ASK denies unless the approver page is on | Issue #14 for DEFER. Issue #581 adds the page |
-| The approver's answer reaches the Guardian as the step resent with `x_acs_lab_ask_answer` in its payload, marked `assurance: declared` | Issue #175 |
-| One ASK budget per request, from its arrival, capped at 240 seconds and covering the resend | Issue #581 and PREMORTEM P26 |
-| A rejection is not resent, and only a human approver with options approve and reject is held | Issue #175 |
-| An SSE comment line every 15 seconds while a streamed call is held | Issue #578. The specification defers streaming semantics |
-| In enforce a streamed answer is built by the gateway: message text streams live from an allowlist, every other item is built after the final event from its output, and the gateway owns `sequence_number` and `output_index` | Issue #578. The specification defers streaming semantics, and PREMORTEM P21 allows gateway numbering |
-| Responses are verified with acs.client's HMAC-SHA256 check by default. `ACS_RESPONSE_ALGORITHMS=ML-DSA-65` verifies every answer by key_id from the key document named by `ACS_GUARDIAN_KEYS`, and takes exactly one algorithm | Issue #316 for verifier rules, issue #460 for the key document, issue #576 |
-| A withheld answer that was written without a cause is followed by `{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}` | Issue #577 |
-| An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and acs.client would rewrite it before signing, so the Guardian would judge other bytes than the gateway gated | Issue #577 |
-| In shadow and enforce, `tool.version` on `steps/toolCallRequest` carries `sha256:` plus the hex SHA-256 of the RFC 8785 (JCS) form of the request's declaration of that function. A streamed call carries it as a whole answer's call does, and the resend after an approved ASK repeats the asked payload, `tool.version` included, so a pin holds on every path. `steps/toolCallResult` carries a digest only from the recorded call it answers, so a call the session never gated can't borrow a pinned tool's digest. The result of a call the session has no record of, fabricated by the client or gated before an epoch bump, an eviction or a retirement, carries no `tool.version`, and a pin policy denies it. That is the cost of a reset mid-run, and the lab resets between runs. A.10's field list now includes `strict`, so the digest covers `name`, `description`, `parameters` and `strict`. Each field is hashed as the client sent it, with no default filled in. A client that starts sending a default explicitly, such as `"strict": false`, changes its digests, so `lab pins` must be recomputed from the same client. A policy can pin the digest, and one changed character in a description or schema changes it. A call_id has one life. A model reply that repeats a call_id under the same digest reuses its recorded outcome. A repeat under another digest is withheld with no Guardian step, like a repeat that says something else: enforce removes it and shadow delivers it. Both audit `call_id_reused`, whose `cause` lists every reason (`content_changed`, `digest_changed`), and the decision line repeats them as `reuse_causes`. A call removed for any reason, a transient failure included, is never delivered again under a changed declaration, and a client that drops `tools` mid-conversation has its repeated calls refused the same way, since an undeclared function has no digest. Both fail closed. A new call under the changed declaration goes to the Guardian with the new digest. The client asserts the declaration, so the digest isn't tamper evidence on its own. Only a policy that compares it with a pinned digest catches a change. A call to a function the request didn't declare, a call whose name isn't a non-empty string, and a declaration RFC 8785 can't encode (audited as `tool_digest_skipped`) carry no `tool.version`. A policy that pins a tool must treat a missing version as a mismatch. A function name declared twice answers 501 in enforce, audited as `unsupported_tool_type` with `item_type` `repeated_function`. Shadow records it and sends that function's steps with no `tool.version`. Shadow also digests a request that repeats a JSON key, which enforce refuses, so a shadow digest can describe a copy of a declaration the model never read | Issue #38. LAB-07, issue #580 |
-| The request field, input item and output item allowlists. FinBot sends only fields and items on them | Issue #577 |
-| The admin port and `POST /epoch` | LAB-15, issue #588, wires the lab CLI to it |
-| `ACS_MODEL_INPUT_LOG` names the model input log path | LAB-15, issue #588, sets it in the bundle |
-| Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | Issue #579 |
-| `ACS_UPSTREAM_KEY_SHARED=1` lets a key file serve a model port off loopback, off by default | LAB-15, issue #588, sets it for the bundle's live mode |
-| Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | Issue #579 |
-| A session's trace id is its session_id, and its root span is `acs.session` | Issue #503 |
-| The session span is `invoke_agent` and the model call `chat <model>`, since the mapping names neither | Issue #503 and issue #520 |
-| Tool step spans keep the mapping's names and add `gen_ai.operation.name=execute_tool` and the mirrored `acs.decision` | Pull request #557, for issue #520 |
-| The decision event leaves out `acs.reasoning`, which the mapping asks for whenever the response carries it, because a Guardian's reasoning can quote tool arguments | Issue #322 |
-| The `acs.lab.ask` span, the `acs.lab.ask_resolved` and `acs.lab.replay_miss` events, and the `acs.lab.*` attributes | Issue #322 |
-
-## Issues this README names
-
-| Issue | Type | Title |
-|---|---|---|
-| #14 | Bug | DEFER disposition has no resolution wire method, behavior between DEFER and resolution undefined |
-| #175 | Bug | ASK has no way to deliver the approver's answer to the Guardian |
-| #32 | Bug | §6.4 conflates Guardian refusal with decision failure; refusals are attacker-reachable and should fail closed |
-| #38 | Bug | Tool declarations have no integrity binding, so a same-version redefinition is invisible to Inspect-Dynamic |
-| #322 | RefImpl | Span every step the reference deployment supports, toward an ACS-Trace claim |
-| #435 | Conformance | §6.4 does not say what a host does with a decision that arrives after the timeout |
-| #503 | Bug | Trace mapping leaves the session and message attributes underspecified |
-| #520 | Conformance | Tool-call trace spans are dropped by a GenAI backend: no gen_ai.operation.name, span name is not execute_tool |
-| #460 | Bug | An asymmetric key_id has no defined binding to an identity, no publication, and no revocation |
-| #576 | RefImpl | Example Guardian: sign decisions with ML-DSA-65, publish a key document, and refuse an HMAC fallback |
-| #577 | RefImpl | An OpenAI Responses API gateway that makes an unmodified client an Observed Agent, with off, shadow, and enforce modes |
-| #578 | RefImpl | Gateway: stream model responses while a tool call waits for its decision |
-| #579 | RefImpl | Gateway: replay, live, and capture modes for the model upstream |
-| #580 | RefImpl | Gateway: carry a digest of each tool declaration in tool.version so a redefinition is visible |
-| #581 | RefImpl | Gateway: resolve an ASK through an approver page and return the answer to the Guardian |
-| #582 | RefImpl | Gateway: emit OpenTelemetry spans for model calls, hooks, and decisions, with a collector configuration for Jaeger |
-| #588 | RefImpl | FinBot guided lab: compose file, container images, and the lab CLI |
+| The three modes and `ACS_LAB_MODE` | The gateway's own design. Shadow isn't decision honoring under section 6.4 |
+| A decision after the timeout is discarded, and the step is audited as `decision_timeout` | Section 6.4 doesn't say what a host does with a decision that arrives after the timeout |
+| The gateway denies on any decision failure whatever the ServerHello says, a missing posture included | [D-045](../../docs/decisions/index.md#d-045-only-the-observed-agents-own-configuration-can-opt-into-proceed) and [D-040](../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals) |
+| The neutral line stands in for a removed call or a denied output | The gateway's own design |
+| DEFER denies, and ASK denies unless the approver page is on | The specification defines no wire method that resolves a DEFER. The approver page is the gateway's own |
+| The approver's answer reaches the Guardian as the step resent with `x_acs_lab_ask_answer` in its payload, marked `assurance: declared` | The specification defines no way to deliver the approver's answer to the Guardian |
+| One ASK budget per request, from its arrival, capped at 240 seconds and covering the resend | The gateway's own design. The 240 seconds leave room inside FinBot's 360-second model timeout |
+| A rejection is not resent, and only a human approver with options approve and reject is held | The specification defines no way to deliver the approver's answer to the Guardian |
+| An SSE comment line every 15 seconds while a streamed call is held | The specification defers streaming semantics |
+| In enforce a streamed answer is built by the gateway: message text streams live from an allowlist, every other item is built after the final event from its output, and the gateway owns `sequence_number` and `output_index` | The specification defers streaming semantics |
+| Responses are verified with acs.client's HMAC-SHA256 check by default. `ACS_RESPONSE_ALGORITHMS=ML-DSA-65` verifies every answer by key_id from the key document named by `ACS_GUARDIAN_KEYS`, and takes exactly one algorithm | The specification doesn't yet say which algorithms a verifier accepts or how an asymmetric key is published |
+| A withheld answer that was written without a cause is followed by `{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}` | The gateway's own design |
+| An output or argument holding an integer above 2**53 - 1, a non-finite number or a lone surrogate denies its whole step, since RFC 8785 (JCS) can't encode it and acs.client would rewrite it before signing, so the Guardian would judge other bytes than the gateway gated | The gateway's own design |
+| In shadow and enforce, `tool.version` on `steps/toolCallRequest` carries `sha256:` plus the hex SHA-256 of the RFC 8785 (JCS) form of the request's declaration of that function. A streamed call carries it as a whole answer's call does, and the resend after an approved ASK repeats the asked payload, `tool.version` included, so a pin holds on every path. `steps/toolCallResult` carries a digest only from the recorded call it answers, so a call the session never gated can't borrow a pinned tool's digest. The result of a call the session has no record of, fabricated by the client or gated before an epoch bump, an eviction or a retirement, carries no `tool.version`, and a pin policy denies it. That is the cost of a reset mid-run, and the lab resets between runs. The digest covers `name`, `description`, `parameters` and `strict`. Each field is hashed as the client sent it, with no default filled in. A client that starts sending a default explicitly, such as `"strict": false`, changes its digests, so `lab pins` must be recomputed from the same client. A policy can pin the digest, and one changed character in a description or schema changes it. A call_id has one life. A model reply that repeats a call_id under the same digest reuses its recorded outcome. A repeat under another digest is withheld with no Guardian step, like a repeat that says something else: enforce removes it and shadow delivers it. Both audit `call_id_reused`, whose `cause` lists every reason (`content_changed`, `digest_changed`), and the decision line repeats them as `reuse_causes`. A call removed for any reason, a transient failure included, is never delivered again under a changed declaration, and a client that drops `tools` mid-conversation has its repeated calls refused the same way, since an undeclared function has no digest. Both fail closed. A new call under the changed declaration goes to the Guardian with the new digest. The client asserts the declaration, so the digest isn't tamper evidence on its own. Only a policy that compares it with a pinned digest catches a change. A call to a function the request didn't declare, a call whose name isn't a non-empty string, and a declaration RFC 8785 can't encode (audited as `tool_digest_skipped`) carry no `tool.version`. A policy that pins a tool must treat a missing version as a mismatch. A function name declared twice answers 501 in enforce, audited as `unsupported_tool_type` with `item_type` `repeated_function`. Shadow records it and sends that function's steps with no `tool.version`. Shadow also digests a request that repeats a JSON key, which enforce refuses, so a shadow digest can describe a copy of a declaration the model never read | The specification gives a tool declaration no integrity binding, so a same-version redefinition is otherwise invisible |
+| The request field, input item and output item allowlists. FinBot sends only fields and items on them | The gateway's own design |
+| The admin port and `POST /epoch` | The lab CLI uses it |
+| `ACS_MODEL_INPUT_LOG` names the model input log path | The lab bundle sets it |
+| Live, capture and replay upstreams, the recording format, placeholders for FinBot's generated values, branch tokens from the session's outcome records, and the miss response | The gateway's own design for offline lab runs |
+| `ACS_UPSTREAM_KEY_SHARED=1` lets a key file serve a model port off loopback, off by default | The lab bundle sets it for live mode |
+| Replay runs inside the gateway rather than as a separate replay server, so the branch tokens travel on an internal `x-acs-lab-branch` header that the gateway sets after stripping the client's `x-acs-*` headers and removes before any request leaves for a real upstream | The gateway's own design for offline lab runs |
+| A session's trace id is its session_id, and its root span is `acs.session` | The trace mapping leaves the session attributes underspecified |
+| The session span is `invoke_agent` and the model call `chat <model>`, since the mapping names neither | The trace mapping names neither span, and GenAI backends key on `gen_ai.operation.name` |
+| Tool step spans keep the mapping's names and add `gen_ai.operation.name=execute_tool` and the mirrored `acs.decision` | GenAI backends drop a tool span without `gen_ai.operation.name` |
+| The decision event leaves out `acs.reasoning`, which the mapping asks for whenever the response carries it, because a Guardian's reasoning can quote tool arguments | The gateway's own choice, to keep tool arguments out of traces |
+| The `acs.lab.ask` span, the `acs.lab.ask_resolved` and `acs.lab.replay_miss` events, and the `acs.lab.*` attributes | The trace mapping defines none of them |

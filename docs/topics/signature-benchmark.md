@@ -1,6 +1,8 @@
 # Signature Benchmark
 
-ML-DSA-65 signatures are about 100 times larger than HMAC-SHA256 tags, and signing takes about 40 times longer at the median. On a laptop that is still roughly a third of a millisecond at the median and about a millisecond at the 95th percentile. This page gives the numbers and says what they do not tell you.
+ML-DSA-65 signatures are about 100 times larger than HMAC-SHA256 tags, and signing takes about 40 times longer at the median. On a laptop that is still 0.39 ms at the median and about 1.1 ms at the 95th percentile. This page gives the numbers and says what they do not tell you.
+
+ML-DSA-65 signing in release 0.1.5 is experimental and off by default. It lives in `acs.core`, the protocol library in `adapters/`, behind the `pqc` extra, and it is a lab convention that makes no ACS-Crypto claim. HMAC-SHA256 stays the default. [Sign and verify decisions](./signed-decisions.md) explains what the signing covers and how to check it.
 
 ## Results
 
@@ -8,7 +10,7 @@ One run on the machine below. Times are microseconds per call.
 
 --8<-- "adapters/benchmarks/signatures/results/results.md"
 
-acs.core has no hybrid signature yet, so the table has no hybrid row. The composite ML-DSA proposal in PR #564 and issue #532 would settle its form. A hybrid would cost roughly the sum of its two parts plus a longer signature, but that is an estimate, not a measurement.
+acs.core has no hybrid signature yet, so the table has no hybrid row. The specification has not yet settled how a hybrid is built. A hybrid would cost roughly the sum of its two parts plus a longer signature, but that is an estimate, not a measurement.
 
 HMAC-SHA256 has no public key. Its "public key" column is the 32 byte shared secret, which both sides must hold.
 
@@ -48,4 +50,4 @@ ML-DSA-65 verifies faster than it signs, and ECDSA-P256 does the opposite. A Gua
 
 The timings cover signing and verification only. They leave out network time, policy evaluation, and key loading. ML-DSA-65 verification through the keyring also checks that the response answers its request before any crypto, which the HMAC and ECDSA rows do not include. That check costs little next to the crypto.
 
-The benchmark does not test security. It also says nothing about which algorithm to choose, which D-047 and issue #532 decide on other grounds.
+The benchmark does not test security. It also says nothing about which algorithm to choose, which [D-047](../decisions/index.md#d-047-use-symmetric-keys-inside-a-trust-domain-and-asymmetric-keys-across-trust-domains) decides on other grounds.
