@@ -2,6 +2,22 @@
 
 Follow these rules before editing files, opening work, or reviewing changes in this repository. [CONTRIBUTING.md](./CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md) own the underlying policies; when a rule here and its source disagree, the source wins.
 
+## About this repository
+
+The OWASP Agent Control Standard (ACS) is a wire specification. It lets a separate Guardian Agent inspect what an AI agent is about to do and permit, deny, or modify that action before it happens, over an authenticated channel, with an audit trail that reconstructs after the fact. The agent under watch is the Observed Agent. ACS groups its capabilities into three pillars: Instrument (hooks), Trace (events), and Inspect (the Agent Bill of Materials, or AgBOM).
+
+Contributor work lands on `integration`, the default branch. On it:
+
+- `docs/spec/` holds the specification text, one directory per pillar, plus the conformance requirements in `docs/spec/conformance.md`.
+- `specification/` holds the JSON schemas. Each schema sits at the path its `$id` declares.
+- `docs/` holds the documentation site that `mkdocs.yml` builds. The decision log is `docs/decisions/index.md`.
+- `reference-implementations/` holds the Guardian reference implementations.
+- `adapters/` holds the reference adapters that connect agent frameworks to a Guardian, with an example Guardian and their own conformance suite.
+- `tests/` holds the repository guards CI runs.
+- `tools/` holds the scripts the workflows in `.github/workflows/` call, such as schema publishing and pull request intake.
+
+Read [README.md](./README.md) and [Core Concepts](./docs/topics/core_concepts.md) for detail. The release version lives in `version.txt` and the spec version in each schema's `$id`. The two differ, so never state one as the other.
+
 ## Start with CONTRIBUTING.md
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before starting work. Pay close attention to:
