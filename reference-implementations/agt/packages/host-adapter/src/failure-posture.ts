@@ -112,9 +112,9 @@ const TRANSPORT_ERROR_CODES = new Set([
  * applyFailurePosture).
  *
  * Declared here by value rather than imported: this package has no runtime
- * dependency on the Guardian and is not about to grow one for four integers
+ * dependency on the Guardian and is not about to grow one for five integers
  * -- the same arrangement DEFAULT_TIMEOUT_MS keeps with the Guardian's
- * declared default. The four are the complete set this deployment's Guardian
+ * declared default. These four are the complete set this deployment's Guardian
  * mints for a request it will not decide (packages/guardian/src/server.ts):
  *
  *   -32700  Parse error. Nothing the host sent was JSON. Answered with
@@ -133,6 +133,15 @@ const TRANSPORT_ERROR_CODES = new Set([
  *   -32020  Evaluation itself failed -- mapVerdict's own checks, a policy
  *           runtime error, or the outer net around dispatch.
  *
+ * One more is listed although this Guardian does not mint it yet:
+ *
+ *   -32009  REPLAY_CONSUMED (spec section 9.3, registry 17.1). A request
+ *           presented a one-time approval already consumed or still awaiting
+ *           another request's decision, or a grant from an earlier session.
+ *           It is a refusal by definition, and it is listed before any
+ *           Guardian sends it so that the first one that does fails closed
+ *           on the replayed approval rather than proceeding under `proceed`.
+ *
  * -32011 is the arguable one, so the reasoning is recorded rather than
  * assumed. A host only ever sends methods its own hookmap maps, so a Guardian
  * refusing to dispatch one is a misconfiguration of THIS deployment -- the
@@ -148,7 +157,7 @@ const TRANSPORT_ERROR_CODES = new Set([
  * disagreement it should surface.
  *
  * Enumerated rather than inferred ("any error object is a refusal"), for the
- * reason TRANSPORT_ERROR_CODES is: the four above are checkable against a
+ * reason TRANSPORT_ERROR_CODES is: the four the Guardian mints are checkable against a
  * live Guardian, and client.test.ts drives each route to prove the list
  * matches what the Guardian actually sends rather than what this file
  * believes. An unrecognised code therefore stays `error_without_decision` and
@@ -157,7 +166,7 @@ const TRANSPORT_ERROR_CODES = new Set([
  * preferred to guessing, because widening this to every error object would
  * also fail closed on an intermediary's error the Guardian never sent.
  */
-const REFUSAL_RPC_CODES = new Set([-32700, -32010, -32011, -32020]);
+const REFUSAL_RPC_CODES = new Set([-32700, -32009, -32010, -32011, -32020]);
 
 /**
  * Names what came back INSTEAD of a decision, for the audit entry. Total: an
