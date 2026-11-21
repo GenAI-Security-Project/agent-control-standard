@@ -352,3 +352,15 @@ def test_agbom_update_triggers_cover_every_component_type():
             f"AgBOM update triggers omit component type {comp_type!r}"
         )
 
+
+def test_canonical_intent_rule_lives_in_section_8_4():
+    """Issue #149: section 8.4 states the rule, and the other places point to it."""
+    for name in ("session-start.json", "agent-trigger.json"):
+        schema = json.loads((HOOK_SCHEMAS / name).read_text(encoding="utf-8"))
+        assert "§8.4" in schema["properties"]["intent"]["description"]
+    hooks = (ROOT / "docs/spec/instrument/hooks.md").read_text(encoding="utf-8")
+    assert "#84-intent" in hooks.split("## agentTrigger")[1].split("\n---")[0]
+    spec = (ROOT / "docs/spec/instrument/specification.md").read_text(encoding="utf-8")
+    section = spec.split("### 8.4 Intent")[1].split("### 8.5")[0]
+    for phrase in ("before any content-bearing step", "MUST be rejected, unless", "`scope: session`"):
+        assert phrase in section
