@@ -19,7 +19,11 @@
       "type": "string",
       "enum": ["additional_context", "human_approval", "timeout"]
     },
-    "resolution_timeout_ms": { "type": "integer", "minimum": 0 },
+    "resolution_timeout_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "How long the Observed Agent keeps the step suspended. When it elapses without a resolution, the Observed Agent applies timeout_decision."
+    },
     "timeout_decision": {
       "type": "string",
       "enum": ["deny", "ask"],
@@ -28,7 +32,15 @@
     "required_context": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Names of inputs whose presence would resolve the deferral"
+      "description": "Names of inputs whose presence would resolve the deferral. The Guardian obtains these inputs itself, from the context sources and policy stores its deployment connects it to. The Observed Agent does not send them back on the wire in v0.1, so the list tells an operator or auditor what the Guardian is waiting for."
+    },
+    "approver": {
+      "$ref": "ask-details.json#/properties/approver",
+      "description": "The Approver whose answer resolves the deferral. SHOULD be present when resolution_method is 'human_approval'. The answer reaches the Guardian through the Guardian's own deployment channel to the Approver, not through the Observed Agent."
+    },
+    "question": {
+      "type": "string",
+      "description": "What the Approver is asked. SHOULD be present when resolution_method is 'human_approval'."
     }
   }
 }

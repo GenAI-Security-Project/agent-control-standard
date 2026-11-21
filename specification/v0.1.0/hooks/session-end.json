@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-end.json",
   "title": "steps/sessionEnd payload",
+  "x-acs-allowed-dispositions": ["allow"],
   "description": "Payload for the sessionEnd hook. Fires when the session terminates. Asynchronous; does not block agent.",
   "type": "object",
   "required": ["reason"],

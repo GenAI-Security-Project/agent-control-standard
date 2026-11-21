@@ -123,29 +123,29 @@ A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`
 
 ## 5. Hook Taxonomy
 
-Hook details, payloads, and per-hook examples are catalogued on the [Hooks](./hooks.md) page. The native `steps/*` set is:
+Hook details, payloads, and per-hook examples are catalogued on the [Hooks](./hooks.md) page. The native `steps/*` set is below. The **Dispositions** column lists the dispositions the hook accepts, from the [disposition catalog](./hooks.md#disposition-catalog-normative) on the Hooks page, which is the one place the legal set is defined. A hook is decision-eligible when the Guardian's verdict can block or reshape the step before it happens. A hook that accepts only `ALLOW` is audit-only: the Guardian records it and cannot change what happens next. `postCompact` is neither. It accepts `MODIFY` but not `DENY`, because compaction has already happened, so the Guardian can correct the summary and cannot undo the compaction.
 
-| # | Method | Trigger |
-|---|---|---|
-| 1 | `sessionStart` | Session initiation, before any other `steps/*` hook for the `session_id` |
-| 2 | `agentTrigger` | Agent activation |
-| 3 | `turnStart` | Beginning of an agent turn |
-| 4 | `userMessage` | User input received |
-| 5 | `agentResponse` | Agent output before reaching the user |
-| 6 | `knowledgeRetrieval` | RAG / knowledge lookup |
-| 7 | `memoryContextRetrieval` | Memory read |
-| 8 | `memoryStore` | Memory write |
-| 9 | `toolCallRequest` | Before tool execution |
-| 10 | `toolCallResult` | After tool execution, before agent ingestion |
-| 11 | `preCompact` | Before context-window compaction; decision-eligible |
-| 12 | `postCompact` | After compaction; carries the new summary's payload and provenance |
-| 13 | `subagentStart` | A subagent is spawned (in-process delegation) |
-| 14 | `subagentStop` | A subagent has terminated |
-| 15 | `skillRegister` | Skill enters the available set, before it can load; decision-eligible |
-| 16 | `skillLoad` | Registered skill activates into a session, before its actions run; decision-eligible |
-| 17 | `skillUnload` | Skill leaves the active set |
-| 18 | `turnEnd` | End of an agent turn |
-| 19 | `sessionEnd` | Session termination, audit finalization |
+| # | Method | Trigger | Dispositions |
+|---|---|---|---|
+| 1 | `sessionStart` | Session initiation, before any other `steps/*` hook for the `session_id` | `ALLOW`, `DENY` |
+| 2 | `agentTrigger` | Agent activation | `ALLOW`, `DENY`, `MODIFY` |
+| 3 | `turnStart` | Beginning of an agent turn | `ALLOW`, `DENY` |
+| 4 | `userMessage` | User input received | `ALLOW`, `DENY`, `MODIFY` |
+| 5 | `agentResponse` | Agent output before reaching the user | `ALLOW`, `DENY`, `MODIFY` |
+| 6 | `knowledgeRetrieval` | RAG / knowledge lookup | `ALLOW`, `DENY`, `MODIFY` |
+| 7 | `memoryContextRetrieval` | Memory read | `ALLOW`, `DENY`, `MODIFY` |
+| 8 | `memoryStore` | Memory write | `ALLOW`, `DENY`, `MODIFY` |
+| 9 | `toolCallRequest` | Before tool execution | `ALLOW`, `DENY`, `MODIFY`, `ASK`, `DEFER` |
+| 10 | `toolCallResult` | After tool execution, before agent ingestion | `ALLOW`, `DENY`, `MODIFY` |
+| 11 | `preCompact` | Before context-window compaction | `ALLOW`, `DENY` |
+| 12 | `postCompact` | After compaction; carries the new summary's payload and provenance | `ALLOW`, `MODIFY` |
+| 13 | `subagentStart` | A subagent is spawned (in-process delegation) | `ALLOW`, `DENY` |
+| 14 | `subagentStop` | A subagent has terminated | `ALLOW` (audit-only) |
+| 15 | `skillRegister` | Skill enters the available set, before it can load | `ALLOW`, `DENY` |
+| 16 | `skillLoad` | Registered skill activates into a session, before its actions run | `ALLOW`, `DENY` |
+| 17 | `skillUnload` | Skill leaves the active set | `ALLOW` (audit-only) |
+| 18 | `turnEnd` | End of an agent turn | `ALLOW` (audit-only) |
+| 19 | `sessionEnd` | Session termination, audit finalization | `ALLOW` (audit-only) |
 
 Wrapped: `protocols/MCP/*` (specified in v0.1; see [Extending MCP](./extend_mcp.md)). The `protocols/A2A/*` namespace is reserved; wrapping specification deferred to v0.2.
 
@@ -156,12 +156,18 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 | Disposition | Meaning | Required fields |
 |---|---|---|
 | `ALLOW` | Proceed | none (`reasoning` RECOMMENDED when user-visible audit trails are expected) |
-| `DENY` | Block | `reasoning` |
-| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative); substituted with `DENY` for MODIFY-incapable clients, see [§6.5](#65-modify-incapable-clients-normative)) | `reasoning`, `modifications` |
-| `ASK` | Pause and request approval (substituted with `DEFER` or `DENY` for approver-incapable clients; see [§9.2](#92-approver-incapable-clients-normative)) | `reasoning`, `ask_details` |
-| `DEFER` | Verdict not yet reachable | `reasoning`, `defer_details` |
+| `DENY` | Block | none |
+| `MODIFY` | Proceed with changes (covers redaction via `modifications.redactions`; composition rules in [§6.3](#63-modify-composition-normative); substituted with `DENY` for MODIFY-incapable clients, see [§6.5](#65-modify-incapable-clients-normative)) | `modifications` |
+| `ASK` | Pause and request approval from the Approver named in `ask_details.approver` (substituted with `DEFER` or `DENY` when no Approver is designated or reachable, including for approver-incapable clients; see [§9.2](#92-approver-incapable-clients-normative)) | `ask_details` |
+| `DEFER` | Verdict not yet reachable | `defer_details` |
 
-DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
+`reasoning` is OPTIONAL on every disposition, and RECOMMENDED on `DENY`, `MODIFY`, `ASK`, and `DEFER` because those decisions affect or interrupt the action. The Observed Agent receives the text, so a deployment that keeps its policy confidential would otherwise hand a map of the policy boundary to the party it controls. Such a deployment MAY omit `reasoning` from the wire, and MAY omit `reason_codes` with it, so long as the Guardian records `reasoning`, `reason_codes`, and `policy_references` in its own audit log for the operator. An Observed Agent MUST NOT invent an explanation for a decision that carries none. The codes that §6.5 and §9.2 require describe a client's capability rather than policy, so they stay on the wire.
+
+**Legal dispositions per hook (normative).** Each method accepts only the dispositions its entry in the [disposition catalog](./hooks.md#disposition-catalog-normative) lists, and the hook's schema repeats the set in `x-acs-allowed-dispositions`. A Guardian MUST NOT return a disposition outside that set. An Observed Agent that receives one MUST NOT apply it. The decision is unusable, so the step suffers a decision failure of class `malformed_response` (§6.4): the Observed Agent applies its `on_decision_failure` posture and records an audit event with `reason_codes: ["disposition_not_allowed"]`. This is a different failure from the §6.5 and §9.2 substitutions, which cover a client that cannot honor a legal disposition. At `postCompact` compaction has already happened, so a `DENY` there leaves the original summary standing under either posture.
+
+DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session. The bound counts the deferrals open at the same time in a session, and the default is 3. A deployment MAY configure another value. Once the bound is reached, the Guardian MUST return `DENY` with `reason_codes: ["deferral_limit_reached"]` for each further action that would defer, and MUST record an audit event.
+
+**The Observed Agent's next step on DEFER.** The Observed Agent holds the step suspended and carries no inputs or answers for it. The inputs named in `required_context` and the answer of a `human_approval` Approver (`defer_details.approver` and `question`) reach the Guardian through the Guardian's own deployment channels, such as its context sources and its approval service, and never through the Observed Agent. When `resolution_timeout_ms` elapses with no resolution, the Observed Agent applies `timeout_decision`. The Observed Agent MAY then submit the step again as a new request, which the Guardian evaluates afresh.
 
 `timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
 
@@ -191,9 +197,9 @@ The decision envelope ([`response-envelope.json`](https://genai-security-project
 | Field | Required | Purpose |
 |---|---|---|
 | `decision` | yes | The verdict, one of the five dispositions above. |
-| `reasoning` | conditional | Single human-renderable explanation. Serves both end-user display and audit/agent-internal consumption; deployments wanting different text per audience SHOULD compose them client-side from `reasoning` + `policy_data` + `reason_codes`. |
+| `reasoning` | no | Single human-renderable explanation, RECOMMENDED on `DENY`, `MODIFY`, `ASK`, and `DEFER`. Omitted from the wire by deployments that keep policy confidential (§6). Serves both end-user display and audit/agent-internal consumption; deployments wanting different text per audience SHOULD compose them client-side from `reasoning` + `policy_data` + `reason_codes`. |
 | `policy_references` | no | Array of `{policy_id, policy_version, policy_name, rule_id}`, the rules that fired. `policy_version` is OPTIONAL and deployment-defined, but SHOULD be populated when replay or ledger-backed policy state matters. A single decision MAY cite multiple entries when several paradigms reject the same action; audit replay walks the list to reconstruct contributions. |
-| `reason_codes` | no | Array of machine-readable categorization strings. Free vocabulary in v0.1. UIs and meta-policies SHOULD switch on these rather than parsing reasoning text or rule IDs. |
+| `reason_codes` | no | Array of machine-readable categorization strings. Free vocabulary in v0.1. UIs and meta-policies SHOULD switch on these rather than parsing reasoning text or rule IDs. A deployment that keeps policy confidential MAY omit them from the wire (§6). |
 | `policy_data` | no | Free-form structured payload for paradigm- or policy-specific facts. When multiple paradigms fire, conventionally keyed by paradigm name (`{ "ibac": {...}, "fides": {...}, "aarm": {...} }`). |
 | `cited_provenance_ids` | no | Array of `provenance_id`s whose facts drove this decision. Standard top-level surface for "which provenance objects mattered". |
 | `modifications` / `ask_details` / `defer_details` | conditional | Disposition-specific payloads. |
@@ -241,7 +247,7 @@ Every decision failure MUST be recorded as an audit event, under either posture.
 
 Some Observed Agents cannot apply a `MODIFY` disposition. This covers both framework constraints (shell-hook integrations whose hook API returns allow/deny only, IDE plugins without a mid-flight argument-mutation surface) and deployment preferences (organizations that disable MODIFY for auditability, so the executed action always equals the requested action). The Guardian determines client MODIFY-handling capability by deployment-defined means such as agent identity bound at handshake, policy keyed on `agent_id`, organizational configuration, or any other out-of-band signal the deployment trusts. ACS does not put this declaration on the wire in v0.1; it is part of the Guardian's policy bundle, mirroring the ASK precedent in [§9.2](#92-approver-incapable-clients-normative).
 
-When the Guardian determines that the client cannot apply `MODIFY`, the Guardian MUST NOT return `MODIFY`. The Guardian MUST instead substitute `DENY` with `reason_codes: ["modify_unsupported"]` and `reasoning` that names the intended modification, and MUST record the substitution as an audit event so the enforcement gap is visible.
+When the Guardian determines that the client cannot apply `MODIFY`, the Guardian MUST NOT return `MODIFY`. The Guardian MUST instead substitute `DENY` with `reason_codes: ["modify_unsupported"]` and, unless the deployment withholds `reasoning` (§6), `reasoning` that names the intended modification, and MUST record the substitution as an audit event so the enforcement gap is visible.
 
 If a client receives a `MODIFY` it cannot apply — from a Guardian that misjudged capability, or a Guardian that did not consult the declaration — the client MUST treat the decision as `DENY` and MUST record an audit event with `reason_codes: ["modify_unsupported"]`. Proceeding with the original payload is non-conformant: a Guardian that intended to redact a secret out of a tool argument would otherwise get the unredacted secret shipped while the audit log recorded a modification that never happened.
 
@@ -350,7 +356,9 @@ Tamper-evidence here is bounded by the signature in use. Under the HMAC baseline
 
 ## 9. Approver Model
 
-ASK approvers MAY be human, agent, or service. `ask_details.approver = { type, id, endpoint }`. The Approver receives an ACS-shaped request and returns an ACS-shaped decision. Approver authentication is REQUIRED. Guardian MUST verify approver identity against policy.
+ASK approvers MAY be human, agent, or service. `ask_details.approver = { type, id, endpoint }`, and `approver` is REQUIRED whenever the Guardian returns `ASK`. The Guardian designates the Approver and authenticates the answer. The Observed Agent's client holds the step paused and presents the prompt (`question`, `options`) to a human Approver, or routes it to the `endpoint` of an agent or service Approver. The Approver receives an ACS-shaped request and returns an ACS-shaped decision. Approver authentication is REQUIRED. Guardian MUST verify approver identity against policy. The wire message that carries the answer back to the Guardian is not defined in v0.1.
+
+A Guardian that has no Approver it can designate, or none the client can reach, MUST NOT return `ASK`. It substitutes `DEFER` or `DENY` as [§9.2](#92-approver-incapable-clients-normative) requires.
 
 Single-hop only in v0.1. Approvers MUST NOT return ASK. Quorum and recursive ASK deferred to v0.2.
 
@@ -368,12 +376,12 @@ Intent extensions are subject to the session's `scope_mode`: a Guardian operatin
 
 ### 9.2 Approver-incapable clients (normative)
 
-Some Observed Agents (IDE plugins, headless automation, runtimes whose enforcement model is allow/deny only) have no way to route an `ASK` disposition. The Guardian determines client ASK-handling capability by deployment-defined means such as agent identity bound at handshake, policy keyed on `agent_id`, organizational configuration, or any other out-of-band signal the deployment trusts. ACS does not put this declaration on the wire in v0.1; it is part of the Guardian's policy bundle.
+Some Observed Agents (IDE plugins, headless automation, runtimes whose enforcement model is allow/deny only) have no way to route an `ASK` disposition. The same holds for any session where the Guardian has no Approver to designate, or none the client can reach. The Guardian determines client ASK-handling capability, and whether an Approver exists, by deployment-defined means such as agent identity bound at handshake, policy keyed on `agent_id`, organizational configuration, or any other out-of-band signal the deployment trusts. ACS does not put this declaration on the wire in v0.1; it is part of the Guardian's policy bundle.
 
-When the Guardian determines that the client cannot resolve `ASK`, the Guardian MUST NOT return `ASK`. The Guardian MUST instead substitute one of:
+When the Guardian determines that the client cannot resolve `ASK`, or that no Approver is designated or reachable, the Guardian MUST NOT return `ASK`. The Guardian MUST instead substitute one of:
 
 1. `DEFER` with `timeout_decision: "deny"`: when the underlying issue might resolve through retry, an out-of-band escalation, or a later state change. The deferred verdict still counts toward cascading-deferral limits (§6).
-2. `DENY` with `reason_codes: ["approver_unavailable"]` and `reasoning` that names the missing capability: when no recovery path exists.
+2. `DENY` with `reason_codes: ["approver_unavailable"]` and, unless the deployment withholds `reasoning` (§6), `reasoning` that names the missing capability: when no recovery path exists.
 
 In either case, the Guardian MUST record the substitution as an audit event so the enforcement gap is visible. Without a recorded substitution the substitution rate is only reachable by grepping log prose, which defeats the one metric that catches a client misdeclaring its capability.
 

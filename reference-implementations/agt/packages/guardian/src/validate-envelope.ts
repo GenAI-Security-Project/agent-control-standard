@@ -217,12 +217,15 @@ function listSchemaFiles(dir: string): string[] {
  *
  * strict:true stays on. Every v0.1.0 schema compiles cleanly under it once
  * ajv-formats supplies the "uuid" and "date-time" format validators the
- * schemas declare -- Ajv core recognizes no formats on its own, and strict
- * mode would otherwise reject them as unknown. Nothing else needed disabling.
+ * schemas declare and "x-acs-allowed-dispositions" is registered as the hook
+ * schemas' disposition-eligibility annotation keyword -- Ajv core recognizes
+ * no formats or vendor annotation keywords on its own, and strict mode would
+ * otherwise reject them as unknown. Nothing else needed disabling.
  */
 function buildAjv() {
   const ajv = new Ajv2020({ strict: true, allErrors: true, strictRequired: false, allowUnionTypes: true });
   addFormats(ajv);
+  ajv.addKeyword("x-acs-allowed-dispositions");
   for (const file of listSchemaFiles(SCHEMA_ROOT)) {
     const schema = JSON.parse(readFileSync(file, "utf8")) as { $id?: string };
     if (schema.$id && !ajv.getSchema(schema.$id)) {
