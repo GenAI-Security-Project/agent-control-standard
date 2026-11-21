@@ -1,0 +1,49 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "substrate",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-9",
+  "id": "va200b64093301e14",
+  "kind": "reject",
+  "payload": {
+    "approver_capability": "none",
+    "policy_verdict_before_mapping": {
+      "decision": "escalate",
+      "reason": "approval_required"
+    },
+    "request": {
+      "acs": "0.1",
+      "metadata": {
+        "session_id": "s-0001",
+        "turn_id": "t-0001"
+      },
+      "method": "hooks/toolCallRequest",
+      "params": {
+        "tool": {
+          "arguments": {
+            "id": "c-1"
+          },
+          "name": "records.lookup"
+        }
+      },
+      "request_id": "11111111-1111-4111-8111-111111111111",
+      "signature": {
+        "algorithm": "HMAC-SHA256",
+        "key_id": "k1",
+        "value": "AAAA"
+      },
+      "timestamp": "2026-09-09T12:00:00Z"
+    }
+  },
+  "requirements": [
+    "ACS-R-018"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}

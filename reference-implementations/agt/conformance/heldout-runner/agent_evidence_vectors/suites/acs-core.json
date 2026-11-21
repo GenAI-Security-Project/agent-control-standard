@@ -1,0 +1,15 @@
+{
+  "schema": "agent-evidence-vectors/heldout-suite/v1",
+  "name": "acs-core",
+  "corpus": "vectors-acs-core",
+  "suite": "acs-core-negative-conformance",
+  "question": "payload",
+  "verdicts": ["allow", "deny", "unmeasurable"],
+  "codeRegistry": "codeRegistry",
+  "identity": ["kind", "family", "requirements", "payload", "expected"],
+  "opaque": {
+    "keys": ["session_id", "turn_id", "step_id", "provenance_id", "source_id"],
+    "uuidKeys": ["request_id"]
+  },
+  "note": "An opaque identifier carries no meaning in the specification beyond equality with other identifiers, so a sealed member renames every one of them through a seed-keyed map that preserves equality inside the member. A duplicate request_id stays a duplicate; its spelling is one nobody has seen."
+}

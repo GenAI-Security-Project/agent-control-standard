@@ -1,0 +1,271 @@
+# agent-evidence-vectors Python tooling.
+#
+# The reference verification RAIL (packaging/run_vectors.py) is deliberately
+# stdlib-only (zero third-party dependency) so a relying party can run the
+# suite against any verifier with nothing but a CPython install. Only the
+# vector GENERATORS (vectors/**/gen_*.py) use the cryptography library, and
+# only at build time. Do not add a runtime dependency to the rail.
+
+[project]
+name = "agent-evidence-vectors"
+version = "0.17.0"
+description = "Conformance vectors and reference verifier for the in-toto Adversarial Execution Evidence predicate"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+readme = "README.md"
+authors = [{ name = "Sankalp Gilda" }]
+keywords = ["in-toto", "attestation", "conformance", "test-vectors", "agent-evidence", "dsse"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/probityai/agent-evidence-vectors"
+Repository = "https://github.com/probityai/agent-evidence-vectors"
+Changelog = "https://github.com/probityai/agent-evidence-vectors/releases"
+
+# The one console entry point. It is named after the distribution so that
+# `uvx agent-evidence-vectors` resolves without a --from, which is the whole
+# reason a relying party would reach for the package instead of a clone.
+[project.scripts]
+agent-evidence-vectors = "agent_evidence_vectors.run_vectors:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+# The repository stays a virtual project for `uv sync`: most gates run the rail
+# from packaging/ by path. Python CI installs the checkout wheel separately to
+# resolve the E2 imports of its distribution layout. The E2 reproduction job
+# keeps its released-wheel pin. `uv build` still produces the wheel and sdist.
+[tool.uv]
+package = false
+
+# What the wheel carries, and where. The rail is a single stdlib-only module
+# kept at packaging/run_vectors.py, where every gate in scripts/ imports it by
+# path; the wheel moves it under a package named after the distribution rather
+# than shipping a top-level module called `packaging`, which would shadow the
+# library of that name in every environment that installed us. The corpora ride
+# along as data under corpora/, which the rail looks for beside itself before
+# it falls back to the checkout layout. They total under ten megabytes, so they
+# ship rather than being fetched by tag: a wheel that fetches at run time
+# cannot be run where the network is off, and being runnable offline is the
+# property the whole suite is built around.
+[tool.hatch.build.targets.wheel]
+only-include = [
+    "packaging/agent_evidence_vectors",
+    "vectors",
+    "vectors-agent-audit-record",
+    "vectors-aci",
+    "vectors-acs-core",
+    "vectors-ai-agent-action",
+    "vectors-ai-generation",
+    "vectors-anchor-stream",
+    "vectors-artifact-binding",
+    "vectors-mcp-record-contract",
+    "vectors-mcp-response-phase",
+    "vectors-observed-effect",
+    "vectors-receipt-signature",
+    "vectors-scitt-cose",
+    "vectors-source-coverage",
+    "vectors-w3c-report",
+]
+# Corpus directories carry their generators and checkers beside the data. They
+# are repository tools: they read the tree around them, and several import build
+# dependencies (cryptography, cbor2) that a stdlib-only package does not carry.
+# Shipped in the wheel they were dead weight that crashed on import, and nothing
+# in the package loads them, so the wheel carries the data and the packaged
+# readers only. The sdist keeps them, because it is the source.
+exclude = ["**/__pycache__", "**/.build", "**/*.pyc", "vectors/**/*.py", "vectors-*/**/*.py"]
+
+[tool.hatch.build.targets.wheel.sources]
+"packaging/agent_evidence_vectors" = "agent_evidence_vectors"
+"vectors" = "agent_evidence_vectors/corpora/vectors"
+"vectors-agent-audit-record" = "agent_evidence_vectors/corpora/vectors-agent-audit-record"
+"vectors-aci" = "agent_evidence_vectors/corpora/vectors-aci"
+"vectors-acs-core" = "agent_evidence_vectors/corpora/vectors-acs-core"
+"vectors-ai-agent-action" = "agent_evidence_vectors/corpora/vectors-ai-agent-action"
+"vectors-ai-generation" = "agent_evidence_vectors/corpora/vectors-ai-generation"
+"vectors-anchor-stream" = "agent_evidence_vectors/corpora/vectors-anchor-stream"
+"vectors-artifact-binding" = "agent_evidence_vectors/corpora/vectors-artifact-binding"
+"vectors-mcp-record-contract" = "agent_evidence_vectors/corpora/vectors-mcp-record-contract"
+"vectors-mcp-response-phase" = "agent_evidence_vectors/corpora/vectors-mcp-response-phase"
+"vectors-observed-effect" = "agent_evidence_vectors/corpora/vectors-observed-effect"
+"vectors-receipt-signature" = "agent_evidence_vectors/corpora/vectors-receipt-signature"
+"vectors-scitt-cose" = "agent_evidence_vectors/corpora/vectors-scitt-cose"
+"vectors-source-coverage" = "agent_evidence_vectors/corpora/vectors-source-coverage"
+"vectors-w3c-report" = "agent_evidence_vectors/corpora/vectors-w3c-report"
+
+# `sources` rewrites directory prefixes and leaves a single file where it is,
+# so the rail module is placed by name.
+[tool.hatch.build.targets.wheel.force-include]
+"packaging/run_vectors.py" = "agent_evidence_vectors/run_vectors.py"
+# The observed-effect predicate is normative for its corpus, and the packaged
+# reader cross-checks the manifest's predicateType against the specification's
+# Type URI line. It looks for the file at <corpus>/../spec/predicates/, so the
+# specification ships at that path beside the corpora.
+"spec/predicates/observed-effect.md" = "agent_evidence_vectors/corpora/spec/predicates/observed-effect.md"
+"spec/schemas/observed-effect-code-digest-v0.5.schema.json" = "agent_evidence_vectors/corpora/spec/schemas/observed-effect-code-digest-v0.5.schema.json"
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "packaging/agent_evidence_vectors",
+    "packaging/run_vectors.py",
+    "spec/predicates/observed-effect.md",
+    "spec/schemas/observed-effect-code-digest-v0.5.schema.json",
+    "interop/observed-code-digest-candidate",
+    "vectors",
+    "vectors-agent-audit-record",
+    "vectors-aci",
+    "vectors-acs-core",
+    "vectors-ai-agent-action",
+    "vectors-ai-generation",
+    "vectors-anchor-stream",
+    "vectors-artifact-binding",
+    "vectors-mcp-record-contract",
+    "vectors-mcp-response-phase",
+    "vectors-observed-effect",
+    "vectors-receipt-signature",
+    "vectors-scitt-cose",
+    "vectors-source-coverage",
+    "vectors-w3c-report",
+    "README.md",
+    "docs/guides",
+    "docs/reference",
+    "docs/research",
+    "DISTRIBUTION.md",
+    "LICENSE",
+    "CITATION.cff",
+]
+exclude = ["**/__pycache__", "**/.build", "**/*.pyc"]
+
+[project.optional-dependencies]
+# Build-time only: the generators sign vectors with real Ed25519 test keys.
+#
+# pycose builds every COSE_Sign1 in vectors-scitt-cose/, so that corpus is
+# produced by a COSE library and not by bytes written out here. cbor2 is pinned
+# BELOW 6 because pycose 1.1.0 reads a decoded CBOR tag's value as a list and
+# cbor2 6.0.0 returns a tuple, which surfaces as "Bytes cannot be decoded as
+# COSE message" on every well-formed vector. That message reads like a corrupt
+# corpus and is a library incompatibility, so the pin carries the reason.
+generators = ["cryptography>=43", "pycose>=1.1,<2", "cbor2>=5.6,<6"]
+# The artifact-binding tool under tools/artifact-binding/ and its corpus. Its
+# verifier is OFFLINE but not stdlib-only: it signs and verifies Ed25519 with
+# the same library the generators already use. The reference verification RAIL
+# under packaging/ is untouched and stays dependency-free.
+artifact-binding = ["cryptography>=43"]
+# PyYAML is a checker-and-gate dependency, not a rail dependency: the gate that
+# runs every workflow step reads the workflow YAML, and a type checker that
+# cannot resolve an import reports it as a defect in the importing file. Left
+# undeclared it is indistinguishable from a real unresolved name.
+# markdown renders the two tracked Markdown pages the Pages site publishes, and
+# it is declared here for the same reason PyYAML is: docs/site/build.py imports
+# it, the type checker reads that directory, and an import it cannot resolve is
+# reported in the same shape as a real unresolved name. Declaring it once here
+# also keeps the version the site builds with and the version the checker reads
+# from being two separate pins that drift apart.
+# Gemara and E2 share this development Hypothesis version. E2's dedicated
+# reproduction environment retains its separate hash-pinned requirements.
+dev = ["cryptography>=43", "pycose>=1.1,<2", "cbor2>=5.6,<6", "markdown>=3.9",
+       "hypothesis==6.168.3", "pycryptodome==3.23.0", "jsonschema==4.25.1", "rfc8785==0.1.4",
+       "mypy>=1.11", "pyright>=1.1.400", "pytest>=8", "pytest-cov>=5",
+       "pyyaml>=6", "ruff>=0.6", "types-Markdown>=3.9", "types-PyYAML>=6"]
+
+[tool.mypy]
+# scripts/code-contract-gate.py imports the reference rail to drive its own
+# evaluator, so the rail's directory has to be importable when that gate is
+# checked on its own rather than alongside packaging/.
+mypy_path = "packaging:tools/artifact-binding:vectors"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+show_error_codes = true
+python_version = "3.13"
+files = ["packaging", "vectors", "tools"]
+
+[tool.pyright]
+# Named by DIRECTORY, deliberately, and this is the whole point of the section.
+#
+# The other type-checking pass above is driven from an explicit list of files
+# written out by hand in the workflow that invokes it. A list like that is only
+# correct on the day it is written: every new script is covered if and only if
+# somebody remembers to append it, and four files had accumulated that no type
+# checker had ever read -- among them the runner that executes every gate and
+# the locking primitive it depends on. An unchecked gate is the worst place for
+# this to land, because a gate that dies on a NameError and a gate that was
+# never wired look identical from the outside: both produce no finding.
+#
+# Directories cannot forget. A file added to any of these is checked because it
+# is there, not because it was announced, and scripts/typecheck-gate.py refuses
+# to pass if a Python file exists outside them.
+include = ["docs/proposals", "docs/site", "interop", "packaging", "scripts", "tools", "vectors",
+           "vectors-agent-audit-record", "vectors-aci", "vectors-acs-core", "vectors-ai-agent-action", "vectors-ai-generation",
+           "vectors-anchor-stream", "vectors-artifact-binding",
+           "vectors-mcp-record-contract", "vectors-mcp-response-phase",
+           "vectors-observed-effect", "vectors-receipt-signature",
+           "vectors-scitt-cose", "vectors-source-coverage", "vectors-self-reported-record",
+           "vectors-w3c-report"]
+
+# The reference rail is imported by the gates that drive it, and it lives in
+# packaging/ rather than on the default path, so the checker needs the same
+# hint the other pass gets from mypy_path. Without it every one of those
+# imports is reported as unresolved -- noise that reads exactly like a defect.
+# `vectors` joins `packaging` because scripts/consumer-lag-gate.py imports the
+# digest helpers from vectors/gen_manifest.py rather than restating them: two
+# definitions of "the same corpus" inside one repository is the drift this gate
+# exists to catch. The gate inserts that directory on sys.path at runtime, and
+# a checker that cannot see the same path reports a configuration error for an
+# import that resolves fine when it runs.
+extraPaths = ["packaging", "vectors", "tools/artifact-binding",
+              "vectors-artifact-binding", "vectors-observed-effect",
+              "interop/a2a-s3-retain-2026-10-01"]
+
+# "standard" rather than "strict", chosen rather than defaulted into. Standard
+# carries every rule that describes a script CRASHING -- an undefined name, a
+# tuple unpacked into the wrong number of targets, an operator the operand
+# types do not support, an import that does not resolve. Strict adds
+# annotation-completeness rules on top, which is depth the mypy pass above
+# already enforces where it runs, and it costs several times the wall clock.
+# The rule that decides it: this runs on every push, and a gate slow enough to
+# be worth skipping is a gate that gets skipped.
+typeCheckingMode = "standard"
+pythonVersion = "3.13"
+
+# Two corpora each carry a module named `canonical`, and `vectors-observed-effect`
+# sits on extraPaths above, which pyright searches before the importing file's
+# own directory. The self-reported-record corpus therefore gets its own
+# execution root, so its `from canonical import jcs` resolves to the module
+# beside it -- the one Python itself imports when the script runs.
+[[tool.pyright.executionEnvironments]]
+root = "vectors-self-reported-record"
+
+# The retained generator imports its own historical check_vectors module.
+[[tool.pyright.executionEnvironments]]
+root = "interop/govops-capability-id/history/vectors-capability-id"
+
+# Scope the signed-map reader's shared definition import to its own tree.
+# A global path would make its generic run.py shadow unrelated native readers.
+[[tool.pyright.executionEnvironments]]
+root = "interop/agentavow-signed-map-v1"
+extraPaths = ["packaging", "interop/agentavow-live-mcp", "interop/agentavow-signed-map-v1"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, UP pyupgrade, B bugbear, C901 mccabe
+# (cyclomatic complexity; a function above the threshold carries a
+# noqa: C901 with a rationale in docs/complexity-rationales.toml).
+select = ["E", "F", "W", "I", "UP", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10

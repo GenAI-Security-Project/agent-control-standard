@@ -1,0 +1,49 @@
+{
+  "coverage": "effective",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": "CHAIN_MISMATCH",
+    "codeValue": -32007,
+    "unmeasurableBecause": null,
+    "verdict": "deny"
+  },
+  "family": "acs-f-6",
+  "id": "v221edeb22c4e8634",
+  "kind": "reject",
+  "payload": {
+    "context_entry": {
+      "previous_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "step_id": "st-0004",
+      "step_type": "hooks/sessionEnd"
+    },
+    "profile": "ACS-Crypto",
+    "response_signature": {
+      "algorithm": "ML-DSA-65",
+      "covers": [
+        "decision",
+        "chain_hash"
+      ]
+    },
+    "witnessed_heads": [
+      {
+        "chain_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+        "step_id": "st-0001"
+      },
+      {
+        "chain_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+        "step_id": "st-0002"
+      },
+      {
+        "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+        "step_id": "st-0003"
+      }
+    ]
+  },
+  "requirements": [
+    "ACS-R-006",
+    "ACS-R-021"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "EXTERNAL"
+}
