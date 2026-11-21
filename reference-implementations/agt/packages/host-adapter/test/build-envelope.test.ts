@@ -861,6 +861,142 @@ describe("buildEnvelope", () => {
   });
 
   /**
+   * `exit_status.timeout_when` (#466): a host that cuts a step off at its own
+   * timeout says so its own way, so the signal is declared per host in the
+   * hookmap. It can only narrow a failure to `timeout`; a step that exited 0
+   * stays `success`.
+   */
+  describe("exit_status: timeout_when (#466)", () => {
+    // The notice OpenCode 1.18.30 appended when bash cut a command off at its
+    // 2000 ms timeout, captured verbatim in the #434 item 4 run.
+    const OPENCODE_TIMEOUT_OUTPUT =
+      "(no output)\n\n<shell_metadata>\nshell tool terminated command after exceeding timeout 2000 ms. " +
+      "If this command is expected to take longer and is not waiting for interactive input, retry with a " +
+      "larger timeout value in milliseconds.\n</shell_metadata>";
+    const SIGNAL = { path: "$.result.metadata.output", contains: "shell tool terminated command after exceeding timeout" };
+
+    function timeoutHookmap(exitStatus: unknown): Hookmap {
+      return {
+        host: "opencode",
+        hooks: {
+          "tool.execute.after": {
+            acs_method: "steps/toolCallResult",
+            tool_name: "$.tool",
+            outputs: { from: "$.result.output", within: "$.result" },
+            exit_status: exitStatus,
+            decisions: POST_TOOL_USE_DECISIONS,
+          } as unknown as HookmapHookEntry,
+        },
+      };
+    }
+
+    function payloadWith(exit: unknown, output: unknown): Record<string, unknown> {
+      return {
+        session_id: "6c616a11-495a-4f05-878a-c1bfaa29f0e5",
+        tool: "bash",
+        result: { output, metadata: { output, exit, truncated: false } },
+      };
+    }
+
+    function exitStatusFor(exit: unknown, output: unknown, exitStatus: unknown = { from: "$.result.metadata.exit", timeout_when: SIGNAL }): unknown {
+      return buildEnvelope("tool.execute.after", payloadWith(exit, output), timeoutHookmap(exitStatus)).params.payload.exit_status;
+    }
+
+    it("maps a null exit carrying the host's timeout notice to timeout", () => {
+      expect(exitStatusFor(null, OPENCODE_TIMEOUT_OUTPUT)).toBe("timeout");
+    });
+
+    it("keeps a null exit with no such notice as failure", () => {
+      expect(exitStatusFor(null, "(no output)")).toBe("failure");
+    });
+
+    it("maps a non-zero exit carrying the notice to timeout", () => {
+      expect(exitStatusFor(137, OPENCODE_TIMEOUT_OUTPUT)).toBe("timeout");
+    });
+
+    it("never overturns a success: exit 0 stays success even when the output quotes the notice", () => {
+      expect(exitStatusFor(0, OPENCODE_TIMEOUT_OUTPUT)).toBe("success");
+    });
+
+    it("treats an unresolved or non-string signal path as no signal -- failure, not a throw", () => {
+      const noOutput = { session_id: "6c616a11-495a-4f05-878a-c1bfaa29f0e5", tool: "bash", result: { output: "x", metadata: { exit: null } } };
+      expect(buildEnvelope("tool.execute.after", noOutput, timeoutHookmap({ from: "$.result.metadata.exit", timeout_when: SIGNAL })).params.payload.exit_status).toBe("failure");
+      expect(exitStatusFor(null, { text: OPENCODE_TIMEOUT_OUTPUT })).toBe("failure");
+    });
+
+    it("leaves the plain field read unchanged: without timeout_when the same timeout is still failure", () => {
+      expect(exitStatusFor(null, OPENCODE_TIMEOUT_OUTPUT, { from: "$.result.metadata.exit" })).toBe("failure");
+    });
+
+    it("the result envelope carrying timeout validates against the ACS schema", () => {
+      const envelope = buildEnvelope("tool.execute.after", payloadWith(null, OPENCODE_TIMEOUT_OUTPUT), timeoutHookmap({ from: "$.result.metadata.exit", timeout_when: SIGNAL }));
+      expect(() => validateEnvelope(envelope)).not.toThrow();
+    });
+
+    it("the shipped opencode.hookmap.yaml maps the captured timed-out bash result to timeout", () => {
+      const shipped = loadHookmap("hosts/opencode/opencode.hookmap.yaml");
+      const captured = {
+        session_id: "6c616a11-495a-4f05-878a-c1bfaa29f0e5",
+        tool: "bash",
+        callID: "call_de_0",
+        result: { title: "printf ...", output: OPENCODE_TIMEOUT_OUTPUT, metadata: { output: OPENCODE_TIMEOUT_OUTPUT, exit: null, truncated: false } },
+      };
+      expect(buildEnvelope("tool.execute.after", captured, shipped).params.payload.exit_status).toBe("timeout");
+    });
+
+    describe("loadHookmap -- timeout_when is validated at load time", () => {
+      function withHookmapFile(content: string, fn: (path: string) => void): void {
+        const dir = mkdtempSync(join(tmpdir(), "acs-hookmap-timeout-"));
+        const path = join(dir, "hookmap.yaml");
+        writeFileSync(path, content);
+        try {
+          fn(path);
+        } finally {
+          unlinkSync(path);
+          rmdirSync(dir);
+        }
+      }
+
+      const RESULT_GATE =
+        "host: opencode\nhooks:\n  tool.execute.after:\n    acs_method: steps/toolCallResult\n" +
+        "    tool_name: $.tool\n    outputs: { from: $.result.output, within: $.result }\n" +
+        "    decisions:\n" +
+        "      allow: { output: { x: { value: y } } }\n" +
+        "      deny: { output: { x: { value: y } } }\n";
+      const withExitStatus = (yaml: string) => `${RESULT_GATE}    exit_status:\n${yaml}`;
+
+      it("accepts a well-formed timeout_when beside from", () => {
+        const ok = withExitStatus(
+          "      from: $.result.metadata.exit\n      timeout_when: { path: $.result.metadata.output, contains: terminated }\n",
+        );
+        withHookmapFile(ok, (path) => expect(() => loadHookmap(path)).not.toThrow());
+      });
+
+      it("refuses timeout_when beside a literal", () => {
+        const broken = withExitStatus("      literal: success\n      timeout_when: { path: $.result.metadata.output, contains: x }\n");
+        withHookmapFile(broken, (path) =>
+          expect(() => loadHookmap(path)).toThrow(/"hooks\.tool\.execute\.after\.exit_status\.timeout_when" is declared without "exit_status\.from"/),
+        );
+      });
+
+      it("refuses an unknown key, so a typo cannot switch detection off", () => {
+        const broken = withExitStatus("      from: $.result.metadata.exit\n      timeout_when: { path: $.result.metadata.output, contain: x }\n");
+        withHookmapFile(broken, (path) => expect(() => loadHookmap(path)).toThrow(/unknown key\(s\) "contain"/));
+      });
+
+      it("refuses a path that is not JSONPath-lite", () => {
+        const broken = withExitStatus("      from: $.result.metadata.exit\n      timeout_when: { path: result.metadata.output, contains: x }\n");
+        withHookmapFile(broken, (path) => expect(() => loadHookmap(path)).toThrow(/timeout_when"\.path is "result\.metadata\.output"/));
+      });
+
+      it("refuses an empty contains", () => {
+        const broken = withExitStatus("      from: $.result.metadata.exit\n      timeout_when: { path: $.result.metadata.output, contains: \"\" }\n");
+        withHookmapFile(broken, (path) => expect(() => loadHookmap(path)).toThrow(/timeout_when"\.contains must be a non-empty string/));
+      });
+    });
+  });
+
+  /**
    * The request gate cannot be given an `outputs` declaration -- it builds
    * no result payload for one to describe -- but it can declare `tools`. See
    * `HookmapHookEntryCommon.tools`'s own doc comment (build-envelope.ts): a
