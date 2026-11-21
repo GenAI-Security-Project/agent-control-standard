@@ -31,6 +31,7 @@ It constructs the AGT runtime once, at startup, against `policy/manifest.yaml`, 
 | `ACS_SESSION_CONTEXT_LOG` | `.acs/session-context.jsonl` | Where each session's hash chain is written |
 | `ACS_OTEL_FILE` | unset | Writes one OpenTelemetry span per decided step as OTLP/JSON, one export request per line. Unset means no trace export |
 | `ACS_OTEL_ENDPOINT` | unset | Sends the same spans to an OTLP/HTTP collector, for example `http://127.0.0.1:4318/v1/traces` |
+| `ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT` | unset | Set to `1` to let `ACS_OTEL_ENDPOINT` be plain `http://` to a host that is not loopback. The spans then cross the network unencrypted. See [Send traces to another host](#send-traces-to-another-host) |
 
 To see a decision without an agent client, pipe a hook payload into the Claude Code shim while the Guardian runs. The [tree README](../../README.md#drive-one-hook-by-hand) shows the command and its output.
 
@@ -62,13 +63,15 @@ Each step the Guardian trusted becomes one span, named by [`trace/otel-mapping.j
 
 Every span also carries `acs.session.id`, and `acs.request_id` whenever the envelope has one, so a session can be rebuilt from the trace alone. When an argument or output carries a Provenance object, the span carries `acs.provenance.origin` as an array, one element per Provenance object in wire order. `acs.provenance.source_id` is the matching array, with `""` where an object has no `source_id`, and it is left out when no object has one. Both stop at 64 objects. `acs.provenance.lineage_depth` is not emitted: `provenance.json` defines no such field.
 
-Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it.
+Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it. Under the plain `http://` opt-in, either headers variable stops the endpoint from being built: see [Send traces to another host](#send-traces-to-another-host).
 
 The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian doesn't send it.
 
 This Guardian does not send `chain_hash`, `cited_provenance_ids`, or `policy_version` on its responses yet. `acs.chain_hash` and `acs.cited_provenance_ids` are absent from its spans, and `acs.policy.versions` carries `""` for each policy reference. The three policy arrays always have the same length as `policy_references`, with `""` where a reference has no value. A valid `handshake/hello`, a valid request for a method this Guardian does not dispatch, and an unparseable body produce no span.
 
 A step that got no decision is recorded as an `acs.decision.failure` event on the same span, with `acs.failure.class`, `acs.failure.posture` and `acs.failure.reported_by`, plus the error code, the timeout, the elapsed time and the request size when known. The Guardian emits it for an error it answered instead of a decision, for a decision it finished after the negotiated timeout, and for a step still open when it shut down. It carries the error code but never the error text, because that text can quote the request. The converter below produces the same event, reported by the observed agent, from the host adapter's audit log.
+
+A step still open at shutdown has class `timeout` when it has been open for longer than its timeout, because the host has already applied its posture, and `other` when it hasn't. The elapsed time is rounded up to a whole millisecond, so a late step never shows `acs.failure.elapsed_ms` equal to `acs.failure.timeout_ms`.
 
 A request the Guardian cannot vouch for is recorded apart from the steps it governed, as a `guardian.rejected_request` span. Such a request can carry any session and request id, a genuine request's included. So the span carries no `acs.session.id`, `acs.request_id`, step attribute or `acs.decision` event. It records the ids the request claimed as `guardian.rejected.claimed_session_id` and `guardian.rejected.claimed_request_id`, with `guardian.rejected.reason` and, for an error answer, `guardian.rejected.error_code`. These names belong to this Guardian, not to the ACS mapping.
 
@@ -98,6 +101,49 @@ flowchart LR
 Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped.
 
 Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too.
+
+### What the file output refuses
+
+The trace file holds reasoning text and provenance ids, so the Guardian checks `ACS_OTEL_FILE` every time it appends a batch. It does not check when it starts, so a refusal first shows with the first batch, about five seconds after the first decision. It opens the path without following a symlink and judges the file it opened, not the name. It refuses:
+
+- a symlink at the path, or a parent directory that is a symlink;
+- a file with a second hard link, or anything that is not a regular file, such as a FIFO;
+- a file, or a parent directory, that the user running the Guardian does not own;
+- a parent directory that every user can write to, such as `/tmp`. Put the file in a directory of its own, as `.acs/` is.
+
+An existing file with a wider mode is not refused. The Guardian sets it to `0600` and appends. A file it creates is `0600`, and a directory it creates is `0700`.
+
+Only the immediate parent directory is checked, and it is checked by name. A directory swapped for a symlink between that check and the open is followed, and the file's own checks still apply to what was opened.
+
+A refusal turns the file output off and prints the reason once (see [Troubleshooting](#troubleshooting)). The endpoint output keeps running. The converter below writes through the same code, so it refuses the same paths.
+
+On Windows the Guardian still refuses a symlink and a second hard link, but it checks no owner and sets no mode, because Windows controls access with ACLs. It also has to look for the symlink before it opens the file, so a link put there in between is followed.
+
+### Send traces to another host
+
+Use an `https://` endpoint to send spans to another host. A span carries the Guardian's reasoning text and provenance ids, and plain `http://` lets anyone on the network path read them.
+
+Two kinds of endpoint work with no extra setting: `https://` to any host, and `http://` to a loopback host. Loopback means an address in `127.0.0.0/8`, `::1`, the same IPv4 range written as `::ffff:127.0.0.1`, or the name `localhost` and no other name. [`otel-collector.yaml`](../../otel-collector.yaml) listens on loopback with no TLS, so it is for a collector on the same machine.
+
+Plain `http://` to any other host is refused. The Guardian builds no endpoint output, keeps the file output if you set one, and prints:
+
+```
+otel trace export to http://10.0.0.1:4318/v1/traces disabled after failure: refusing plain http to 10.0.0.1, which is not a loopback host: spans would cross the network unencrypted. Use an https endpoint, or set ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 to send them anyway.
+```
+
+`ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1` sends them over plain `http://` anyway. Any other value is ignored. Set it only when you trust every hop between the Guardian and the collector. With it set, the Guardian builds the output and prints a warning when it starts:
+
+```
+otel trace export to http://10.0.0.1:4318/v1/traces: ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 is set, so spans go to 10.0.0.1 over plain http, unencrypted. Use an https endpoint unless every hop to that host is trusted.
+```
+
+`OTEL_EXPORTER_OTLP_HEADERS` and `OTEL_EXPORTER_OTLP_TRACES_HEADERS` add headers to every request the endpoint output sends, which is how a collector is usually given its credential. Over plain `http://` that credential would cross the network unencrypted too. So when either variable is set to a non-empty value, the opt-in is refused, and the Guardian names the variable:
+
+```
+otel trace export to http://10.0.0.1:4318/v1/traces disabled after failure: refusing plain http to 10.0.0.1 even with ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1: OTEL_EXPORTER_OTLP_HEADERS is set, and the headers it adds can carry credentials, which would cross the network unencrypted. Use an https endpoint, or unset OTEL_EXPORTER_OTLP_HEADERS.
+```
+
+A user name or password in the endpoint URL is refused under the opt-in for the same reason: the HTTP client sends it as an `Authorization` header. Over `https://`, and to a loopback host, the headers and the URL's credential are sent as before.
 
 ### Convert the host audit log
 
@@ -135,6 +181,10 @@ That command regenerates it. `test/sample-trace.test.ts` checks the sample again
 These are the messages export can print, with what each one means. None of them changes a decision.
 
 - `otel trace export to <path or URL> disabled after failure: <reason>` on the Guardian's stderr. That output failed its first write or send and is off until the Guardian restarts. The other output keeps running. For an endpoint, the usual cause is a collector that wasn't running yet or was restarted: stop the Guardian, start the collector, then start the Guardian again.
+- `otel trace export to <path> disabled after failure: refusing to write <path>: <reason>`. The file output failed one of its checks, and no span was written to that path. The reason names what to fix: `it is a symbolic link`, `it has more than one hard link`, `it is not a regular file`, `it is not owned by the user running this process`, or the same about `its directory <directory>`, which can also be `writable by every user`. [What the file output refuses](#what-the-file-output-refuses) lists the rules.
+- `otel trace export to <URL> disabled after failure: refusing plain http to <host>, which is not a loopback host: ...` at startup. The endpoint is plain `http://` to another host, so no endpoint output was built. Use an `https://` endpoint, or read [Send traces to another host](#send-traces-to-another-host) before you set `ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1`.
+- `otel trace export to <URL> disabled after failure: refusing plain http to <host> even with ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1: <variable> is set, ...` at startup. You opted in, but `OTEL_EXPORTER_OTLP_HEADERS` or `OTEL_EXPORTER_OTLP_TRACES_HEADERS` is set, and its headers would cross the network unencrypted. Unset the variable the message names, or use an `https://` endpoint. The same line with `the endpoint URL carries a user name or password` means the credential is in `ACS_OTEL_ENDPOINT` itself.
+- `otel trace export to <URL>: ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 is set, so spans go to <host> over plain http, unencrypted. ...` at startup. A warning, not a failure: the endpoint output is running, and it sends in clear text because you opted in.
 - `otel trace exporter disabled after failure: <reason>`, with no output named. The exporter as a whole stopped, for example because `otel-mapping.json` didn't load. No spans reach either output for the rest of the process.
 - `otel trace exporter shutdown disabled after failure: did not finish within 3000 ms; unexported spans were dropped`. An output stalled at shutdown. The spans still in its queue are lost.
 - `otel trace export to <URL>: an HTTP proxy is set and NO_PROXY/no_proxy did not exempt <host>, so on some Bun versions these spans go through the proxy.` at startup. Your shell has `HTTP_PROXY` set, and the loopback host isn't in the proxy exemption list Bun reads. The Guardian adds the host itself, which takes effect on Bun 1.3.14 and later. On older versions, start the Guardian with the host in both `NO_PROXY` and `no_proxy`, as step 1 of [Produce a trace](../../README.md#produce-a-trace) does.
@@ -153,7 +203,7 @@ const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.y
 await guardian.close();
 ```
 
-`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog`, `otelTraceFile`, `otelTraceEndpoint` and `onDecisionFailure`, which mirror the environment variables above, and five options for tests: `mappingPath`, `annotator`, `bridge`, `sessionContextStore` and `traceExporter`. Each is documented where it is declared, in `src/server.ts`.
+`StartGuardianOptions` also accepts `hostname`, `envelopeLogPath`, `sessionContextLog`, `otelTraceFile`, `otelTraceEndpoint`, `otelAllowPlaintextEndpoint` and `onDecisionFailure`, which mirror the environment variables above, and five options for tests: `mappingPath`, `annotator`, `bridge`, `sessionContextStore` and `traceExporter`. Each is documented where it is declared, in `src/server.ts`.
 
 `otelTraceEndpoint` leaves the proxy variables alone. `src/main.ts` prints the proxy warning and adds a loopback endpoint's host to whichever of `NO_PROXY` and `no_proxy` is set, or to both when neither is. An embedder that wants the same imports `loopbackProxyWarning` and `keepLoopbackOffProxy` from `guardian` and calls each with `(endpoint, process.env)` before it starts the Guardian.
 
@@ -177,8 +227,8 @@ The package has two entry points. `guardian` exports the governance verbs listed
 | `src/envelope-log-sink.ts` | The envelope log writer |
 | `src/otel-trace-exporter.ts` | The OpenTelemetry span exporter, assembled from the three files below |
 | `src/otel-mapping.ts` | Reads `otel-mapping.json`, and says which envelope field feeds each span attribute |
-| `src/otlp-file-exporter.ts` | The OTLP/JSON file writer |
-| `src/loopback-proxy.ts` | Keeps a loopback trace endpoint off an HTTP proxy, applied by `src/main.ts` |
+| `src/otlp-file-exporter.ts` | The OTLP/JSON file writer, and the checks it makes before each append |
+| `src/loopback-proxy.ts` | Says which trace endpoints are loopback, and keeps one off an HTTP proxy, applied by `src/main.ts` |
 | `src/audit-to-otlp.ts` | Converts the host adapter's audit log into the same OTLP/JSON file |
 | `src/acs-result.ts` | The decision result type |
 

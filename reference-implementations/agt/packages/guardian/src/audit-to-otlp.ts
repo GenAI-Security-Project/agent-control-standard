@@ -63,7 +63,7 @@ import {
   type JsonObject,
 } from "./otel-mapping.ts";
 import { SPAN_LIMITS } from "./otel-trace-exporter.ts";
-import { createFileSpanExporter } from "./otlp-file-exporter.ts";
+import { checkTraceDirectory, createFileSpanExporter } from "./otlp-file-exporter.ts";
 
 /**
  * The host's `failure.kind` (packages/host-adapter/src/failure-kinds.ts)
@@ -208,6 +208,9 @@ export async function convertAuditLog(auditPath: string, otelPath: string, mappi
   // otherwise corrupt or double. It does not stop another process swapping
   // the path mid-run. Nothing here defends against a same-user writer.
   mkdirSync(dirname(otelPath), { recursive: true, mode: 0o700 });
+  // The exporter refuses some directories. Asked here, before the create, so
+  // a refused directory is left with no empty output to block the rerun.
+  await checkTraceDirectory(otelPath);
   try {
     closeSync(openSync(otelPath, "wx", 0o600));
   } catch (error) {

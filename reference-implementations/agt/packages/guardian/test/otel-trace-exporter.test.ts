@@ -1,14 +1,33 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
+import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
 import { startGuardian, type GuardianSnapshot } from "../src/index.ts";
 import { FAILURE_DETAIL_BY_KIND } from "../src/audit-to-otlp.ts";
 import { buildServerHello } from "../src/handshake.ts";
+import { isLoopbackEndpoint } from "../src/loopback-proxy.ts";
 import { makeEnvelope, toolCallEnvelope } from "./helpers/envelopes.ts";
 import {
   createFileSpanExporter,
@@ -72,6 +91,22 @@ function throwingSpanExporter(): SpanExporter {
       throw new Error("exporter threw");
     },
     async shutdown(): Promise<void> {},
+  };
+}
+
+/** A span exporter that keeps what it is handed. InMemorySpanExporter
+ * forgets its spans when it is shut down, and some tests read them after. */
+function keepingSpanExporter(): { exporter: SpanExporter; spans: ReadableSpan[] } {
+  const spans: ReadableSpan[] = [];
+  return {
+    spans,
+    exporter: {
+      export(batch, resultCallback): void {
+        spans.push(...batch);
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async shutdown(): Promise<void> {},
+    },
   };
 }
 
@@ -810,6 +845,71 @@ describe("Guardian trace export wiring", () => {
     });
   }
 
+  // The acceptance test on issue #283. The issue #274 premortem re-posted a
+  // real pair and found three events under it: the allow, a guardian_error
+  // and a deny. Here four re-posts, each refused by a different schema rule,
+  // leave the pair with its one span.
+  it("leaves exactly one span under a real pair after four rejected re-posts of it", async () => {
+    const { exporter, spans } = memoryExporter();
+    const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
+    try {
+      const requestId = crypto.randomUUID();
+      const sessionId = crypto.randomUUID();
+      const repost = (id: number | null) => toolCallEnvelope("ls -la", { id, requestId, sessionId });
+      const params = (envelope: Record<string, unknown>) => envelope.params as Record<string, unknown>;
+      // No JSON-RPC id. The Guardian has no id to answer under, so this one
+      // gets a bare error and the other three get a deny.
+      const noRpcId = repost(null);
+      // A required member missing.
+      const noTimestamp = repost(2);
+      delete params(noTimestamp).timestamp;
+      // A version that is not semver.
+      const badVersion = repost(3);
+      params(badVersion).acs_version = "1";
+      // A payload the hook's own schema refuses.
+      const noArguments = repost(4);
+      delete (params(noArguments).payload as Record<string, unknown>).arguments;
+
+      const genuine = await postRaw(guardian.url, repost(1));
+      const answers: Record<string, unknown>[] = [];
+      for (const envelope of [noRpcId, noTimestamp, badVersion, noArguments]) {
+        answers.push(await postRaw(guardian.url, envelope));
+      }
+      await exporter.flush();
+
+      expect((genuine.result as { decision?: string }).decision).toBe("allow");
+      expect(
+        answers.map((answer) => (answer.error as { code?: number } | undefined)?.code ?? (answer.result as { reason_codes?: string[] }).reason_codes),
+      ).toEqual([-32010, ["envelope_invalid"], ["envelope_invalid"], ["envelope_invalid"]]);
+
+      // Either id under its ACS name counts, not only the two together.
+      const underPair = spans().filter(
+        (span) => span.attributes["acs.request_id"] === requestId || span.attributes["acs.session.id"] === sessionId,
+      );
+      expect(underPair).toHaveLength(1);
+      expect(underPair[0]?.name).toBe(TOOL_CALL_SPAN.span_name);
+      expect(underPair[0]?.events.map((event) => [event.name, event.attributes?.["acs.decision"]])).toEqual([
+        [MAPPING.decisionEventName, "allow"],
+      ]);
+
+      const rejected = spans().filter((span) => span !== underPair[0]);
+      expect(rejected.map((span) => ({ name: span.name, attributes: span.attributes, events: span.events }))).toEqual(
+        [-32010, undefined, undefined, undefined].map((errorCode) => ({
+          name: REJECTED_SPAN_NAME,
+          attributes: {
+            "guardian.rejected.reason": "envelope_invalid",
+            "guardian.rejected.claimed_session_id": sessionId,
+            "guardian.rejected.claimed_request_id": requestId,
+            ...(errorCode === undefined ? {} : { "guardian.rejected.error_code": errorCode }),
+          },
+          events: [],
+        })),
+      );
+    } finally {
+      await guardian.close();
+    }
+  });
+
   it("records a schema-invalid envelope for a method it does not dispatch as a rejected request too", async () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
@@ -957,7 +1057,10 @@ describe("Guardian trace export wiring", () => {
   // never exported: the step would leave no trace at all. Shutdown closes
   // it with an `other` failure event that says why. close() drains for the
   // negotiated timeout (5 s in the ServerHello) before it gives up on the
-  // handler, which is what bounds this test.
+  // handler, which is what bounds this test. This exporter is built with no
+  // timeouts, so the class is `other` however long the drain took. A Guardian
+  // that builds its own from the ServerHello writes `timeout` once the drain
+  // has outlasted the step's timeout.
   it("closes a step still open at shutdown with an other failure event and ERROR status", async () => {
     // The file, not an in-memory exporter: close() shuts the provider down,
     // and InMemorySpanExporter forgets its spans when it is shut down.
@@ -1422,6 +1525,438 @@ describe("createOtelTraceExporter -- review fixes", () => {
   });
 });
 
+// Issue #283, items 3 and 4. The host applied its posture when its timeout
+// ran out, so a step it stopped waiting for is a timeout whether the decision
+// came late or never came.
+describe("createOtelTraceExporter -- a step the host stopped waiting for", () => {
+  /** Opens one step that arrived `ageMs` ago, shuts the exporter down, and
+   * returns the failure event the step was closed with. The age comes in
+   * through `receivedAt`, so no test here sleeps. */
+  async function closedAtShutdown(ageMs: number, timeoutConfig?: CreateOtelTraceExporterOptions["timeoutConfig"]) {
+    const kept = keepingSpanExporter();
+    const exporter = createOtelTraceExporter({ spanExporter: kept.exporter, methodsEvaluated: METHODS_EVALUATED, timeoutConfig });
+    exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest", { trusted: true, receivedAt: performance.now() - ageMs });
+    await exporter.shutdown();
+
+    expect(kept.spans).toHaveLength(1);
+    expect(kept.spans[0]?.events.map((event) => event.name)).toEqual(["acs.decision.failure"]);
+    return kept.spans[0]?.events[0]?.attributes;
+  }
+
+  it("closes a step older than the default timeout at shutdown as a timeout, with timeout_ms", async () => {
+    const failure = await closedAtShutdown(200, { default_ms: 50 });
+
+    expect(failure?.["acs.failure.class"]).toBe("timeout");
+    expect(failure?.["acs.failure.timeout_ms"]).toBe(50);
+    expect(failure?.["acs.failure.elapsed_ms"]).toBeGreaterThanOrEqual(200);
+    expect(failure?.["acs.failure.detail"]).toBeUndefined();
+  });
+
+  it("judges a step open at shutdown by its method's own timeout before the default", async () => {
+    const shortForMethod = await closedAtShutdown(200, { default_ms: 60_000, per_method_ms: { "steps/toolCallRequest": 50 } });
+    expect([shortForMethod?.["acs.failure.class"], shortForMethod?.["acs.failure.timeout_ms"]]).toEqual(["timeout", 50]);
+
+    const longForMethod = await closedAtShutdown(200, { default_ms: 50, per_method_ms: { "steps/toolCallRequest": 60_000 } });
+    expect(longForMethod?.["acs.failure.class"]).toBe("other");
+  });
+
+  it("keeps other, with its detail, for a step open for less than its timeout or with no timeout known", async () => {
+    for (const timeoutConfig of [{ default_ms: 60_000 }, undefined]) {
+      const failure = await closedAtShutdown(200, timeoutConfig);
+
+      expect(failure?.["acs.failure.class"]).toBe("other");
+      expect(failure?.["acs.failure.detail"]).toBe("the Guardian shut down before it answered this step");
+      expect(failure?.["acs.failure.timeout_ms"]).toBeUndefined();
+    }
+  });
+
+  // 50.3 ms against a 50 ms timeout is late, and rounding reported it as 50.
+  // The clock is held, so the elapsed time is 50.3 ms on any machine.
+  it("reports a decision 0.3 ms late with an elapsed_ms above timeout_ms, never equal to it", async () => {
+    const { exporter, spans } = memoryExporter({ timeoutConfig: { default_ms: 50 } });
+    const clock = spyOn(performance, "now").mockReturnValue(1000);
+    try {
+      const handle = exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest", { trusted: true, receivedAt: 1000 });
+      clock.mockReturnValue(1050.3);
+      exporter.end(handle, decisionResponse(1, { decision: "allow" }));
+    } finally {
+      clock.mockRestore();
+    }
+    await exporter.flush();
+
+    const failure = spans()[0]?.events.find((event) => event.name === "acs.decision.failure")?.attributes;
+    expect(failure?.["acs.failure.class"]).toBe("timeout");
+    expect(failure?.["acs.failure.timeout_ms"]).toBe(50);
+    expect(failure?.["acs.failure.elapsed_ms"]).toBe(51);
+  });
+});
+
+// Issue #283, item 1. The file exporter opens the path itself on every
+// append, so it can refuse a link, or a file that is not the user's, before
+// it writes a line of reasoning text into it.
+describe("createFileSpanExporter -- what it will append to", () => {
+  // Ownership, modes and O_NOFOLLOW are POSIX. The Windows branch has its own
+  // tests at the end, and those run on every platform.
+  const WINDOWS = process.platform === "win32";
+
+  const scratch: string[] = [];
+  const scratchDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-open-"));
+    scratch.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of scratch.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** Hands the exporter one finished span and resolves with what it reported. */
+  async function exportTo(file: SpanExporter): Promise<ExportResult> {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(exporter.start(toolCallEnvelope("ls", { id: 1 }), "steps/toolCallRequest", TRUSTED), decisionResponse(1, { decision: "allow" }));
+    await exporter.flush();
+    const batch = [...spans()];
+    await exporter.shutdown();
+    return new Promise((resolve) => file.export(batch, resolve));
+  }
+
+  /** The span names on each line the exporter appended after `skip` lines. */
+  const appendedSpanNames = (path: string, skip: number): string[][] =>
+    readFileSync(path, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .slice(skip)
+      .map((line) => otlpSpans([JSON.parse(line) as OtlpRequest]).map((span) => span.name));
+
+  it.skipIf(WINDOWS)("refuses a symlink at the final path and writes nothing through it", async () => {
+    for (const targetExists of [true, false]) {
+      const dir = scratchDir();
+      const target = join(dir, "target.jsonl");
+      if (targetExists) {
+        writeFileSync(target, "kept\n");
+      }
+      const path = join(dir, "traces.jsonl");
+      symlinkSync(target, path);
+
+      const result = await exportTo(createFileSpanExporter(path));
+
+      expect(result.code).toBe(ExportResultCode.FAILED);
+      expect(result.error?.message).toBe(`refusing to write ${path}: it is a symbolic link`);
+      // An existing target is untouched, and a dangling link creates none.
+      expect(existsSync(target) ? readFileSync(target, "utf8") : null).toBe(targetExists ? "kept\n" : null);
+    }
+  });
+
+  it.skipIf(WINDOWS)("refuses a parent directory that is a symlink, and creates nothing where it points", async () => {
+    const dir = scratchDir();
+    const real = join(dir, "real");
+    mkdirSync(real, { mode: 0o700 });
+    const linked = join(dir, "linked");
+    symlinkSync(real, linked);
+    // However the path spells the directory: lstat follows a link named with
+    // a trailing "/." or "/".
+    for (const path of [join(linked, "traces.jsonl"), `${linked}/./traces.jsonl`, `${linked}//traces.jsonl`]) {
+      const result = await exportTo(createFileSpanExporter(path));
+
+      expect(result.code).toBe(ExportResultCode.FAILED);
+      expect(result.error?.message).toBe(`refusing to write ${path}: its directory ${linked} is a symbolic link`);
+      expect(readdirSync(real)).toEqual([]);
+    }
+  });
+
+  it.skipIf(WINDOWS)("refuses a file with a second hard link, and leaves its content and mode alone", async () => {
+    const dir = scratchDir();
+    const original = join(dir, "original.jsonl");
+    writeFileSync(original, "kept\n");
+    chmodSync(original, 0o644);
+    const path = join(dir, "traces.jsonl");
+    linkSync(original, path);
+
+    const result = await exportTo(createFileSpanExporter(path));
+
+    expect(result.code).toBe(ExportResultCode.FAILED);
+    expect(result.error?.message).toBe(`refusing to write ${path}: it has more than one hard link`);
+    expect(readFileSync(original, "utf8")).toBe("kept\n");
+    expect((statSync(original).mode & 0o777).toString(8)).toBe("644");
+  });
+
+  // Tightened, not refused: PR #112 keeps existing file modes, and a refusal
+  // here would turn the trace off in the walkthrough (issue #274).
+  it.skipIf(WINDOWS)("tightens an existing 0644 file to 0600 and appends to it", async () => {
+    const path = join(scratchDir(), "traces.jsonl");
+    writeFileSync(path, "earlier line\n");
+    chmodSync(path, 0o644);
+
+    const result = await exportTo(createFileSpanExporter(path));
+
+    expect(result.code).toBe(ExportResultCode.SUCCESS);
+    expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+    expect(readFileSync(path, "utf8").startsWith("earlier line\n")).toBe(true);
+    expect(appendedSpanNames(path, 1)).toEqual([[TOOL_CALL_SPAN.span_name]]);
+  });
+
+  it.skipIf(WINDOWS)("appends to an existing file the user owns that has one link, on every export", async () => {
+    const path = join(scratchDir(), "traces.jsonl");
+    writeFileSync(path, "earlier line\n", { mode: 0o600 });
+    const file = createFileSpanExporter(path);
+
+    const results = [await exportTo(file), await exportTo(file)];
+
+    expect(results.map((result) => result.code)).toEqual([ExportResultCode.SUCCESS, ExportResultCode.SUCCESS]);
+    expect(appendedSpanNames(path, 1)).toEqual([[TOOL_CALL_SPAN.span_name], [TOOL_CALL_SPAN.span_name]]);
+  });
+
+  // Every append, not only the first: the path can change under a Guardian
+  // that has been writing to it for hours.
+  it.skipIf(WINDOWS)("checks the path again on an append that follows a good one", async () => {
+    const dir = scratchDir();
+    const path = join(dir, "traces.jsonl");
+    const file = createFileSpanExporter(path);
+    expect((await exportTo(file)).code).toBe(ExportResultCode.SUCCESS);
+
+    chmodSync(path, 0o644);
+    expect((await exportTo(file)).code).toBe(ExportResultCode.SUCCESS);
+    expect((statSync(path).mode & 0o777).toString(8)).toBe("600");
+
+    const target = join(dir, "target.jsonl");
+    writeFileSync(target, "kept\n");
+    unlinkSync(path);
+    symlinkSync(target, path);
+    expect((await exportTo(file)).error?.message).toBe(`refusing to write ${path}: it is a symbolic link`);
+    expect(readFileSync(target, "utf8")).toBe("kept\n");
+  });
+
+  // A blocking open of a FIFO waits for a reader, on the event loop's own
+  // thread pool, for as long as none comes.
+  it.skipIf(WINDOWS)("refuses a FIFO at once instead of waiting for a reader, and refuses one that has a reader", async () => {
+    const path = join(scratchDir(), "traces.jsonl");
+    expect(Bun.spawnSync(["mkfifo", path]).exitCode).toBe(0);
+    const file = createFileSpanExporter(path);
+    const outcome = async (): Promise<string | undefined> =>
+      Promise.race([exportTo(file).then((result) => result.error?.message), Bun.sleep(2000).then(() => "still waiting after 2 s")]);
+    const refused = `refusing to write ${path}: it is not a regular file`;
+
+    expect(await outcome()).toBe(refused);
+
+    // With a reader the open succeeds, so the descriptor's own type is what
+    // refuses it.
+    const reader = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      expect(await outcome()).toBe(refused);
+    } finally {
+      closeSync(reader);
+    }
+  });
+
+  it.skipIf(WINDOWS)("refuses a parent directory every user can write to, and accepts one only its group can", async () => {
+    const dir = scratchDir();
+    const path = join(dir, "traces.jsonl");
+    const file = createFileSpanExporter(path);
+
+    // 1777 is /tmp: the sticky bit stops a rename, not a file planted first.
+    // The chmod command sets the mode, because Bun's chmodSync drops the
+    // sticky bit.
+    for (const mode of ["777", "1777"]) {
+      expect(Bun.spawnSync(["chmod", mode, dir]).exitCode).toBe(0);
+      expect((statSync(dir).mode & 0o7777).toString(8)).toBe(mode);
+      const result = await exportTo(file);
+      expect(result.error?.message).toBe(`refusing to write ${path}: its directory ${dir} is writable by every user`);
+      expect(existsSync(path)).toBe(false);
+    }
+
+    chmodSync(dir, 0o770);
+    expect((await exportTo(file)).code).toBe(ExportResultCode.SUCCESS);
+  });
+
+  // No test can make another user's file without root, so the effective uid
+  // is what changes here.
+  it.skipIf(WINDOWS)("refuses a directory, and then a file, that the effective user does not own", async () => {
+    const dir = scratchDir();
+    const path = join(dir, "traces.jsonl");
+    const file = createFileSpanExporter(path);
+    const me = process.geteuid!();
+    const euid = spyOn(process, "geteuid");
+    try {
+      euid.mockReturnValue(me + 1);
+      const inDirectory = await exportTo(file);
+      expect(inDirectory.error?.message).toBe(`refusing to write ${path}: its directory ${dir} is not owned by the user running this process`);
+      expect(existsSync(path)).toBe(false);
+
+      // The directory is checked first and the opened file second, so only
+      // the second answer is the other user's.
+      writeFileSync(path, "kept\n");
+      chmodSync(path, 0o644);
+      let asked = 0;
+      euid.mockImplementation(() => (asked++ === 0 ? me : me + 1));
+      const onFile = await exportTo(file);
+      expect(onFile.error?.message).toBe(`refusing to write ${path}: it is not owned by the user running this process`);
+      expect(readFileSync(path, "utf8")).toBe("kept\n");
+      expect((statSync(path).mode & 0o777).toString(8)).toBe("644");
+    } finally {
+      euid.mockRestore();
+    }
+  });
+
+  // The Windows branch, chosen by the platform option so it runs here too.
+  // It has no O_NOFOLLOW, so the link at the path is found by looking first.
+  it("on the Windows branch, refuses a symlink at the path or as its directory, and a second hard link", async () => {
+    const dir = scratchDir();
+    const onWindows = (path: string): Promise<ExportResult> => exportTo(createFileSpanExporter(path, { platform: "win32" }));
+
+    const target = join(dir, "target.jsonl");
+    writeFileSync(target, "kept\n");
+    const link = join(dir, "link.jsonl");
+    symlinkSync(target, link);
+    expect((await onWindows(link)).error?.message).toBe(`refusing to write ${link}: it is a symbolic link`);
+    expect(readFileSync(target, "utf8")).toBe("kept\n");
+
+    const nowhere = join(dir, "nowhere.jsonl");
+    const dangling = join(dir, "dangling.jsonl");
+    symlinkSync(nowhere, dangling);
+    expect((await onWindows(dangling)).error?.message).toBe(`refusing to write ${dangling}: it is a symbolic link`);
+    expect(existsSync(nowhere)).toBe(false);
+
+    const real = join(dir, "real");
+    mkdirSync(real);
+    const linked = join(dir, "linked");
+    symlinkSync(real, linked);
+    const inLinked = join(linked, "traces.jsonl");
+    expect((await onWindows(inLinked)).error?.message).toBe(`refusing to write ${inLinked}: its directory ${linked} is a symbolic link`);
+    expect(readdirSync(real)).toEqual([]);
+
+    const second = join(dir, "second.jsonl");
+    linkSync(target, second);
+    expect((await onWindows(second)).error?.message).toBe(`refusing to write ${second}: it has more than one hard link`);
+    expect(readFileSync(target, "utf8")).toBe("kept\n");
+  });
+
+  // What the Windows branch does not do, pinned so its doc comment stays
+  // true: it judges no directory by its mode bits, and it changes no mode.
+  it("on the Windows branch, appends whatever the directory's mode bits say, and leaves the file's mode alone", async () => {
+    const dir = scratchDir();
+    const path = join(dir, "traces.jsonl");
+    writeFileSync(path, "earlier line\n");
+    chmodSync(path, 0o644);
+    chmodSync(dir, 0o777);
+    const before = statSync(path).mode;
+
+    const result = await exportTo(createFileSpanExporter(path, { platform: "win32" }));
+
+    expect(result.code).toBe(ExportResultCode.SUCCESS);
+    expect(statSync(path).mode).toBe(before);
+    expect(appendedSpanNames(path, 1)).toEqual([[TOOL_CALL_SPAN.span_name]]);
+  });
+});
+
+// Issue #283, item 2. A span carries reasoning text and provenance ids, and
+// plain http to another host sends them across the network in clear text.
+// No test here ends a span, so nothing is ever sent to 10.0.0.1: each one
+// reads what was built and what was reported.
+describe("createOtelTraceExporter -- plain http to a host that is not loopback", () => {
+  const REMOTE = "http://10.0.0.1:4318/v1/traces";
+  const REFUSED =
+    `otel trace export to ${REMOTE} disabled after failure: refusing plain http to 10.0.0.1, which is not a loopback host: ` +
+    "spans would cross the network unencrypted. Use an https endpoint, or set ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 to send them anyway.";
+  const WARNING =
+    `otel trace export to ${REMOTE}: ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 is set, so spans go to 10.0.0.1 over plain http, unencrypted. ` +
+    "Use an https endpoint unless every hop to that host is trusted.";
+  const refusedForHeaders = (variable: string): string =>
+    `otel trace export to ${REMOTE} disabled after failure: refusing plain http to 10.0.0.1 even with ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1: ` +
+    `${variable} is set, and the headers it adds can carry credentials, which would cross the network unencrypted. Use an https endpoint, or unset ${variable}.`;
+
+  /** Builds an exporter for one endpoint and returns it with every line it
+   * printed. The environment is the test's own, never the process's. */
+  function build(endpoint: string, options: Partial<CreateOtelTraceExporterOptions> = {}): { exporter: OtelTraceExporter; printed: unknown[][] } {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const exporter = createOtelTraceExporter({ endpoint, methodsEvaluated: METHODS_EVALUATED, env: {}, ...options });
+      return { exporter, printed: [...errorSpy.mock.calls] };
+    } finally {
+      errorSpy.mockRestore();
+    }
+  }
+
+  it("builds no endpoint output, and says why and how to opt in", () => {
+    const { exporter, printed } = build(REMOTE);
+
+    // The endpoint was the only output asked for, so none at all is built.
+    expect(exporter).toBe(NULL_OTEL_TRACE_EXPORTER);
+    expect(printed).toEqual([[REFUSED]]);
+  });
+
+  it("keeps the file output when the endpoint beside it is refused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "acs-otel-refused-endpoint-"));
+    try {
+      const { exporter, printed } = build(REMOTE, { filePath: join(dir, "traces.jsonl") });
+
+      expect(exporter).not.toBe(NULL_OTEL_TRACE_EXPORTER);
+      expect(printed).toEqual([[REFUSED]]);
+      await exporter.shutdown();
+    } finally {
+      rmdirSync(dir);
+    }
+  });
+
+  it("builds the output with the opt-in, and prints a warning", async () => {
+    const { exporter, printed } = build(REMOTE, { allowPlaintextEndpoint: true });
+
+    expect(exporter).not.toBe(NULL_OTEL_TRACE_EXPORTER);
+    expect(printed).toEqual([[WARNING]]);
+    await exporter.shutdown();
+  });
+
+  it("refuses with the opt-in when either headers variable is set, because its headers can carry credentials", () => {
+    for (const variable of ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"]) {
+      const { exporter, printed } = build(REMOTE, { allowPlaintextEndpoint: true, env: { [variable]: "authorization=Bearer synthetic" } });
+
+      expect(exporter).toBe(NULL_OTEL_TRACE_EXPORTER);
+      expect(printed).toEqual([[refusedForHeaders(variable)]]);
+    }
+  });
+
+  // The http client sends userinfo as a Basic Authorization header.
+  it("refuses with the opt-in when the endpoint URL carries a user name or password", () => {
+    for (const userinfo of ["user:synthetic", "user"]) {
+      const withCredential = `http://${userinfo}@10.0.0.1:4318/v1/traces`;
+      const { exporter, printed } = build(withCredential, { allowPlaintextEndpoint: true });
+
+      expect(exporter).toBe(NULL_OTEL_TRACE_EXPORTER);
+      expect(printed).toEqual([
+        [
+          `otel trace export to ${withCredential} disabled after failure: refusing plain http to 10.0.0.1 even with ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1: ` +
+            "the endpoint URL carries a user name or password, which would cross the network unencrypted. Use an https endpoint, or take them out of the URL.",
+        ],
+      ]);
+    }
+  });
+
+  it("treats an empty headers variable as unset, as the SDK does", async () => {
+    const { exporter, printed } = build(REMOTE, { allowPlaintextEndpoint: true, env: { OTEL_EXPORTER_OTLP_HEADERS: "", OTEL_EXPORTER_OTLP_TRACES_HEADERS: " " } });
+
+    expect(exporter).not.toBe(NULL_OTEL_TRACE_EXPORTER);
+    expect(printed).toEqual([[WARNING]]);
+    await exporter.shutdown();
+  });
+
+  it("accepts every loopback form over plain http without the opt-in, and prints nothing", async () => {
+    for (const host of ["127.0.0.1", "127.1", "2130706433", "127.255.255.254", "[::1]", "[::ffff:127.0.0.1]", "localhost"]) {
+      const { exporter, printed } = build(`http://${host}:4318/v1/traces`, { env: { OTEL_EXPORTER_OTLP_HEADERS: "x-acs-probe=1" } });
+
+      expect({ host, built: exporter !== NULL_OTEL_TRACE_EXPORTER, printed }).toEqual({ host, built: true, printed: [] });
+      await exporter.shutdown();
+    }
+  });
+
+  it("needs no opt-in for https to another host, headers or not", async () => {
+    const { exporter, printed } = build("https://10.0.0.1:4318/v1/traces", { env: { OTEL_EXPORTER_OTLP_HEADERS: "authorization=Bearer synthetic" } });
+
+    expect(exporter).not.toBe(NULL_OTEL_TRACE_EXPORTER);
+    expect(printed).toEqual([]);
+    await exporter.shutdown();
+  });
+});
+
 // Issue #274: nothing in the lab's shell changes what the Guardian exports.
 describe("the Guardian's exporter does not depend on its environment", () => {
   const saved: Record<string, string | undefined> = {};
@@ -1559,6 +2094,52 @@ describe("the Guardian's exporter does not depend on its environment", () => {
       collector.server.stop(true);
     }
   }, 10_000);
+
+  // The one place the exporter reads the environment itself (issue #283):
+  // the SDK reads these variables from process.env when the endpoint output
+  // is built, so the check has to look there too.
+  it("refuses plain http to another host under the opt-in when the process environment sets a headers variable", () => {
+    unsetEnv("OTEL_EXPORTER_OTLP_HEADERS");
+    setEnv({ OTEL_EXPORTER_OTLP_TRACES_HEADERS: "authorization=Bearer synthetic" });
+    const errors: unknown[] = [];
+    const exporter = createOtelTraceExporter({
+      endpoint: "http://10.0.0.1:4318/v1/traces",
+      allowPlaintextEndpoint: true,
+      methodsEvaluated: METHODS_EVALUATED,
+      onError: (error) => errors.push(error),
+    });
+
+    expect(exporter).toBe(NULL_OTEL_TRACE_EXPORTER);
+    expect(errors.map((error) => (error as Error).message)).toEqual([
+      "refusing plain http to 10.0.0.1 even with ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1: OTEL_EXPORTER_OTLP_TRACES_HEADERS is set, " +
+        "and the headers it adds can carry credentials, which would cross the network unencrypted. " +
+        "Use an https endpoint, or unset OTEL_EXPORTER_OTLP_TRACES_HEADERS.",
+    ]);
+  });
+
+  // server.ts reads no environment, so the opt-in reaches the exporter as an
+  // option. No step is posted, so nothing is sent to 10.0.0.1.
+  it("carries the plain http opt-in from startGuardian to the exporter", async () => {
+    unsetEnv("OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS");
+    const endpoint = "http://10.0.0.1:4318/v1/traces";
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const printed: string[] = [];
+      for (const otelAllowPlaintextEndpoint of [undefined, false, true]) {
+        errorSpy.mockClear();
+        const guardian = await startGuardian({ ...baseOptions, otelTraceEndpoint: endpoint, otelAllowPlaintextEndpoint });
+        await guardian.close();
+        printed.push(errorSpy.mock.calls.map((call) => String(call[0]).split(": ")[1]).join("|"));
+      }
+      expect(printed).toEqual([
+        "refusing plain http to 10.0.0.1, which is not a loopback host",
+        "refusing plain http to 10.0.0.1, which is not a loopback host",
+        "ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1 is set, so spans go to 10.0.0.1 over plain http, unencrypted. Use an https endpoint unless every hop to that host is trusted.",
+      ]);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 
   // The exemption is main.ts's to apply (Ariel's review on PR #286), so this
   // test applies it the way main.ts does, before the exporter is built. It
@@ -1716,6 +2297,17 @@ describe("keepLoopbackOffProxy", () => {
     expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["a.internal,127.0.0.1", "b.internal,127.0.0.1"]);
   });
 
+  // Issue #283: every host isLoopbackEndpoint accepts takes plain http with
+  // no opt-in, so each one has to stay off a proxy, not only three spellings.
+  it("adds the endpoint's own host for any other loopback address", () => {
+    reset(undefined);
+    keepLoopbackOffProxy("http://127.0.0.2:4318/v1/traces", process.env);
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["127.0.0.2", "127.0.0.2"]);
+    reset(undefined);
+    keepLoopbackOffProxy("http://[::ffff:127.0.0.1]:4318/v1/traces", process.env);
+    expect([process.env.NO_PROXY, process.env.no_proxy]).toEqual(["::ffff:7f00:1,[::ffff:7f00:1]", "::ffff:7f00:1,[::ffff:7f00:1]"]);
+  });
+
   it("does not duplicate the entry when called twice", () => {
     reset(undefined);
     keepLoopbackOffProxy("http://127.0.0.1:4318/v1/traces", process.env);
@@ -1764,10 +2356,77 @@ describe("loopbackProxyWarning", () => {
     expect(loopbackProxyWarning("http://collector.example.com:4318/v1/traces", { HTTP_PROXY: "http://proxy:3128" })).toBeUndefined();
   });
 
+  it("warns for any other loopback address too", () => {
+    expect(loopbackProxyWarning("http://127.0.0.2:4318/v1/traces", { HTTP_PROXY: "http://proxy:3128" })).toContain("did not exempt 127.0.0.2,");
+    expect(loopbackProxyWarning("http://[::ffff:127.0.0.1]:4318/v1/traces", { HTTP_PROXY: "http://proxy:3128" })).toContain("did not exempt [::ffff:7f00:1],");
+  });
+
   it("wants the bracketed form for IPv6, the only one Bun matches", () => {
     const v6 = "http://[::1]:4318/v1/traces";
     expect(loopbackProxyWarning(v6, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "::1" })).toBeDefined();
     expect(loopbackProxyWarning(v6, { HTTP_PROXY: "http://proxy:3128", NO_PROXY: "[::1]" })).toBeUndefined();
+  });
+});
+
+// Issue #283: which endpoints may take plain http without the opt-in. The
+// URL parser normalizes the host first, so every spelling of one address is
+// judged as that address.
+describe("isLoopbackEndpoint", () => {
+  it("accepts 127.0.0.0/8, ::1, an IPv4-mapped 127 address and the name localhost, however they are spelled", () => {
+    for (const host of [
+      "127.0.0.1",
+      "127.0.0.0",
+      "127.255.255.255",
+      "127.1",
+      "2130706433",
+      "0x7f.0.0.1",
+      "0177.0.0.1",
+      "[::1]",
+      "[0:0:0:0:0:0:0:1]",
+      "[::ffff:127.0.0.1]",
+      "[::ffff:7f00:1]",
+      "[::ffff:127.9.8.7]",
+      "[0:0:0:0:0:ffff:7fff:ffff]",
+      "localhost",
+      "LOCALHOST",
+    ]) {
+      expect({ host, loopback: isLoopbackEndpoint(`http://${host}:4318/v1/traces`) }).toEqual({ host, loopback: true });
+    }
+  });
+
+  it("refuses every other address, and every other name", () => {
+    for (const host of [
+      "10.0.0.1",
+      "126.255.255.255",
+      "128.0.0.1",
+      "0.0.0.0",
+      "1.0.0.127",
+      "[::]",
+      "[::2]",
+      "[1::1]",
+      "[::1:0:1]",
+      "[::ffff:10.0.0.1]",
+      "[::ffff:128.0.0.1]",
+      // 127.0.0.1 in the last 32 bits, but not under the ::ffff:0:0/96 prefix.
+      "[::7f00:1]",
+      "[::fffe:7f00:1]",
+      "[1::ffff:7f00:1]",
+      "[0:0:0:1:0:ffff:7f00:1]",
+      "[2001:db8::7f00:1]",
+      "127.0.0.1.example.com",
+      "localhost.example.com",
+      "localhost.",
+      "notlocalhost",
+      "collector.example.com",
+    ]) {
+      expect({ host, loopback: isLoopbackEndpoint(`http://${host}:4318/v1/traces`) }).toEqual({ host, loopback: false });
+    }
+  });
+
+  it("judges the host the URL parser found, not one that only appears in the text", () => {
+    expect(isLoopbackEndpoint("http://127.0.0.1@collector.example.com:4318/v1/traces")).toBe(false);
+    expect(isLoopbackEndpoint("http://collector.example.com:4318/127.0.0.1")).toBe(false);
+    expect(isLoopbackEndpoint("http://user:secret@127.0.0.1:4318/v1/traces")).toBe(true);
   });
 });
 
