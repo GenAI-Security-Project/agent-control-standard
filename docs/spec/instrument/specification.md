@@ -328,7 +328,18 @@ Schema: [`provenance-summary.json`](https://genai-security-project.github.io/age
 
 ### 8.4 Intent
 
-Intent is OPTIONAL and is defined in [Concepts › Intent](../../concepts/intent.md) (normative). Wire fields: `raw`, `parsed` (capability list), `parser_provenance` (REQUIRED if `parsed` present; `origin` MUST be `user_input`), `scope_mode`.
+Intent is OPTIONAL and is defined in [Concepts › Intent](../../concepts/intent.md) (normative). Wire fields: `raw`, `parsed` (an array of objects with optional string members `capability`, `tool`, `operation`, and `resource`), `parser_provenance` (REQUIRED if `parsed` present; `origin` MUST be `user_input`), `scope_mode`. The same entry shape applies at `sessionStart`, `agentTrigger`, and in `subagentStart.subagent_intent`.
+
+**Intent comparison (normative).** A Guardian checking whether a `steps/toolCallRequest` falls within `Intent.parsed` MUST evaluate entries as alternatives. A request matches if at least one entry matches. Within an entry, all supplied constraints MUST match:
+
+- `capability` MUST equal the request payload's `capability`, using case-sensitive string equality. If the request omits `capability`, that entry does not match. v0.1 defines no wildcard or hierarchical matching for capability names.
+- `tool` MUST equal the request payload's `tool.name`, using case-sensitive string equality. A matching capability MUST NOT override a different tool constraint.
+- `operation` MUST equal the request payload's `operation`, using case-sensitive string equality. If the request omits `operation`, that entry does not match.
+- `resource` MUST match the resource identified by deployment policy from the request's arguments. Resource extraction, normalization, and matching are deployment-defined; a Guardian MUST NOT treat an unresolved resource constraint as satisfied.
+
+An entry with none of these members MUST NOT match any request. Omitting a member removes only that member's constraint. If an entry omits `capability`, the mapping from its `tool`/`operation`/`resource` constraints to abstract capabilities is deployment-defined policy, not an implicit equality between a tool name and a capability. Deployments MUST document that mapping and their resource-matching rules. A matching entry establishes intent scope, not an unconditional ALLOW; other policy checks still apply. No matching entry means the request is outside the parsed intent.
+
+For example, `{"capability": "filesystem.delete"}` matches that exact capability on any tool. `{"capability": "filesystem.delete", "tool": "FileManager", "operation": "delete"}` also requires that exact tool and operation. It does not match `{"tool": {"name": "Shell"}, "capability": "filesystem.delete", "operation": "delete", "arguments": {}}`. An entry such as `{"tool": "FileManager", "operation": "delete", "resource": "/workspace/report.txt"}` leaves its capability mapping and path interpretation to deployment policy.
 
 **Intent immutability enforcement (normative).** The invariant is defined in [Concepts › Intent](../../concepts/intent.md): once established (via `sessionStart` or the first `agentTrigger` for the session), `Intent.parsed` is fixed and may grow only through an approver's `intent_extension` via the ASK flow (§9.1). The framework MUST enforce it: any attempt to modify `Intent.parsed` by the runtime LLM, by tool outputs, or by data crossing an `untrusted` channel MUST be ignored or rejected, and SHOULD be recorded as an audit event. This rule is load-bearing for IBAC's central security claim: the capability set is fixed before untrusted data enters and can grow only through explicit, audited approver action.
 
