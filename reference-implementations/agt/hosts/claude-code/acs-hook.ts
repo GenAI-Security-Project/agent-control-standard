@@ -81,6 +81,7 @@
  *     wherever the failure was caught, not something re-inferred afterwards
  *     from leftover variables.
  */
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   createAuditSink,
@@ -494,7 +495,10 @@ async function main(): Promise<void> {
   let hookEventName: string;
   let sessionId: string;
   try {
-    payload = JSON.parse(await Bun.stdin.text()) as Record<string, unknown>;
+    // Read fd 0 synchronously: under Bun 1.4.x on Windows, `await Bun.stdin.text()`
+    // does not keep the event loop alive while waiting on piped stdin, so the
+    // process exits 0 with empty output before `JSON.parse` or `main().catch` runs (#111).
+    payload = JSON.parse(readFileSync(0, "utf8")) as Record<string, unknown>;
     if (typeof payload?.hook_event_name !== "string") {
       throw new Error('acs-hook: stdin payload is missing a string "hook_event_name" field');
     }
