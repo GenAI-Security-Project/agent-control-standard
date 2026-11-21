@@ -15,11 +15,30 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Reference Implementation and Documentation run with one lead each so far. The work in each
-continues, but it carries a single point of failure until somebody takes the second seat.
+Reference Implementation, Documentation, and Testing and Validation run with one lead each so
+far. The work in each continues, but it carries a single point of failure until somebody takes
+the second seat.
 
-There is no Testing and Validation workstream for now. Whoever reviews a change checks it
+Testing and Validation builds and runs the conformance suite in this repository: the
+requirement ledger and behavioral tests in
+[#33](https://github.com/GenAI-Security-Project/agent-control-standard/issues/33), the
+negative vectors for v0.2.0 in
+[#53](https://github.com/GenAI-Security-Project/agent-control-standard/issues/53), the CI job
+that runs them against the reference Guardian, and the public registry of conformance
+results once the suite exists. The Spec workstream still decides what conformant means and
+versions the suite with each spec release, and whoever reviews a change still checks it
 against the conformance requirements it touches.
+
+The workstream was dropped on October 5, 2026
+([#218](https://github.com/GenAI-Security-Project/agent-control-standard/pull/218)) and
+returns because v0.1.0 shipped with no conformance suite, no registry, and no steward
+([#19](https://github.com/GenAI-Security-Project/agent-control-standard/issues/19)); the
+suite needs a named owner. A registry entry names the spec release it was measured against
+by version and commit, the runner, and the operator who ran it, and the Spec workstream
+signs off on the entry. Without those three, entries from different submitters are not
+comparable. The verdict-evidence predicate in
+[#297](https://github.com/GenAI-Security-Project/agent-control-standard/pull/297) is the
+intended carrier for them.
 
 | Workstream | Leads |
 | --- | --- |
@@ -30,9 +49,13 @@ against the conformance requirements it touches.
 | Outreach | Eva Benn ([@evabenn](https://github.com/evabenn)), Aruneesh Salhotra ([@aruneeshsalhotra](https://github.com/aruneeshsalhotra)) |
 | Reference Implementation | Evgeniy Kokuykin ([@artmaro](https://github.com/artmaro)) |
 | Spec | Bar Kaduri ([@bar-capsule](https://github.com/bar-capsule)), Ariel Fogel ([@afogel](https://github.com/afogel)) |
+| Testing and Validation | Sankalp Gilda ([@astrogilda](https://github.com/astrogilda)) |
 
-Eva Benn, Richard Bird, and Aruneesh Salhotra hold no write access, so a project lead
-assigns, labels, and owns review for Identity and Outreach.
+Eva Benn, Richard Bird, Aruneesh Salhotra, and Sankalp Gilda hold no write access, so a
+project lead assigns, labels, and owns review for Identity, Outreach, and Testing and
+Validation until write access exists, which includes the labels on conformance-area issues
+that Triage authority below gives a workstream lead. The lead's code owner entry is added
+in the pull request that grants write access.
 
 ## Triage authority
 
