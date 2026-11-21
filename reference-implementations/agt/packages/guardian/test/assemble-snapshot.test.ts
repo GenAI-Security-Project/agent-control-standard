@@ -465,10 +465,31 @@ describe("one fixed snapshot leaf, whatever the tool calls its argument", () => 
     ).toThrow(/"command"/);
   });
 
-  it("refuses to assemble at all when the mapping declares no argument for this gate", () => {
-    expect(() =>
-      assemblePreToolCallSnapshot(toolCallRequestEnvelope("Bash", { command: "echo hi" }), ["public"], undefined),
-    ).toThrow(/policy_target_argument/);
+  it("assembles an argument-free tool without copying a target argument", () => {
+    const snapshot = assemblePreToolCallSnapshot(
+      toolCallRequestEnvelope("list_reservations", {}),
+      ["public"],
+      undefined,
+    );
+    expect(snapshot.tool_call.name).toBe("list_reservations");
+    expect(snapshot.tool_call.args).toEqual({ [POLICY_TARGET_LEAF]: null });
+  });
+
+  it("preserves other arguments without selecting one when no target is mapped", () => {
+    const snapshot = assemblePreToolCallSnapshot(
+      toolCallRequestEnvelope("list_reservations", { limit: 10 }),
+      ["public"],
+      undefined,
+    );
+    expect(snapshot.tool_call.args).toEqual({ limit: 10, [POLICY_TARGET_LEAF]: null });
+  });
+
+  it("still rejects a host-supplied policy target when no argument is mapped", () => {
+    expect(() => assemblePreToolCallSnapshot(
+      toolCallRequestEnvelope("list_reservations", { [POLICY_TARGET_LEAF]: "spoofed" }),
+      ["public"],
+      undefined,
+    )).toThrow(/acs_policy_target/);
   });
 });
 

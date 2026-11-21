@@ -70,7 +70,16 @@ intervention_points:
     # key the tool has no argument for -- while url, still carrying the secret,
     # shipped untouched. One entry read twice cannot do that.
     #
-    # `default` is what an unlisted tool gets. A tool listed here that
+    # `default` is what an unlisted tool gets. Null, an omitted default, or
+    # no policy_target_argument table means no argument is copied for that
+    # tool. A by_tool null entry overrides a named default. The snapshot's
+    # synthetic acs_policy_target is null so AGT can still resolve its target
+    # and evaluate policy, including rules that only check the tool name.
+    # Any transform of that target denies with evaluation_failed, because no
+    # tool argument exists for the rewrite. A named argument missing from the
+    # call remains a configuration error and denies.
+    #
+    # A tool listed here that
     # policy/manifest.yaml does not register is a failing case in
     # test/path-dialects.test.ts.
     policy_target_argument:

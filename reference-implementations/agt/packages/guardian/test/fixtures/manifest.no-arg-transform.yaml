@@ -1,0 +1,22 @@
+agent_control_specification_version: "0.3.1-beta"
+metadata:
+  name: no-arg-tool-transform
+policies:
+  name_only:
+    type: rego
+    bundle: no-arg-tool
+    query: data.no_arg_tool.transform_verdict
+intervention_points:
+  pre_tool_call:
+    policy_target: "$.tool_call.args.acs_policy_target"
+    policy_target_kind: tool_args
+    tool_name_from: "$.tool_call.name"
+    policy:
+      id: name_only
+tools:
+  list_reservations:
+    type: Tool
+    id: list_reservations
+  delete_reservations:
+    type: Tool
+    id: delete_reservations

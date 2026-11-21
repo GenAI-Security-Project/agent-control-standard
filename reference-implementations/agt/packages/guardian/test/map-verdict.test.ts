@@ -499,13 +499,55 @@ describe("which argument a tool's policy target is read from", () => {
     expect(() => resolvePolicyTargetArgument(shipped, "not_a_point", "Bash")).toThrow(/no row/);
   });
 
-  it("throws when the table names neither a default nor an entry for this tool", () => {
-    const broken = {
+  it("answers nothing when the table names neither a default nor an entry for this tool", () => {
+    const mapping: Mapping = {
+      ...shipped,
       intervention_points: {
         pre_tool_call: { acs_method: "steps/toolCallRequest", policy_target_argument: { by_tool: { Bash: "command" } } },
       },
+    };
+    expect(resolvePolicyTargetArgument(mapping, "pre_tool_call", "WebFetch")).toBeUndefined();
+  });
+
+  it("answers nothing for a null default while preserving per-tool targets", () => {
+    const mapping: Mapping = {
+      ...shipped,
+      intervention_points: {
+        pre_tool_call: {
+          acs_method: "steps/toolCallRequest",
+          policy_target_argument: { default: null, by_tool: { Bash: "command" } },
+        },
+      },
+    };
+    expect(resolvePolicyTargetArgument(mapping, "pre_tool_call", "list_reservations")).toBeUndefined();
+    expect(resolvePolicyTargetArgument(mapping, "pre_tool_call", "Bash")).toBe("command");
+  });
+
+  it("lets a null per-tool entry opt out of the default argument", () => {
+    const mapping: Mapping = {
+      ...shipped,
+      intervention_points: {
+        pre_tool_call: {
+          acs_method: "steps/toolCallRequest",
+          policy_target_argument: { default: "command", by_tool: { list_reservations: null } },
+        },
+      },
+    };
+    expect(resolvePolicyTargetArgument(mapping, "pre_tool_call", "list_reservations")).toBeUndefined();
+    expect(resolvePolicyTargetArgument(mapping, "pre_tool_call", "Bash")).toBe("command");
+  });
+
+  it.each(["", "   ", 42, false])("rejects malformed target argument %j rather than disabling the copy", (value) => {
+    const mapping = {
+      ...shipped,
+      intervention_points: {
+        pre_tool_call: {
+          acs_method: "steps/toolCallRequest",
+          policy_target_argument: { default: value },
+        },
+      },
     } as unknown as Mapping;
-    expect(() => resolvePolicyTargetArgument(broken, "pre_tool_call", "WebFetch")).toThrow(/default/);
+    expect(() => resolvePolicyTargetArgument(mapping, "pre_tool_call", "Bash")).toThrow(/non-empty argument or null/);
   });
 });
 
