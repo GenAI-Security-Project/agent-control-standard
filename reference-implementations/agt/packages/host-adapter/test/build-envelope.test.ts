@@ -343,24 +343,50 @@ describe("buildEnvelope", () => {
   // through. `unwrapArguments` is module-private and takes a request payload
   // only, so answering an empty bag for an envelope with no arguments is
   // unrepresentable rather than merely discouraged.
-  describe("loadHookmap — outputs.mirrors is validated at load time too", () => {
-    function withHookmapFile(content: string, fn: (path: string) => void): void {
-      const dir = mkdtempSync(join(tmpdir(), "acs-hookmap-mirrors-"));
-      const path = join(dir, "hookmap.yaml");
-      writeFileSync(path, content);
-      try {
-        fn(path);
-      } finally {
-        unlinkSync(path);
-        rmdirSync(dir);
-      }
+  function withHookmapFile(content: string, fn: (path: string) => void): void {
+    const dir = mkdtempSync(join(tmpdir(), "acs-hookmap-"));
+    const path = join(dir, "hookmap.yaml");
+    writeFileSync(path, content);
+    try {
+      fn(path);
+    } finally {
+      unlinkSync(path);
+      rmdirSync(dir);
     }
-    const POST_TOOL_USE =
-      "host: claude-code\nhooks:\n  PostToolUse:\n    acs_method: steps/toolCallResult\n" +
-      "    tool_name: $.tool_name\n    exit_status: { literal: success }\n" +
-      "    decisions:\n" +
-      "      allow: { output: { x: { value: y } } }\n" +
-      "      deny: { output: { x: { value: y } } }\n";
+  }
+  const POST_TOOL_USE =
+    "host: claude-code\nhooks:\n  PostToolUse:\n    acs_method: steps/toolCallResult\n" +
+    "    tool_name: $.tool_name\n    exit_status: { literal: success }\n" +
+    "    decisions:\n" +
+    "      allow: { output: { x: { value: y } } }\n" +
+    "      deny: { output: { x: { value: y } } }\n";
+  describe("loadHookmap — outputs.by_tool is validated at load time", () => {
+    const READ = "from: $.tool_response.file.content, within: $.tool_response";
+    function outputsWith(byTool: string): string {
+      return `${POST_TOOL_USE}    outputs: { from: $.tool_response.stdout, within: $.tool_response, by_tool: ${byTool} }\n`;
+    }
+    it("throws, at load time, when a `by_tool` entry is not a map of paths", () => {
+      withHookmapFile(outputsWith("{ Read: 42 }"), (path) => {
+        expect(() => loadHookmap(path)).toThrow(/"hooks\.PostToolUse\.outputs\.by_tool\.Read" is 42/);
+      });
+    });
+    it("throws, at load time, when a `by_tool` entry carries anything beside `from` and `within`", () => {
+      for (const extra of ["mirrors: [$.tool_response.file.filePath]", "extra: $.tool_response.type", "by_tool: {}"]) {
+        withHookmapFile(outputsWith(`{ Read: { ${READ}, ${extra} } }`), (path) => {
+          expect(() => loadHookmap(path)).toThrow(/"hooks\.PostToolUse\.outputs\.by_tool\.Read" .*only "from" and "within"/);
+        });
+      }
+    });
+    it("throws, at load time, when a `by_tool` entry's `from` is not a field inside its own `within`", () => {
+      withHookmapFile(outputsWith("{ Read: { from: $.tool_input.file_path, within: $.tool_response } }"), (path) => {
+        expect(() => loadHookmap(path)).toThrow(
+          /"hooks\.PostToolUse\.outputs\.by_tool\.Read\.from" .* is not a field inside .*"\$\.tool_response"/,
+        );
+      });
+    });
+  });
+
+  describe("loadHookmap — outputs.mirrors is validated at load time too", () => {
     it("throws, at load time, when `outputs.mirrors` is not a list of strings", () => {
       const broken =
         `${POST_TOOL_USE}    outputs: { from: $.tool_response.stdout, within: $.tool_response, mirrors: 42 }\n`;

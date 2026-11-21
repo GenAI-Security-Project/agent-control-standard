@@ -15,7 +15,7 @@ cp hosts/claude-code/settings.json .claude/settings.json
 
 The shipped `settings.json` names the hook as `bun run "$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts"`. That resolves when the project is this tree. From any other project, replace `$CLAUDE_PROJECT_DIR/hosts/claude-code/acs-hook.ts` with this file's absolute path.
 
-It registers two events. `PreToolUse` fires for `Bash` and `WebFetch`, before the tool runs. `PostToolUse` fires for `Bash`, after the tool has run. Both matchers are anchored, so no other tool is intercepted.
+It registers two events. `PreToolUse` fires for `Bash`, `WebFetch` and `Read`, before the tool runs. `PostToolUse` fires for `Bash` and `Read`, after the tool has run. Both matchers are anchored, so no other tool is intercepted.
 
 The `PreToolUse` command sets `"onFailure": "block"`. Claude Code's hooks reference requires v2.1.295 or later for that field. From that version on, a hook that cannot start, exits with a code other than 0 or 2, prints JSON that does not parse, or reaches its timeout blocks the tool call. A missing file, a missing `bun`, or a script that throws while loading fails inside `bun`, before `acs-hook.ts` reaches `main`, so the shim's exit 2 and the negotiated `on_decision_failure` posture never see it. A timeout is Claude Code cancelling the process, and `onFailure` is what makes that cancellation block the tool call. A wrong path in a copied `settings.json` is a missing file, so fix the path if you want a decision rather than a block.
 

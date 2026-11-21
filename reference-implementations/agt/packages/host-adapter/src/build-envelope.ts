@@ -32,6 +32,9 @@ export type HookmapLiteral = { literal: string };
  */
 export type HookmapFieldRead = { from: string };
 
+/** One tool's own output paths under `HookmapOutputs.by_tool` -- see `outputsFor`. */
+export type HookmapToolOutputs = { from: string; within: string };
+
 /** Where a result-gate hook's output lives in the raw hook payload. */
 export type HookmapOutputs = {
   /** JSONPath-lite (`$.foo.bar`) to the leaf that becomes `outputs[0].value`. */
@@ -61,7 +64,36 @@ export type HookmapOutputs = {
    * to say where the copies are; nothing here could infer it.
    */
   mirrors?: string[];
+  /** Output paths for tools whose result has another shape -- see `outputsFor`. */
+  by_tool?: Record<string, HookmapToolOutputs>;
 };
+
+/**
+ * The output paths that apply to this payload: the `by_tool` entry for the
+ * tool `entry.tool_name` resolves to, or the entry's default pair. A listed
+ * tool uses its own `from` and `within` and inherits nothing from the default,
+ * so a path written for Bash's result never applies to another tool's.
+ *
+ * One function, called by both `buildPayload` and governStep's output
+ * location, because the leaf that goes on the wire and the leaf a
+ * replacement is patched back into must be the same one. Two lookups could
+ * disagree, and a replacement projected onto Bash's `stdout` path on a Read
+ * result is a shape Claude Code drops, delivering the original. The tool name
+ * comes from `entry.tool_name`, the same path `buildEnvelope` names the tool
+ * by, never from a second source. A name that does not resolve to a string
+ * gets the default pair; `buildEnvelope` refuses that payload anyway.
+ *
+ * `?? undefined` because a hookmap is YAML: a key written with nothing after
+ * it parses to null, which is a key present and unusable, not a key absent.
+ */
+export function outputsFor(entry: HookmapHookEntry, payload: Record<string, unknown>): HookmapOutputs | undefined {
+  const byTool = entry.outputs?.by_tool;
+  if (!byTool) {
+    return entry.outputs ?? undefined;
+  }
+  const tool = resolvePath(payload, entry.tool_name);
+  return typeof tool === "string" && Object.prototype.hasOwnProperty.call(byTool, tool) ? byTool[tool] : entry.outputs;
+}
 
 /** The members every hook entry carries, whichever payload it builds. */
 type HookmapHookEntryCommon = {
@@ -98,8 +130,8 @@ type HookmapHookEntryCommon = {
    * The tool names this gate governs. Undeclared (`undefined`) means "every
    * tool" -- matching Claude Code's own hookmap, which needs no scoping at
    * all because its settings.json matcher already provides it, for both of
-   * its gates: `^(Bash|WebFetch)$` at the request gate, `^Bash$` at the
-   * result gate.
+   * its gates: `^(Bash|WebFetch|Read)$` at the request gate, `^(Bash|Read)$`
+   * at the result gate.
    *
    * Common to both entry kinds, not just the result-gate shape: scoping
    * which tools a gate governs is orthogonal to which payload shape that
@@ -409,6 +441,61 @@ function assertMirrorsWellFormed(hookmap: Hookmap, path: string): void {
 }
 
 /**
+ * Refuses, at load, an `outputs.by_tool` that `outputsFor` could hand to the
+ * gate in a shape the gate cannot use. Each entry is a map of exactly `from`
+ * and `within`, with `from` a field inside `within`, the relation the default
+ * pair has. Anything else in an entry (`mirrors`, a nested `by_tool`, any
+ * other key) is refused rather than ignored: the replacement path reads keys
+ * such as `mirrors` off whatever `outputsFor` returns, so a key written here
+ * would apply at the gate while nothing at load had checked it.
+ */
+function assertByToolWellFormed(hookmap: Hookmap, path: string): void {
+  for (const [hookEventName, entry] of Object.entries(hookmap.hooks ?? {})) {
+    const outputs = isPlainObject(entry) ? (entry as { outputs?: unknown }).outputs : undefined;
+    if (!isPlainObject(outputs)) {
+      continue;
+    }
+    const byTool = outputs.by_tool ?? undefined;
+    if (byTool === undefined) {
+      continue;
+    }
+    const at = `"hooks.${hookEventName}.outputs.by_tool"`;
+    if (!isPlainObject(byTool)) {
+      throw new Error(`loadHookmap: ${path}'s ${at} is ${JSON.stringify(byTool)} -- it must map tool names to paths`);
+    }
+    for (const [tool, toolOutputs] of Object.entries(byTool)) {
+      const toolAt = `"hooks.${hookEventName}.outputs.by_tool.${tool}"`;
+      if (!isPlainObject(toolOutputs)) {
+        throw new Error(
+          `loadHookmap: ${path}'s ${toolAt} is ${JSON.stringify(toolOutputs)} -- it must be a map of "from" and "within"`,
+        );
+      }
+      const extra = Object.keys(toolOutputs).filter((key) => key !== "from" && key !== "within");
+      if (extra.length > 0) {
+        throw new Error(
+          `loadHookmap: ${path}'s ${toolAt} declares ${JSON.stringify(extra)} -- an entry holds only "from" and ` +
+            `"within", and inherits nothing from the default`,
+        );
+      }
+      const { from, within } = toolOutputs;
+      const inside =
+        typeof from === "string" &&
+        typeof within === "string" &&
+        within.length > 0 &&
+        from.startsWith(`${within}.`) &&
+        from.length > within.length + 1;
+      if (!inside) {
+        throw new Error(
+          `loadHookmap: ${path}'s "hooks.${hookEventName}.outputs.by_tool.${tool}.from" ${JSON.stringify(from)} ` +
+            `is not a field inside its own "within" ${JSON.stringify(within)} -- the leaf a replacement is ` +
+            `patched into must sit inside the object that is cloned`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * Rejects a hookmap entry whose `tools` is malformed, at load time -- the
  * same seam `assertMirrorsWellFormed` uses, and for the identical reason: a
  * throw reached only from `buildEnvelope`/`buildPayload` is caught by
@@ -650,7 +737,9 @@ function normalizeTools(hookmap: Hookmap): Hookmap {
  * `deny`, or if any declared entry is not a renderable rule -- see
  * assertRenderableDecisions. Also throws if any entry's `outputs.mirrors` is
  * malformed or names a field outside `outputs.within` -- see
- * assertMirrorsWellFormed. Also throws if any entry's `tools` is malformed --
+ * assertMirrorsWellFormed. Also throws if any entry's `outputs.by_tool` holds
+ * anything but `from` and `within`, or a `from` outside its own `within` --
+ * see assertByToolWellFormed. Also throws if any entry's `tools` is malformed --
  * see assertToolsWellFormed. Also throws if any entry's `exit_status`
  * declares both `literal` and `from` -- see assertExitStatusNotBothForms.
  * Also throws if a request-gate entry (one declaring `arguments`) also
@@ -664,6 +753,7 @@ export function loadHookmap(path: string): Hookmap {
   const hookmap = Bun.YAML.parse(readFileSync(path, "utf8")) as Hookmap;
   assertRenderableDecisions(hookmap, path);
   assertMirrorsWellFormed(hookmap, path);
+  assertByToolWellFormed(hookmap, path);
   assertToolsWellFormed(hookmap, path);
   assertExitStatusNotBothForms(hookmap, path);
   assertRequestGateDeclaresNoOutputs(hookmap, path);
@@ -818,7 +908,7 @@ function buildPayload(
   // `?? undefined` because a hookmap is YAML: a key written with nothing after
   // it parses to null, which is a key present and unusable, not a key absent.
   const argumentsPath = entry.arguments ?? undefined;
-  const outputs = entry.outputs ?? undefined;
+  const outputs = outputsFor(entry, payload);
 
   if (argumentsPath !== undefined && outputs !== undefined) {
     throw new Error(

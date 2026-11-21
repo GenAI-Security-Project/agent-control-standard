@@ -116,11 +116,12 @@ function postToolUsePayload(stdout: string): Record<string, unknown> {
 }
 
 /** Spawns the real shim as a subprocess -- exactly how Claude Code invokes it
- * -- feeds it `payload` on stdin, and returns what it wrote. */
+ * -- feeds it `payload` on stdin, and returns what it wrote, with the scratch
+ * directory it ran in so a test can check what the run left there. */
 async function runHook(
   payload: Record<string, unknown>,
   guardianUrl: string,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+): Promise<{ stdout: string; stderr: string; exitCode: number; dir: string }> {
   const dir = scratch();
   const proc = Bun.spawn({
     cmd: ["bun", "run", SHIM_PATH],
@@ -141,7 +142,7 @@ async function runHook(
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  return { stdout, stderr, exitCode };
+  return { stdout, stderr, exitCode, dir };
 }
 
 /**
@@ -620,5 +621,95 @@ describe("the result gate, end to end through the real shim and a real Guardian"
     // No `reasoning` on this decision, so no `additionalContext` field --
     // same shape the first test's own note explains.
     expect(JSON.parse(out.stdout)).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse" } });
+  });
+});
+
+/**
+ * The real `tool_response` Claude Code delivers for `Read` on a text file:
+ * `{type, file: {filePath, content, numLines, startLine, totalLines}}`.
+ * Captured with a PostToolUse probe hook on 2.1.316 and again on 2.1.325,
+ * same shape on both. The secret lives at `file.content`, one level deeper
+ * than Bash's `stdout`, and Claude Code drops a replacement that is not in
+ * this shape and delivers the original (measured live, #330): so every
+ * assertion below is the whole object, for the same reason the Bash ones are.
+ */
+function readResponse(content: string): Record<string, unknown> {
+  return {
+    type: "text",
+    file: { filePath: "/current/dir/.env", content, numLines: 1, startLine: 1, totalLines: 1 },
+  };
+}
+
+/** The same `PostToolUse` payload, for `Read`, the tool #330 is about. */
+function readPayload(content: string): Record<string, unknown> {
+  return {
+    ...postToolUsePayload(""),
+    tool_name: "Read",
+    tool_input: { file_path: "/current/dir/.env" },
+    tool_response: readResponse(content),
+  };
+}
+
+describe("the result gate governs Read, end to end through the real shim and a real Guardian", () => {
+  it("redacts a secret out of a file Read returns, preserving every sibling field", async () => {
+    const out = await runHook(readPayload("TOKEN=ghp_ABCDEF123456"), guardian.url);
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext:
+          "Secrets in this output were replaced before the model saw them. " +
+          "Policy: redaction_applied, from AGT's stock bundle (agt_stock).",
+        updatedToolOutput: {
+          type: "text",
+          file: {
+            filePath: "/current/dir/.env",
+            content: "TOKEN=[REDACTED]",
+            numLines: 1,
+            startLine: 1,
+            totalLines: 1,
+          },
+        },
+      },
+    });
+    expect(out.stdout).not.toContain("ghp_ABCDEF123456");
+  });
+
+  it("withholds a file Read returns on a deny, with every sibling field still in place", async () => {
+    const out = await answering({ decision: "deny", reasoning: "secret in output" }, (url) =>
+      runHook(readPayload("TOKEN=ghp_ABCDEF123456"), url),
+    );
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({
+      decision: "block",
+      reason: "secret in output",
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        updatedToolOutput: {
+          type: "text",
+          file: {
+            filePath: "/current/dir/.env",
+            content: "[OUTPUT WITHHELD BY POLICY]",
+            numLines: 1,
+            startLine: 1,
+            totalLines: 1,
+          },
+        },
+      },
+    });
+    expect(out.stdout).not.toContain("ghp_ABCDEF123456");
+  });
+
+  it("leaves a clean file Read returns alone, decided by the Guardian rather than by the posture", async () => {
+    const out = await runHook(readPayload("line one\nline two\n"), guardian.url);
+
+    expect({ exitCode: out.exitCode, stderr: out.stderr }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(out.stdout)).toEqual({ hookSpecificOutput: { hookEventName: "PostToolUse" } });
+    // The empty wrapper alone does not tell a decision from a fail-open: the
+    // shipped `proceed` posture delivers the output too. What tells them apart
+    // is the audit entry a fail-open writes, so none may exist.
+    expect(existsSync(join(out.dir, "audit.jsonl"))).toBe(false);
   });
 });

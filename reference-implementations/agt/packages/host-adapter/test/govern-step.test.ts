@@ -752,8 +752,8 @@ describe("governStep — a gate governs only the tools its hookmap entry names",
    * Claude Code's own case, and the reason this is a separate test rather
    * than an assumption: hosts/claude-code/claude-code.hookmap.yaml declares
    * no `tools` key at either of its gates, because each has its own
-   * settings.json matcher already scoping it -- `^(Bash|WebFetch)$` at the
-   * request gate, `^Bash$` at the result gate. What this row measures is
+   * settings.json matcher already scoping it -- `^(Bash|WebFetch|Read)$` at the
+   * request gate, `^(Bash|Read)$` at the result gate. What this row measures is
    * that pair
    * reaching `governStep` and coming back governed -- not that `governsTool`
    * reads an absent list correctly, which it never gets asked here (see the
