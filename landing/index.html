@@ -17,7 +17,10 @@
       <img src="assets/icon.svg" alt="" width="32" height="32">
     </a>
     <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect class="menu-line menu-line--top" x="3" y="7.5" width="18" height="2" rx="1"/>
+        <rect class="menu-line menu-line--bottom" x="3" y="14.5" width="18" height="2" rx="1"/>
+      </svg>
       <span class="visually-hidden">Menu</span>
     </button>
     <a class="wordmark" href="./"><span><!--ACS:SITE_NAME--></span></a>
@@ -70,12 +73,17 @@
           <a class="cta" href="https://owasp.slack.com">Join the conversation</a>
         </div>
       </div>
-      <div><!--ACS:STARBURST--></div>
+      <div class="hero-diagram">
+        <!--ACS:STARBURST-->
+        <button id="diagram-motion-toggle" type="button" class="diagram-motion-toggle">Pause animation</button>
+      </div>
     </section>
 
     <figure class="film">
-      <video controls muted playsinline preload="metadata" poster="assets/video/demo-poster.jpg"
-             aria-label="Terminal recording of the ACS reference implementation">
+      <video controls muted playsinline preload="metadata" width="3024" height="1900"
+             poster="assets/video/demo-poster.jpg"
+             aria-label="Terminal recording of the ACS reference implementation"
+             aria-details="demo-transcript">
         <source src="assets/video/demo.mp4" type="video/mp4">
       </video>
       <figcaption>
@@ -86,6 +94,15 @@
         Guardian runs. Run it yourself, or connect Claude Code, Cursor, NVIDIA NAT or an
         OpenAI Responses client to a Guardian, with <a href="docs/topics/reference-implementations/">Run a Guardian</a>.
       </figcaption>
+      <details id="demo-transcript" class="film-transcript">
+        <summary>Text description of the demo video</summary>
+        <p>The three-minute silent terminal recording has three panes: top left shows the Inspector, top right shows the Guardian, and the bottom pane runs each agent client.</p>
+        <ol>
+          <li>OpenCode sends a harmless <code>echo</code> whose text matches AGT's destructive-shell pattern. The Guardian answers <code>deny</code>. The Inspector prints the envelope, the reason code <code>destructive_shell_command_blocked</code>, and the policy reference <code>agt_stock</code>.</li>
+          <li>Claude Code sends the same command from the same directory through a hook subprocess instead of an in-process plugin. The same Guardian returns the same <code>deny</code> under a new request ID.</li>
+          <li><code>bun run conformance</code> prints the mapping table, the coverage matrix, and the trace rows, then runs six live checks, including a deny that fails closed over the wire.</li>
+        </ol>
+      </details>
     </figure>
 
     <section id="problem">
@@ -318,10 +335,27 @@
     var sidebar = document.querySelector(".sidebar");
     if (!button || !sidebar) return;
     root.classList.add("has-drawer");
+    var drawerQuery = window.matchMedia("(max-width: 76.234375em)");
+
+    function syncInert() {
+      sidebar.inert = drawerQuery.matches && !body.classList.contains("nav-open");
+    }
 
     function setOpen(open) {
       body.classList.toggle("nav-open", open);
       button.setAttribute("aria-expanded", open ? "true" : "false");
+      syncInert();
+    }
+
+    syncInert();
+    if (drawerQuery.addEventListener) {
+      drawerQuery.addEventListener("change", function () {
+        if (!drawerQuery.matches && body.classList.contains("nav-open")) {
+          setOpen(false);
+        } else {
+          syncInert();
+        }
+      });
     }
 
     button.addEventListener("click", function () {
@@ -352,6 +386,29 @@
     sidebar.addEventListener("focusout", function (event) {
       if (body.classList.contains("nav-open") && outside(event.relatedTarget)) setOpen(false);
     });
+  })();
+
+  // Hero diagram motion control (WCAG 2.2.2 Pause, Stop, Hide).
+  (function () {
+    var diagram = document.querySelector(".acs-starburst");
+    var toggle = document.getElementById("diagram-motion-toggle");
+    if (!diagram || !toggle) return;
+    var reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    function setPaused(paused) {
+      diagram.setAttribute("data-motion", paused ? "paused" : "playing");
+      toggle.textContent = paused ? "Play animation" : "Pause animation";
+    }
+
+    setPaused(reduceQuery.matches);
+    toggle.addEventListener("click", function () {
+      setPaused(diagram.getAttribute("data-motion") !== "paused");
+    });
+    if (reduceQuery.addEventListener) {
+      reduceQuery.addEventListener("change", function (event) {
+        if (event.matches) setPaused(true);
+      });
+    }
   })();
 </script>
 </body>

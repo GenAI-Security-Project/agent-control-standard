@@ -128,3 +128,75 @@ def test_link_colour_survives_the_theme_default_palette(built_docs):
     # The pages must still carry the attribute the fix depends on.
     index = (built_docs / "index.html").read_text(encoding="utf-8")
     assert "data-md-color-primary=" in index
+
+
+def test_docs_contrast_tokens_meet_wcag_aa():
+    """Verify light syntax tokens, footer tokens, and search status bar all meet 4.5:1."""
+    css = (REPO / "docs" / "stylesheets" / "extra.css").read_text(encoding="utf-8")
+
+    def luminance(hex_color: str) -> float:
+        h = hex_color.lstrip("#")
+        channels = []
+        for i in (0, 2, 4):
+            c = int(h[i : i + 2], 16) / 255
+            channels.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+    def ratio(a: str, b: str) -> float:
+        la, lb = luminance(a), luminance(b)
+        hi, lo = max(la, lb), min(la, lb)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def block(selector: str) -> str:
+        start = css.index(selector)
+        return css[start : css.index("}", start)]
+
+    def token(section: str, name: str) -> str:
+        match = re.search(rf"(?<![-\w]){re.escape(name)}:\s*(#[0-9a-fA-F]{{6}})", section)
+        assert match, f"missing {name} in {section!r}"
+        return match.group(1)
+
+    light = block('[data-md-color-scheme="default"] {')
+    code_bg = token(light, "--md-code-bg-color")
+    for name in (
+        "--md-code-hl-number-color",
+        "--md-code-hl-special-color",
+        "--md-code-hl-function-color",
+        "--md-code-hl-constant-color",
+        "--md-code-hl-keyword-color",
+        "--md-code-hl-string-color",
+        "--md-code-hl-comment-color",
+        "--md-default-fg-color--lighter",
+    ):
+        color = token(light, name)
+        assert ratio(color, code_bg) >= 4.5, f"{name} ({color}) on {code_bg} < 4.5:1"
+
+    for scheme in ('[data-md-color-scheme="default"] {', '[data-md-color-scheme="slate"] {'):
+        sec = block(scheme)
+        bg_dark = token(sec, "--md-footer-bg-color--dark")
+        for fg_name in ("--md-footer-fg-color", "--md-footer-fg-color--light", "--md-footer-fg-color--lighter"):
+            fg = token(sec, fg_name)
+            assert ratio(fg, bg_dark) >= 4.5, f"{scheme} {fg_name} ({fg}) on {bg_dark} < 4.5:1"
+
+    light_meta = block('[data-md-color-scheme="default"] .md-search-result__meta')
+    assert ratio(token(light_meta, "color"), token(light_meta, "background-color")) >= 4.5
+    dark_meta = block('[data-md-color-scheme="slate"] .md-search-result__meta')
+    assert ratio(token(dark_meta, "color"), token(dark_meta, "background-color")) >= 4.5
+
+
+def test_docs_accessibility_rules_and_keyboard_controls(built_docs):
+    """Pin prose underlines, mobile drawer/search visibility, search wrapping, and header triggers."""
+    css = (REPO / "docs" / "stylesheets" / "extra.css").read_text(encoding="utf-8")
+    assert "text-decoration: underline;" in css
+    assert ".md-sidebar--primary" in css and "visibility: hidden;" in css
+    assert ".md-search__inner" in css
+    assert ".md-search-result__article pre > code" in css and "white-space: pre-wrap;" in css
+
+    index = (built_docs / "index.html").read_text(encoding="utf-8")
+    assert 'class="md-header__button md-icon acs-drawer-toggle"' in index
+    assert 'aria-label="Menu"' in index and 'aria-expanded="false"' in index
+    assert 'for="__search" role="button" tabindex="0" aria-label="Search"' in index
+
+    mermaid_init = (REPO / "docs" / "assets" / "javascripts" / "mermaid-init.js").read_text(encoding="utf-8")
+    assert 'edgeLabelBackground: "#161616"' in mermaid_init
+    assert 'textColor: "#f7f7f7"' in mermaid_init

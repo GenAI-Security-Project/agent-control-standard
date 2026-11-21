@@ -9,6 +9,7 @@
 }
 
 :root {
+  color-scheme: light;
   --acs-page: #ffffff;
   --acs-surface: #f4f5f7;
   --acs-surface-2: #eef0f4;
@@ -49,6 +50,7 @@
 /* Dark tokens are redefined in two places so the toggle wins in both directions. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --acs-page: #0a0a0a;
     --acs-surface: #161616;
     --acs-surface-2: #202020;
@@ -80,6 +82,7 @@
 }
 
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --acs-page: #0a0a0a;
   --acs-surface: #161616;
   --acs-surface-2: #202020;
@@ -212,6 +215,19 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
 #menu-toggle { display: none; }
 #menu-toggle svg,
 #theme-toggle svg { display: block; width: 100%; height: 100%; fill: currentColor; }
+#menu-toggle .menu-line {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  #menu-toggle .menu-line { transition: transform 0.25s ease; }
+}
+#menu-toggle[aria-expanded="true"] .menu-line--top {
+  transform: translateY(3.5px) rotate(45deg);
+}
+#menu-toggle[aria-expanded="true"] .menu-line--bottom {
+  transform: translateY(-3.5px) rotate(-45deg);
+}
 
 /* The docs search field, drawn as the link it is. This page has no search index, and an
    input that went nowhere would be worse than sending the reader to the one that works. */
@@ -309,9 +325,11 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
 #site-nav a,
 #site-nav summary {
   display: flex;
-  align-items: flex-start;
-  margin-top: 0.625em;
+  align-items: center;
+  min-block-size: 24px;
+  margin-top: 2px;
   margin-right: calc(var(--acs-u) * 0.4);
+  padding-block: 3px;
   color: var(--acs-text);
   text-decoration: none;
   cursor: pointer;
@@ -319,8 +337,19 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
 }
 #site-nav summary { list-style: none; }
 #site-nav summary::-webkit-details-marker { display: none; }
-/* Home's row is a link inside the disclosure, so the row carries the spacing. */
-#site-nav summary a { flex: 1 1 auto; min-width: 0; margin: 0; }
+/* Home's link and disclosure are siblings so no interactive element nests inside <summary>. */
+#site-nav .nav-home { position: relative; }
+#site-nav .nav-home > a { margin-right: calc(var(--acs-u) * 0.4 + 28px); }
+#site-nav .nav-home > details > summary {
+  position: absolute;
+  top: 0;
+  inset-inline-end: calc(var(--acs-u) * 0.4);
+  justify-content: center;
+  min-inline-size: 24px;
+  min-block-size: 24px;
+  margin: 0;
+  padding: 0;
+}
 /* The docs chevron. A file rather than Material's data URI, which img-src 'self' blocks.
    Rotation states that the row is open, so the state does not rest on color. */
 #site-nav summary::after {
@@ -334,6 +363,7 @@ button:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset:
   mask: url("chevron.svg") center / contain no-repeat;
   transition: transform 0.25s;
 }
+#site-nav .nav-home > details > summary::after { margin-inline-start: 0; }
 #site-nav details[open] > summary::after { transform: rotate(90deg); }
 #site-nav a:hover,
 #site-nav summary:hover { color: var(--acs-nav-accent); }
@@ -375,6 +405,24 @@ section:first-of-type { border-top: 0; }
 .hero { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: center; }
 .hero h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); line-height: 1.02; letter-spacing: -0.03em; margin: 0; }
 .hero p { font-size: 1.15rem; color: var(--acs-text-soft); }
+.hero-diagram { display: flex; flex-direction: column; align-items: center; gap: 0.75rem; }
+.hero-diagram svg { display: block; width: 100%; height: auto; }
+.diagram-motion-toggle {
+  display: none;
+  align-items: center;
+  min-block-size: 32px;
+  min-inline-size: 32px;
+  padding: 0.35rem 0.9rem;
+  font: 600 0.85rem/1.2 var(--acs-font);
+  color: var(--acs-text);
+  background-color: var(--acs-surface);
+  border: 1px solid var(--acs-border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.has-drawer .diagram-motion-toggle { display: inline-flex; }
+.diagram-motion-toggle:hover { background-color: var(--acs-surface-2); }
 
 .film { margin: 0 0 3.5rem; }
 .film video {
@@ -383,6 +431,28 @@ section:first-of-type { border-top: 0; }
 }
 .film figcaption { margin-top: 0.75rem; color: var(--acs-text-soft); font-size: 0.95rem; }
 .film figcaption strong { display: block; margin-bottom: 0.35rem; color: var(--acs-text); font-size: 1.35rem; line-height: 1.25; letter-spacing: -0.01em; }
+.film-transcript {
+  margin-top: 0.85rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--acs-border);
+  border-radius: 10px;
+  background-color: var(--acs-surface);
+  color: var(--acs-text-soft);
+  font-size: 0.95rem;
+}
+.film-transcript summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-block-size: 24px;
+  font-weight: 600;
+  color: var(--acs-text);
+  cursor: pointer;
+}
+.film-transcript summary:focus-visible { outline: 3px solid var(--acs-focus-ring); outline-offset: 2px; }
+.film-transcript p { margin: 0.6rem 0 0.5rem; }
+.film-transcript ol { margin: 0; padding-left: 1.25rem; }
+.film-transcript li + li { margin-top: 0.35rem; }
 
 .cta-row { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
 .cta {
@@ -533,20 +603,28 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
   #site-nav li { border-top: 1px solid var(--acs-border-strong); }
   #site-nav a,
   #site-nav summary { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
-  #site-nav summary a { padding: 0; }
+  #site-nav .nav-home > a { margin: 0; margin-inline-end: calc(var(--acs-u) * 2.4); }
+  #site-nav .nav-home > details > summary {
+    top: 0;
+    inset-inline-end: 0;
+    min-inline-size: calc(var(--acs-u) * 2.4);
+    min-block-size: calc(var(--acs-u) * 2.4);
+    margin: 0;
+    padding: calc(var(--acs-u) * 0.6);
+  }
   /* The docs slide a nested list in over its parent. Here it opens in place, so the
      indent carries the depth the slide would have shown. */
   #site-nav ul ul a,
   #site-nav ul ul summary { padding-inline-start: calc(var(--acs-u) * 1.6); }
   #site-nav ul ul ul a,
   #site-nav ul ul ul summary { padding-inline-start: calc(var(--acs-u) * 2.4); }
-  #site-nav ul ul summary a { padding: 0; }
   #site-nav .nav-section ul a { padding-inline-start: calc(var(--acs-u) * 0.8); }
   #site-nav summary::after {
     width: calc(var(--acs-u) * 1.2);
     height: calc(var(--acs-u) * 1.2);
     margin-inline-end: calc(var(--acs-u) * -0.2);
   }
+  #site-nav .nav-home > details > summary::after { margin-inline-end: 0; }
   #site-nav .nav-section { margin-top: 0; }
   #site-nav .nav-section h2 { margin: 0; padding: calc(var(--acs-u) * 0.6) calc(var(--acs-u) * 0.8); }
 
@@ -608,9 +686,23 @@ footer nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
   main { padding: 2rem 1.25rem; }
 }
 
-/* Continuous motion is a vestibular trigger and a battery cost. CSS animation is
-   stopped here. The SVG's SMIL elements carry their own guard, because
-   `animation: none` does not reach them. */
+/* Continuous motion is a vestibular trigger and a battery cost. Spatial movement,
+   rotation, and drawer slides stop here while non-motion color feedback stays active.
+   The hero SVG opts into animation only under prefers-reduced-motion: no-preference. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .cta,
+  #site-nav summary::after,
+  .has-drawer .sidebar { transition: none; }
+  .cta:hover { transform: none; }
+}
+
+@media (forced-colors: active) {
+  a:focus-visible,
+  button:focus-visible,
+  summary:focus-visible { outline: 3px solid Highlight; }
+  .cta,
+  .card,
+  .standards li,
+  .diagram-motion-toggle,
+  .film-transcript { border: 1px solid CanvasText; }
 }

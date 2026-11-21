@@ -203,7 +203,7 @@ def _landing_items(markup: str, base: str) -> list[tuple[_Node, Row]]:
         details = _direct(node, {"details"})
         if details is not None:
             summary = _direct(details, {"summary"})
-            pick = None if summary is None else (_direct(summary, {"a"}) or summary)
+            pick = _direct(node, {"a"}) or (None if summary is None else (_direct(summary, {"a"}) or summary))
         else:
             pick = _direct(node, {"a"}) or _direct(node, _HEADINGS)
         if pick is None:
