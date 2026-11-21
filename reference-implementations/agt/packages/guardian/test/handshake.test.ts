@@ -1,8 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
-import { buildServerHello } from "../src/handshake.ts";
+import {
+  buildServerHello,
+  CAPABILITY_NOT_NEGOTIATED_CODE,
+  isSupportedAcsVersion,
+  negotiateHandshake,
+  UNSUPPORTED_VERSION_CODE,
+} from "../src/handshake.ts";
 
-const MODULE = fileURLToPath(new URL("../src/handshake.ts", import.meta.url));
+const MODULE = new URL("../src/handshake.ts", import.meta.url).href;
 
 /**
  * Calls `buildServerHello()` with NO argument at all -- the shipped call
@@ -26,7 +32,7 @@ async function respondInSubprocess(
     env.ACS_ON_DECISION_FAILURE = posture;
   }
   const proc = Bun.spawn(
-    ["bun", "-e", `import {buildServerHello} from ${JSON.stringify(MODULE)};` +
+    [process.execPath, "-e", `import {buildServerHello} from ${JSON.stringify(MODULE)};` +
       "process.stdout.write(JSON.stringify(buildServerHello()));"],
     { env: env as Record<string, string>, stdout: "pipe", stderr: "pipe" },
   );
@@ -108,5 +114,84 @@ describe("buildServerHello — the zero-argument path the Guardian actually call
     expect(exitCode).not.toBe(0);
     expect(stdout).toBe("");
     expect(stderr).toContain("dney");
+  });
+});
+
+describe("negotiateHandshake — version compatibility (#139, #196) and transport selection (#165)", () => {
+  it("negotiates the compatible version from the client's acs_versions_supported list (e.g. 0.1.1 -> 0.1.1)", () => {
+    const patchNegotiated = negotiateHandshake({
+      acs_version: "0.1.1",
+      payload: { acs_versions_supported: ["0.1.1"], transports_supported: ["http"] },
+    });
+    expect(patchNegotiated.ok).toBe(true);
+    if (patchNegotiated.ok) {
+      expect(patchNegotiated.serverHello.negotiated_version).toBe("0.1.1");
+    }
+
+    const fallbackList = negotiateHandshake({
+      acs_version: "0.1.4",
+      payload: { acs_versions_supported: ["0.2.0", "0.1.4"], transports_supported: ["http"] },
+    });
+    expect(fallbackList.ok).toBe(true);
+    if (fallbackList.ok) {
+      expect(fallbackList.serverHello.negotiated_version).toBe("0.1.4");
+    }
+  });
+
+  it("derives the accepted minor from the Guardian's own version (0.1.x vs 0.2.x vs 1.x)", () => {
+    expect(isSupportedAcsVersion("0.1.0", "0.1.0")).toBe(true);
+    expect(isSupportedAcsVersion("0.1.4", "0.1.0")).toBe(true);
+    expect(isSupportedAcsVersion("0.2.0", "0.1.0")).toBe(false);
+    expect(isSupportedAcsVersion("0.2.3", "0.2.0")).toBe(true);
+    expect(isSupportedAcsVersion("0.1.4", "0.2.0")).toBe(false);
+    expect(isSupportedAcsVersion("1.2.0", "1.0.0")).toBe(true);
+    expect(isSupportedAcsVersion("2.0.0", "1.0.0")).toBe(false);
+  });
+
+  it("rejects 0.2.0 or 1.0.0 with -32001 UNSUPPORTED_VERSION (#139, #196)", () => {
+    for (const badVersion of ["0.2.0", "1.0.0"]) {
+      expect(negotiateHandshake({ acs_version: badVersion, payload: {} })).toEqual({
+        ok: false,
+        code: UNSUPPORTED_VERSION_CODE,
+        message: expect.stringContaining("UNSUPPORTED_VERSION"),
+      });
+    }
+    expect(
+      negotiateHandshake({
+        acs_version: "0.1.0",
+        payload: { acs_versions_supported: ["0.2.0", "1.0.0", "2.0.0"] },
+      }),
+    ).toEqual({
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: expect.stringContaining("UNSUPPORTED_VERSION"),
+    });
+  });
+
+  it("rejects ClientHello transports_supported that exclude http with -32003 CAPABILITY_NOT_NEGOTIATED", () => {
+    for (const transports of [["stdio"], ["https"], ["stdio", "https"]]) {
+      expect(
+        negotiateHandshake({
+          acs_version: "0.1.0",
+          payload: { transports_supported: transports },
+        }),
+      ).toEqual({
+        ok: false,
+        code: CAPABILITY_NOT_NEGOTIATED_CODE,
+        message: expect.stringContaining("CAPABILITY_NOT_NEGOTIATED"),
+      });
+    }
+  });
+
+  it("selects http when ClientHello advertises http in transports_supported", () => {
+    const res = negotiateHandshake({
+      acs_version: "0.1.0",
+      payload: { acs_versions_supported: ["0.1.0"], transports_supported: ["stdio", "http"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.serverHello.selected_transport).toBe("http");
+      expect(res.serverHello.negotiated_version).toBe("0.1.0");
+    }
   });
 });

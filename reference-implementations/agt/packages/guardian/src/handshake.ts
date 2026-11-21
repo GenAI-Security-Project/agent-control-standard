@@ -36,8 +36,93 @@ export type ServerHello = {
   on_decision_failure: "proceed" | "deny";
 };
 
+export const UNSUPPORTED_VERSION_CODE = -32001;
+export const CAPABILITY_NOT_NEGOTIATED_CODE = -32003;
+
 /** The ACS spec version every schema and mapping in this repo is pinned to. */
-const NEGOTIATED_VERSION = "0.1.0";
+export const NEGOTIATED_VERSION = "0.1.0";
+const SUPPORTED_TRANSPORT = "http" as const;
+
+function parseSemver(version: unknown): { major: number; minor: number; patch: number } | undefined {
+  if (typeof version !== "string") return undefined;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  if (!match) return undefined;
+  return { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
+}
+
+/**
+ * Under 0.x a breaking change is a minor bump, so a peer accepts the same
+ * minor with any patch and refuses a different minor; from 1.0 on, the rule is
+ * the same major (#196). Derived from the Guardian's own version rather than a
+ * hard-coded minor so a spec bump (e.g. 0.2.0) updates the check in one place.
+ */
+export function isSupportedAcsVersion(version: unknown, guardianVersion: string = NEGOTIATED_VERSION): version is string {
+  const candidate = parseSemver(version);
+  const own = parseSemver(guardianVersion);
+  if (candidate === undefined || own === undefined) return false;
+  return own.major === 0
+    ? candidate.major === 0 && candidate.minor === own.minor
+    : candidate.major === own.major;
+}
+
+export type HandshakeNegotiationResult =
+  | { ok: true; serverHello: ServerHello }
+  | { ok: false; code: number; message: string };
+
+export function negotiateHandshake(
+  envelopeParams: { acs_version: string; payload?: Record<string, unknown> },
+  env?: { ACS_ON_DECISION_FAILURE?: string },
+  guardianVersion: string = NEGOTIATED_VERSION,
+): HandshakeNegotiationResult {
+  if (!isSupportedAcsVersion(envelopeParams.acs_version, guardianVersion)) {
+    return {
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: `UNSUPPORTED_VERSION: unsupported acs_version ${JSON.stringify(envelopeParams.acs_version)}`,
+    };
+  }
+  const payload = envelopeParams.payload ?? {};
+  if ("acs_version" in payload && !isSupportedAcsVersion(payload.acs_version, guardianVersion)) {
+    return {
+      ok: false,
+      code: UNSUPPORTED_VERSION_CODE,
+      message: `UNSUPPORTED_VERSION: unsupported client acs_version ${JSON.stringify(payload.acs_version)}`,
+    };
+  }
+  let selectedVersion =
+    typeof payload.acs_version === "string" ? payload.acs_version : envelopeParams.acs_version;
+  if ("acs_versions_supported" in payload) {
+    const versions = payload.acs_versions_supported;
+    const match = Array.isArray(versions)
+      ? versions.find((v): v is string => isSupportedAcsVersion(v, guardianVersion))
+      : undefined;
+    if (match === undefined) {
+      return {
+        ok: false,
+        code: UNSUPPORTED_VERSION_CODE,
+        message: `UNSUPPORTED_VERSION: no compatible version in acs_versions_supported ${JSON.stringify(versions)}`,
+      };
+    }
+    selectedVersion = match;
+  }
+  if ("transports_supported" in payload) {
+    const transports = payload.transports_supported;
+    if (!Array.isArray(transports) || !transports.includes(SUPPORTED_TRANSPORT)) {
+      return {
+        ok: false,
+        code: CAPABILITY_NOT_NEGOTIATED_CODE,
+        message: `CAPABILITY_NOT_NEGOTIATED: Guardian supports transport "${SUPPORTED_TRANSPORT}", client advertised ${JSON.stringify(transports)}`,
+      };
+    }
+  }
+  return {
+    ok: true,
+    serverHello: {
+      ...buildServerHello(env),
+      negotiated_version: selectedVersion,
+    },
+  };
+}
 
 /**
  * The methods this Guardian actually dispatches -- exactly the two gated
