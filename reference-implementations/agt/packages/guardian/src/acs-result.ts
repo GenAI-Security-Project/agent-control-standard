@@ -24,6 +24,7 @@ export type AcsFinalResult = {
   type: "final";
   acs_version: string;
   request_id: string;
+  chain_hash?: string;
 } & AcsDecision;
 
 /**
@@ -37,11 +38,13 @@ export type AcsFinalResult = {
 export function finalResult(
   params: { acs_version: string; request_id: string },
   decision: AcsDecision,
+  chainHash?: string,
 ): AcsFinalResult {
   return {
     type: "final",
     acs_version: params.acs_version,
     request_id: params.request_id,
+    ...(chainHash === undefined ? {} : { chain_hash: chainHash }),
     ...decision,
   };
 }

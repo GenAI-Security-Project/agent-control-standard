@@ -209,13 +209,14 @@ describe("startGuardian POST /acs", () => {
     expect((response.result?.reason_codes as unknown[]).length).toBeGreaterThan(0);
   });
 
-  it("steps/toolCallRequest carrying ls -la allows, echoing request_id", async () => {
+  it("steps/toolCallRequest carrying ls -la allows, echoing request_id and publishing chain_hash (#142, #199)", async () => {
     const requestId = crypto.randomUUID();
     const response = await postAcs(url, toolCallEnvelope("ls -la", { requestId }));
 
     expect(response.error).toBeUndefined();
     expect(response.result?.decision).toBe("allow");
     expect(response.result?.request_id).toBe(requestId);
+    expect(response.result?.chain_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("an unknown method returns a JSON-RPC error in the ACS-reserved -32000..-32099 range, not a decision", async () => {
