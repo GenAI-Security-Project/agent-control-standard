@@ -71,3 +71,36 @@ def test_a_server_hello_missing_a_required_field_is_rejected():
     """The ServerHello branch is checked against handshake.json, not merely permitted."""
     partial = {key: value for key, value in SERVER_HELLO.items() if key != "timeout_config"}
     assert not _response_envelope_validator().is_valid(_envelope(partial))
+
+def test_signature_requirement_and_schema_optionality_are_consistent():
+    """Issue #195: section 10 states the rule, and the schemas and conformance.md agree with it."""
+    root = SPEC.parents[1]
+    spec_text = (root / "docs/spec/instrument/specification.md").read_text(encoding="utf-8")
+    conformance = (root / "docs/spec/conformance.md").read_text(encoding="utf-8")
+    concepts = (root / "docs/topics/core_concepts.md").read_text(encoding="utf-8")
+    req = json.loads((SPEC / "request-envelope.json").read_text(encoding="utf-8"))
+    resp = json.loads((SPEC / "response-envelope.json").read_text(encoding="utf-8"))
+    handshake = json.loads((SPEC / "handshake.json").read_text(encoding="utf-8"))
+
+    req_sig = req["$defs"]["AcsParams"]["properties"]["signature"]
+    resp_sig = resp["$defs"]["AcsResult"]["properties"]["signature"]
+    hello_sig = handshake["$defs"]["ServerHello"]["properties"]["signature"]
+    assert req_sig["$ref"] == "#/$defs/Signature"
+    assert resp_sig["$ref"] == "request-envelope.json#/$defs/Signature"
+    assert hello_sig["$ref"] == "request-envelope.json#/$defs/Signature"
+    assert "signature" not in req["$defs"]["AcsParams"]["required"]
+    assert "signature" not in resp["$defs"]["AcsResult"]["required"]
+    assert "signature" not in handshake["$defs"]["ServerHello"]["required"]
+    for description in (req_sig["description"], resp_sig["description"], hello_sig["description"]):
+        assert "Optional in the schema" in description
+        assert "mandatory under ACS-Core" in description
+
+    section_10 = spec_text.split("## 10. Cryptographic Signatures")[1].split("### 10.2")[0]
+    assert "is REQUIRED in ACS-Core for every request and response except" in section_10
+    assert "optional in the base JSON Schemas" in section_10
+    assert "control traffic" not in section_10
+    assert "field-optional" not in spec_text
+    assert "except the envelopes [§10]" in conformance
+    for text in (spec_text, conformance, concepts):
+        assert "cryptographic signatures" not in text
+

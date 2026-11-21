@@ -163,6 +163,10 @@
             "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
           },
           "description": "Conformance profiles accepted for this session. The Guardian selects from the client's profiles_supported based on its own capabilities and policy requirements. A Guardian MAY refuse a session if the client does not declare a profile the Guardian's policy requires."
+        },
+        "signature": {
+          "$ref": "request-envelope.json#/$defs/Signature",
+          "description": "Signature over this response envelope, computed on the canonical input defined in Specification 10 (the JCS canonicalization of the envelope with the signature field removed). Optional in the schema; mandatory under ACS-Core."
         }
       }
     }
