@@ -181,6 +181,23 @@ describe("Guardian envelope log wiring", () => {
     }
   });
 
+  // One request whose params nest 400,000 arrays overflows JSON.stringify in
+  // the sink. It must cost that one record, not every record after it.
+  it("keeps logging after a request the sink cannot serialize", async () => {
+    await withGuardian(logIn, async (url, logPath) => {
+      const deepBody = `{"jsonrpc":"2.0","method":"steps/toolCallRequest","id":1,"params":${"[".repeat(400_000)}${"]".repeat(400_000)}}`;
+      await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: deepBody }).catch(() => undefined);
+      const before = readEntries(logPath).length;
+
+      await postRaw(url, JSON.stringify(toolCallEnvelope("ls -la", { id: 21 })));
+      await postRaw(url, JSON.stringify(toolCallEnvelope("ls -la", { id: 22 })));
+
+      const entries = readEntries(logPath);
+      expect(entries.length).toBe(before + 4);
+      expect(entries.slice(-4).map((e) => e.rpc_id)).toEqual([21, 21, 22, 22]);
+    });
+  });
+
   it("writes nothing when envelopeLogPath is omitted", async () => {
     const dir = mkdtempSync(join(tmpdir(), "acs-envelope-log-off-"));
     const logPath = join(dir, "envelopes.jsonl");

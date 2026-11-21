@@ -18,9 +18,11 @@
  * rather than a JSON value, costing the Inspector its pretty-printing and
  * the round-trip contract test; the accurate sentence is the better trade.
  *
- * Total by construction. Every write is wrapped: a failure disables the sink
- * for the process lifetime, reports once, and is never propagated to the
- * caller. The sink sits on the decision path: an observability feature that
+ * Total by construction. Every write is wrapped: a filesystem failure disables
+ * the sink for the process lifetime, reports once, and is never propagated to
+ * the caller. A value that cannot be serialized is not a filesystem failure:
+ * it is logged as a `serialization_failed` marker in place of the envelope,
+ * `write` answers false for it, and the sink stays on for the next request. The sink sits on the decision path: an observability feature that
  * can turn a governed tool call into an ungoverned one is the one failure
  * mode this module must never have. Observability degrades; governance does
  * not.
@@ -141,10 +143,22 @@ export function createEnvelopeLogSink({
           rpc_id: rpcId === undefined ? extractRpcId(envelope) : rpcId,
           envelope,
         };
-        const line = `${JSON.stringify(entry)}\n`;
+        let line: string;
+        let recorded = true;
+        try {
+          line = `${JSON.stringify(entry)}\n`;
+        } catch (error) {
+          // A value JSON.stringify cannot serialize (a 400,000-deep array
+          // overflows the stack, a cycle or BigInt throws) costs this one
+          // record, not the sink: log a marker in its place and stay on.
+          // Only a filesystem failure below disables the sink.
+          const reason = error instanceof Error ? error.message : String(error);
+          line = `${JSON.stringify({ ...entry, envelope: { serialization_failed: true, reason } })}\n`;
+          recorded = false;
+        }
         appendFileSync(path, line);
         seq += 1;
-        return true;
+        return recorded;
       } catch (error) {
         fail(error);
         return false;

@@ -116,7 +116,7 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
     });
   });
 
-  it("never throws on an envelope JSON.stringify cannot serialize", () => {
+  it("never throws on an envelope JSON.stringify cannot serialize, and keeps the sink on", () => {
     withTempDir((dir) => {
       const path = join(dir, "envelopes.jsonl");
       const errors: unknown[] = [];
@@ -125,7 +125,8 @@ describe("createEnvelopeLogSink -- the envelope log's JSONL format", () => {
       circular.self = circular;
 
       expect(() => sink.write("request", circular, "steps/toolCallRequest")).not.toThrow();
-      expect(errors.length).toBe(1);
+      expect(errors.length).toBe(0);
+      expect(sink.write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
     });
   });
 
@@ -212,5 +213,50 @@ describe("createEnvelopeLogSink -- write says whether the line landed", () => {
 
   it("answers false from the null sink, which writes nowhere", () => {
     expect(NULL_ENVELOPE_LOG_SINK.write("finding", {}, "steps/toolCallResult")).toBe(false);
+  });
+});
+
+describe("createEnvelopeLogSink -- a value that cannot be serialized", () => {
+  function nested(depth: number): unknown {
+    let value: unknown = [];
+    for (let i = 0; i < depth; i += 1) {
+      value = [value];
+    }
+    return value;
+  }
+
+  it("costs that one record, logs a failure marker, and leaves the sink on", () => {
+    withTempDir((dir) => {
+      const path = join(dir, "envelopes.jsonl");
+      const errors: unknown[] = [];
+      const sink = createEnvelopeLogSink({ path, onError: (e) => errors.push(e) });
+
+      const deep = { jsonrpc: "2.0", method: "steps/toolCallRequest", id: 5, params: nested(400_000) };
+      expect(sink.write("request", deep, "steps/toolCallRequest")).toBe(false);
+      expect(sink.write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
+      expect(sink.write("response", RESPONSE, "steps/toolCallRequest")).toBe(true);
+
+      expect(errors).toEqual([]);
+      const entries = readEntries(path);
+      expect(entries.map((e) => e.seq)).toEqual([1, 2, 3]);
+      expect(entries[0]?.rpc_id).toBe(5);
+      expect(entries[0]?.envelope).toMatchObject({ serialization_failed: true });
+      expect(entries[1]?.envelope).toEqual(REQUEST);
+    });
+  });
+
+  it("treats a cycle or a BigInt the same way", () => {
+    withTempDir((dir) => {
+      const path = join(dir, "envelopes.jsonl");
+      const sink = createEnvelopeLogSink({ path, onError: () => {} });
+      const cyclic: Record<string, unknown> = { id: 1 };
+      cyclic.self = cyclic;
+
+      expect(sink.write("request", cyclic, "steps/toolCallRequest")).toBe(false);
+      expect(sink.write("request", { id: 2, n: 1n }, "steps/toolCallRequest")).toBe(false);
+      expect(sink.write("request", REQUEST, "steps/toolCallRequest")).toBe(true);
+
+      expect(readEntries(path).map((e) => e.seq)).toEqual([1, 2, 3]);
+    });
   });
 });
