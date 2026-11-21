@@ -28,4 +28,4 @@ jobs:
           persist-credentials: false
 
       - name: Validate metadata file
-        uses: owasp/nest-schema/.github/actions/validate@a733198b4a942eb12d3ee8629cd9e0d409b1b2b9
+        uses: owasp/nest-schema/.github/actions/validate@011b47d59567ae7cfd246948c67503ba2f6cc15b
