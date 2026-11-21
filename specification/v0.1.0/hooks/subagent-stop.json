@@ -23,8 +23,8 @@
     },
     "summary": {
       "type": "object",
-      "description": "Optional value the subagent returned to the parent. Provenance: origin='agent_generated' and derived_from = the subagent's response lineage. The summary's content becomes data the parent can act on; its effective trust classification is computed by the parent-side Guardian against local policy from the lineage's origins, and MUST not exceed the minimum effective trust of the lineage (monotonicity). v0.1 does not carry a trust field on the wire — see §7.1.",
-      "required": ["value", "provenance"],
+      "description": "Optional value the subagent returned to the parent. Provenance: origin='agent_generated' and derived_from = the subagent's response lineage. Provenance is OPTIONAL in the base schema so a provenance_producer: none client can send a summary; it is REQUIRED under ACS-Provenance (subagent-stop.acs-provenance.json). The summary's content becomes data the parent can act on; its effective trust classification is computed by the parent-side Guardian against local policy from the lineage's origins, and MUST not exceed the minimum effective trust of the lineage (monotonicity). v0.1 does not carry a trust field on the wire — see §7.1.",
+      "required": ["value"],
       "properties": {
         "value": {},
         "provenance": { "$ref": "../provenance.json" }

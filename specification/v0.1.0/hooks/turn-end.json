@@ -22,12 +22,12 @@
     },
     "summary": {
       "type": "object",
-      "description": "Optional summary of what happened in the turn. Provenance: origin='agent_generated' and derived_from = the union of the steps' provenance_ids. (Trust on the resulting summary is computed by the Guardian against local policy from the lineage's origins; v0.1 does not carry a trust field on the wire — see §7.1.) Lets the Guardian record a turn-level summary distinct from any agentResponse content.",
+      "description": "Optional summary of what happened in the turn. Provenance: origin='agent_generated' and derived_from = the union of the steps' provenance_ids. Provenance is OPTIONAL in the base schema so a provenance_producer: none client can send a summary; it is REQUIRED under ACS-Provenance (turn-end.acs-provenance.json). (Trust on the resulting summary is computed by the Guardian against local policy from the lineage's origins; v0.1 does not carry a trust field on the wire — see §7.1.) Lets the Guardian record a turn-level summary distinct from any agentResponse content.",
       "properties": {
         "value": { "type": "string" },
         "provenance": { "$ref": "../provenance.json" }
       },
-      "required": ["value", "provenance"]
+      "required": ["value"]
     },
     "tool_call_count": {
       "type": "integer",

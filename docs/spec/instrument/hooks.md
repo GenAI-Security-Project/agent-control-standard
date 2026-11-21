@@ -227,7 +227,7 @@ Schema: [`hooks/post-compact.json`](https://genai-security-project.github.io/age
 
 Fires after compaction. Audit + provenance-binding hook.
 
-**Payload:** resulting `summary` content with `provenance` whose `origin` MUST be `agent_generated` and whose `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`.
+**Payload:** resulting `summary` content, `entries_compacted`, and an optional `pre_compact_chain_hash`. The summary's `provenance` is REQUIRED under ACS-Provenance and OPTIONAL otherwise, so a `provenance_producer: none` client can send a valid `postCompact`. When present, its `origin` MUST be `agent_generated` and its `derived_from` MUST equal the union of `provenance_id`s of every entry in `entries_compacted`. The framework — not the LLM — populates `derived_from`. The chain hash after this hook's entry is written is not a payload field: the Guardian writes the entry and chooses its `entry_id`, so only the Guardian can compute it, and it publishes the value as the response's `chain_hash` ([§8.6](specification.md#86-chain-head-publication-normative)). A client that tracks no chain omits `pre_compact_chain_hash` rather than fabricate a value.
 
 **Decision:** Not decision-eligible — compaction has already occurred. A Guardian MAY return MODIFY (rewrite the summary, e.g. to redact a region the policy can't compact), but MAY NOT return DENY. For MODIFY-incapable clients this hook is exempt from the §6.5 substitution — the Guardian returns ALLOW with an audit event instead ([§6.5](specification.md#65-modify-incapable-clients-normative)). The audit chain MUST record the post-compact state regardless.
 
@@ -253,7 +253,7 @@ Each subagent has its own SessionContext and audit chain; the parent–child rel
 
 Schema: [`hooks/subagent-stop.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/subagent-stop.json).
 
-**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
+**Payload:** `subagent_session_id`, `outcome` (`completed`, `failed`, `cancelled`, `timeout`, `denied_at_spawn`); optional `final_chain_hash` (a framework that maintains no session-chain omits it rather than fabricate a value — Guardian handling in [§8.6](specification.md#86-chain-head-publication-normative)); optional `summary` of what was returned to the parent, whose `provenance` is REQUIRED under ACS-Provenance and OPTIONAL otherwise; optional `subagent_step_count`. The summary's `provenance` follows the standard monotonicity rule.
 
 **Decision:** Audit only.
 
@@ -305,7 +305,7 @@ Fires when a skill leaves the active set. Its enforcement value is low: by unloa
 
 Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/turn-end.json).
 
-**Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary`.
+**Payload:** `turn_id`, `outcome` (`completed`, `deferred`, `error`), `step_count`, optional `summary` (its `provenance` is REQUIRED under ACS-Provenance and OPTIONAL otherwise).
 
 **Decision:** Not decision-eligible — the turn has already happened.
 
