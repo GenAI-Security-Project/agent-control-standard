@@ -49,6 +49,13 @@ export type { ToolCallRequestEnvelope, ToolCallResultEnvelope };
  * everywhere else, instead of a fourth spelling declared locally.
  */
 import type { IfcLabels } from "./session-context.ts";
+import { ARGUMENTS_AGT_ALREADY_READS as EGRESS_DESTINATION_ARGUMENTS } from "./annotate-egress.ts";
+
+function describeType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return `a ${typeof value}`;
+}
 
 /**
  * AGT's `envelope.budgets` counters -- the ONE member the two snapshots below
@@ -157,12 +164,11 @@ export type AgtPreToolCallSnapshot = {
  *   - `tool_result.outputs`  what policy/manifest.yaml's post_tool_call point
  *                            targets, at `$.tool_result.outputs[0].value`.
  *                            Every output is carried, and that target names
- *                            index 0 -- so a step returning several outputs
- *                            has its first one evaluated and the rest
- *                            carried but unexamined. That is the manifest's
- *                            declaration, not this assembler's choice;
- *                            widening it is a manifest change with its own
- *                            policy consequences.
+ *                            index 0 -- so one snapshot judges one output.
+ *                            `assemblePostToolCallUnits` below is what makes
+ *                            a step with several outputs, or with structured
+ *                            outputs, be judged in full: it cuts the result
+ *                            into one such snapshot per string leaf.
  *
  * Three members absent on purpose, each for its own reason:
  *   - `tool_call.args`  the result payload has none. Carrying the
@@ -241,6 +247,23 @@ export function assemblePreToolCallSnapshot(
         `(it sent: ${Object.keys(args).join(", ") || "none"})`,
     );
   }
+
+  // Every gate in policy/lib guards the leaf it reads with is_string(), and a
+  // leaf of any other type makes the rule undefined, which AGT answers as an
+  // allow. A value the policy cannot judge is therefore refused here, the same
+  // way a missing target is, so the step ends in the evaluation-failed deny
+  // instead of in an undefined rule. This covers the policy target and every
+  // argument the egress gate reads a destination from.
+  const mustBeString = new Set<string>([policyTargetArgument, ...EGRESS_DESTINATION_ARGUMENTS]);
+  for (const name of mustBeString) {
+    if (Object.hasOwn(args, name) && typeof args[name] !== "string") {
+      throw new Error(
+        `tool ${JSON.stringify(payload.tool.name)} sent argument ${JSON.stringify(name)} as ${describeType(args[name])}, ` +
+          `but the policy gates evaluate it as a string: a value they cannot read would reach AGT as an ` +
+          `undefined rule and be allowed, so the step is refused instead`,
+      );
+    }
+  }
   args[POLICY_TARGET_LEAF] = args[policyTargetArgument];
 
   return {
@@ -274,3 +297,82 @@ export function assemblePostToolCallSnapshot(
     input: ifcMember(sourceLabels),
   };
 }
+
+/**
+ * One output string, as its own single-output snapshot, with the ACS JSON
+ * pointer of the leaf it came from. The snapshot's `outputs[0].value` is the
+ * string, because that is the one leaf policy/manifest.yaml's post_tool_call
+ * target reads; `pointer` is where a rewrite of it lands in the result payload.
+ */
+export type ResultOutputUnit = { pointer: string; snapshot: AgtPostToolCallSnapshot };
+
+/** More string leaves than this in one result is refused rather than judged
+ * piecemeal, so a result cannot turn one step into unbounded evaluations. */
+export const MAX_RESULT_OUTPUT_UNITS = 256;
+const MAX_RESULT_OUTPUT_DEPTH = 32;
+
+function escapePointerSegment(segment: string): string {
+  return segment.replaceAll("~", "~0").replaceAll("/", "~1");
+}
+
+/**
+ * Cuts a result into the units the result gate judges: every string leaf of
+ * every `outputs[i].value`, however deep an object or array nests it.
+ *
+ * The gate's policy target reads `outputs[0].value` and the redact rule
+ * guards it with is_string(), so a result whose second output carries a
+ * secret, or whose first output is an object like `{stdout, stderr}`, is
+ * allowed unredacted when it is handed over whole. One unit per string leaf
+ * puts each of them where the policy reads.
+ *
+ * Answers `[]` when the result carries no string anywhere (numbers, booleans
+ * and nulls cannot hold text a redact rule matches); the caller then judges
+ * the whole-result snapshot once, as it did before units existed.
+ *
+ * Throws on a result with more than MAX_RESULT_OUTPUT_UNITS string leaves or
+ * nested deeper than MAX_RESULT_OUTPUT_DEPTH: the evaluation-failed deny, not
+ * a partial judgement.
+ */
+export function assemblePostToolCallUnits(envelope: ToolCallResultEnvelope, sourceLabels: IfcLabels): ResultOutputUnit[] {
+  const { payload } = envelope.params;
+  const units: ResultOutputUnit[] = [];
+
+  const visit = (value: unknown, pointer: string, depth: number): void => {
+    if (typeof value === "string") {
+      if (units.length >= MAX_RESULT_OUTPUT_UNITS) {
+        throw new Error(
+          `tool ${JSON.stringify(payload.tool.name)} returned more than ${MAX_RESULT_OUTPUT_UNITS} strings, ` +
+            `which this Guardian will not judge piecemeal; the result is refused instead of being partly examined`,
+        );
+      }
+      units.push({
+        pointer,
+        snapshot: {
+          envelope: { budgets: zeroedBudgets() },
+          tool_call: { name: payload.tool.name },
+          tool_result: { outputs: [{ value }] },
+          input: ifcMember(sourceLabels),
+        },
+      });
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    if (depth >= MAX_RESULT_OUTPUT_DEPTH) {
+      throw new Error(
+        `tool ${JSON.stringify(payload.tool.name)} returned an output nested deeper than ` +
+          `${MAX_RESULT_OUTPUT_DEPTH} levels, which this Guardian will not judge; the result is refused`,
+      );
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => visit(item, `${pointer}/${index}`, depth + 1));
+      return;
+    }
+    for (const [key, item] of Object.entries(value)) {
+      visit(item, `${pointer}/${escapePointerSegment(key)}`, depth + 1);
+    }
+  };
+
+  payload.outputs.forEach((output, index) => visit(output.value, `/outputs/${index}/value`, 0));
+  return units;
+}
+
