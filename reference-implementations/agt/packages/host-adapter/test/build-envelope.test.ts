@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateEnvelope } from "guardian";
 import {
   buildEnvelope,
@@ -1235,7 +1236,7 @@ describe("call_id: the real hookmaps, and the derivation pinned", () => {
   }
 
   it("pairs a Claude Code request and result through the shipped hookmap, for a session id that is not a uuid", () => {
-    const shipped = loadHookmap(CLAUDE_CODE.pathname);
+    const shipped = loadHookmap(fileURLToPath(CLAUDE_CODE));
     const before = { ...preToolUsePayload, session_id: "sess-raw-not-a-uuid", tool_use_id: "toolu_01" };
     const after = { ...before, hook_event_name: "PostToolUse", tool_response: { stdout: "done" } };
 

@@ -80,6 +80,43 @@ describe("publishOpaPath -- the opa AGT's native core spawns, made reachable fro
     }
   });
 
+  // Linux and macOS can reach the Windows branch only with a stubbed platform.
+  // The stub shows the branch's own logic: the path lands in `process.env` and
+  // the C library is never touched. It shows nothing about Windows itself.
+  it.skipIf(process.platform === "win32")("on win32 publishes through process.env and leaves the C library alone", async () => {
+    const opa = publishOpaPath();
+    const source = fileURLToPath(new URL("../src/opa-path.ts", import.meta.url));
+    const script = `
+      import { dlopen, FFIType } from "bun:ffi";
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const { publishOpaPath } = await import(${JSON.stringify(source)});
+      const returned = publishOpaPath();
+      const js = process.env.ACS_OPA_PATH;
+      let real = "";
+      for (const name of ["libc.so.6", "libSystem.B.dylib"]) {
+        try {
+          const lib = dlopen(name, { getenv: { args: [FFIType.cstring], returns: FFIType.cstring } });
+          real = lib.symbols.getenv(Buffer.from("ACS_OPA_PATH\\0"))?.toString() ?? "";
+          break;
+        } catch {}
+      }
+      console.log(JSON.stringify({ returned, js, real }));
+    `;
+    // A directory hint, so the real environment and `process.env` both hold
+    // something other than the resolved file until a write reaches them.
+    const hint = opa.slice(0, opa.lastIndexOf("/"));
+    // The stubbed platform names a bundled opa package this machine does not
+    // have, so a digest stands in for any comparison with the bundled binary.
+    const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(opa).arrayBuffer()).digest("hex");
+    const child = Bun.spawnSync([process.execPath, "--no-install", "-e", script], {
+      env: { PATH: "/nonexistent", ACS_OPA_PATH: hint, ACS_OPA_SHA256: digest },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect({ exitCode: child.exitCode, stderr: child.stderr.toString() }).toEqual({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(child.stdout.toString())).toEqual({ returned: opa, js: opa, real: hint });
+  });
+
   it("answers the path of an opa that actually runs", () => {
     const opa = publishOpaPath();
     const child = Bun.spawnSync([opa, "version"], { stdout: "pipe", stderr: "pipe" });
