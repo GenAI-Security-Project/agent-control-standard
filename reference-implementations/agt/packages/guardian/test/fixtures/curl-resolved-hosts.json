@@ -16,5 +16,9 @@
   "curl https://docs.anthropic.com/x": "docs.anthropic.com",
   "curl https://DOCS.ANTHROPIC.COM/x": "DOCS.ANTHROPIC.COM",
   "curl https://docs.anthropic.com:443/x": "docs.anthropic.com",
-  "curl https://docs.example.com/y": "docs.example.com"
+  "curl https://docs.example.com/y": "docs.example.com",
+  "curl 'https://docs.anthropic.com'@evil.test/x": "evil.test",
+  "curl HTTPS://evil.test/x": "evil.test",
+  "curl \"https://docs.anthropic.com\"@evil.test/x": "evil.test",
+  "curl https://docs.anthropic.com\"\"@evil.test/x": "evil.test"
 }

