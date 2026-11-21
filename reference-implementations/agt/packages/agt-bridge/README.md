@@ -33,7 +33,8 @@ AGT's native core spawns `opa`. The SDK ships it as a per-platform optional depe
 
 | Variable | What it does |
 |---|---|
-| `ACS_OPA_PATH` | An explicit OPA executable. It is authoritative: a value that names nothing stops construction. Unset, the bundled binary is used, then `opa` on `PATH` |
+| `ACS_OPA_PATH` | An explicit OPA executable. A value that names nothing stops construction, and so does a binary that fails the digest check below. Unset, the bundled binary is used, then `opa` on `PATH` |
+| `ACS_OPA_SHA256` | The SHA-256 digest the `opa` binary must match, as 64 hex characters. Unset, the binary must match the bundled one. With no bundled binary to compare with, as under `ACS_OPA_NO_BUNDLE=1`, this variable is required and construction stops without it |
 
 ## The manifest path
 
