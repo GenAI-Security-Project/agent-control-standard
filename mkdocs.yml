@@ -131,6 +131,7 @@ extra_css:
 extra_javascript:
   - assets/javascripts/mermaid.min.js
   - assets/javascripts/mermaid-init.js
+  - assets/javascripts/a11y.js
 
 markdown_extensions:
   # Emojis
