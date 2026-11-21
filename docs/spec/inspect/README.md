@@ -22,6 +22,8 @@ Both methods follow the standard ACS request envelope and are written into the S
 
 `agbom/changed` is part of the **ACS-Inspect-Dynamic** profile extension. Deployments that claim only **ACS-Inspect** emit a single snapshot and do not track mid-session mutations.
 
+No reference implementation in release 0.1.5 sends or evaluates `agbom/snapshot` or `agbom/changed` yet. The [ACS overview](../../acs.md#inspectable) shows a complete snapshot exchange built from the schemas.
+
 ## Canonical schema
 
 Every component graph is expressed in the canonical AgBOM document ([`agbom/document.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/agbom/document.json)). Components are typed; the type set in v0.1.0 is:
@@ -61,6 +63,8 @@ flowchart LR
 | [SWID](https://csrc.nist.gov/Projects/Software-Identification-SWID) | [Extending SWID](./extend_swid.md) | Working draft |
 
 A Guardian MAY request a specific serialization in the handshake's AgBOM negotiation (`agbom_serializations_supported` in ServerHello); the canonical form is always the source of truth and the serializations are derivations.
+
+The v0.1.0 mappings target CycloneDX 1.6. The leads decided that the next AgBOM step maps AgBOM fields and terms to CycloneDX 2.0 and records the gaps ([D-044](../../decisions/index.md#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first)).
 
 ## ACS-Inspect conformance bar
 

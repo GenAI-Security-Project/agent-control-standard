@@ -1,0 +1,165 @@
+"""The OPA backend end to end: acs.client signs a step, the real example Guardian asks a stub OPA, and the
+signed decision comes back verified.
+
+The OPA input document and verdict shape are a lab convention until issue #531 settles the OPA binding.
+"""
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from acs.testing.harness import launch_guardian, signing_env
+from opa_stub import StubOpa, closed_port_url
+from round_trip_helpers import SESSION, TRANSFER, VENDOR_RESULT, apply_redactions, send_step
+
+
+def test_a_modify_redacts_every_output_of_a_tool_result(guardian):
+    verdict = {"decision": "modify", "reasoning": "bank account numbers are withheld",
+               "reason_codes": ["sensitive_field_redacted"],
+               "modifications": {"redactions": [{"path": f"/outputs/{i}/value/bank_account_number"}
+                                                for i in range(len(VENDOR_RESULT["outputs"]))]}}
+    with StubOpa(verdict) as opa:
+        sent, result = send_step(guardian(opa.url), "steps/toolCallResult", VENDOR_RESULT)
+    assert opa.inputs == [{"input": {"method": "steps/toolCallResult", "payload": VENDOR_RESULT,
+                                     "metadata": sent["params"]["metadata"]}}]
+    assert (result["decision"], result["reason_codes"]) == ("modify", ["sensitive_field_redacted"])
+    redacted = apply_redactions(sent["params"]["payload"], result["modifications"]["redactions"])
+    assert [o["value"] for o in redacted["outputs"]] == [
+        {"name": "Acme", "bank_account_number": "[REDACTED]"},
+        {"name": "Beta", "bank_account_number": "[REDACTED]"}]
+    assert "111-222" not in repr(redacted) and "333-444" not in repr(redacted)
+
+
+def test_a_modify_that_redacts_only_the_first_output_is_a_deny(guardian):
+    # Issue #469: redacting only the first output let the second one through.
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}}
+    with StubOpa(verdict) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallResult", VENDOR_RESULT)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_verdict_invalid"])
+
+
+def test_one_redaction_passes_when_only_one_output_carries_the_field(guardian):
+    payload = {**VENDOR_RESULT, "outputs": [VENDOR_RESULT["outputs"][0], {"value": {"name": "Beta"}}]}
+    verdict = {"decision": "modify", "reasoning": "r",
+               "modifications": {"redactions": [{"path": "/outputs/0/value/bank_account_number"}]}}
+    with StubOpa(verdict) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallResult", payload)
+    assert result["decision"] == "modify"
+
+
+def test_an_ask_comes_back_as_an_ask(guardian):
+    ask_details = {"approver": {"type": "human", "id": "lab-approver"},
+                   "question": "Approve a transfer of 9000 to acct-1?", "timeout_seconds": 240}
+    verdict = {"decision": "ask", "reasoning": "transfer above the approval threshold",
+               "reason_codes": ["payment_over_threshold"], "ask_details": ask_details}
+    with StubOpa(verdict) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    # D-043: the Guardian owns the ASK timeout. Nothing on this path turns the ask into an allow.
+    assert (result["decision"], result["ask_details"]) == ("ask", ask_details)
+
+
+@pytest.mark.parametrize("verdict,decision", [({"decision": "allow"}, "allow"),
+                                              ({"decision": "deny", "reasoning": "no",
+                                                "reason_codes": ["external_recipient"]}, "deny")])
+def test_allow_and_deny_pass_through(guardian, verdict, decision):
+    with StubOpa(verdict) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    assert result["decision"] == decision
+
+
+def test_opa_down_is_a_signed_deny(guardian):
+    _, result = send_step(guardian(closed_port_url()), "steps/toolCallResult", VENDOR_RESULT)
+    assert (result["decision"], result["reason_codes"]) == ("deny", ["opa_unreachable"])
+
+
+@pytest.mark.parametrize("body", [
+    b'{"result": ' + b"[" * 100_000 + b"]" * 100_000 + b"}",
+    b'{"result": {"decision": "allow", "policy_data": ' + b'{"n": ' * 900 + b"{}" + b"}" * 900 + b"}}",
+])
+def test_a_deeply_nested_opa_answer_is_a_signed_deny(guardian, body):
+    with StubOpa(body=body) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    assert result["decision"] == "deny"
+    assert result["reason_codes"][0] in ("opa_response_malformed", "opa_verdict_invalid")
+
+
+def test_the_startup_log_never_prints_url_userinfo(tmp_path, monkeypatch):
+    env = {**os.environ, **signing_env(), "ACS_GUARDIAN_STATE_DIR": str(tmp_path / "state"),
+           "ACS_POLICY_BACKEND": "opa", "ACS_OPA_URL": "http://lab:secret-pw@127.0.0.1:1/v1/data/lab/verdict"}
+    env.pop("ACS_HMAC_SECRET_FILE", None)
+    process, _ = launch_guardian(env=env)
+    process.terminate()
+    _, stderr = process.communicate(timeout=5)
+    assert "127.0.0.1:1/v1/data/lab/verdict" in stderr
+    assert "secret-pw" not in stderr
+
+
+@pytest.mark.parametrize("body", [
+    b'{"result": {"decision": "allow", "policy_data": {"n": 9007199254740993}}}',
+    b'{"result": {"decision": "allow", "policy_data": {"n": NaN}}}',
+])
+def test_an_unsignable_number_is_a_signed_deny(guardian, body):
+    with StubOpa(body=body) as opa:
+        _, result = send_step(guardian(opa.url), "steps/toolCallRequest", TRANSFER)
+    assert result["decision"] == "deny"
+    assert result["reason_codes"][0] in ("opa_response_malformed", "response_not_signable")
+
+
+def _post_raw(url: str, body: bytes) -> tuple[int, dict]:
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read())
+
+
+def test_a_request_nested_past_the_parser_limit_gets_a_parse_error(guardian):
+    url = guardian(closed_port_url())
+    status, body = _post_raw(url, b"[" * 100_000 + b"]" * 100_000)
+    assert (status, body["error"]["code"]) == (400, -32700)
+
+
+def _signed_nested(depth: int) -> bytes:
+    import json
+    from acs.testing.harness import make_envelope
+    deep: list = []
+    for _ in range(depth):
+        deep = [deep]
+    request = make_envelope("steps/toolCallRequest", {"tool": {"name": "ls"}, "arguments": {"x": {"value": deep}}},
+                            session_id=SESSION, sign_with_secret=signing_env()["ACS_HMAC_SECRET"])
+    return json.dumps(request).encode()
+
+
+def test_a_signed_request_under_the_depth_bound_gets_a_decision_over_http(guardian):
+    from acs.guardian.example_guardian import MAX_REQUEST_DEPTH
+    status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH - 20))
+    assert status == 200 and body["result"]["decision"] == "deny"  # OPA is down in this fixture, so it denies
+
+
+def test_a_signed_request_past_the_depth_bound_gets_a_signed_invalid_request_over_http(guardian):
+    # Signed per spec section 10 (fix round 10, which reverses round 9's unsigned answer).
+    from acs.client import verify_signature
+    from acs.guardian.example_guardian import MAX_REQUEST_DEPTH
+    status, body = _post_raw(guardian(closed_port_url()), _signed_nested(MAX_REQUEST_DEPTH + 50))
+    assert body["error"]["code"] == -32600
+    assert verify_signature(body, session_id=SESSION)
+
+
+@pytest.mark.parametrize("body,code", [
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", "params": [1, 2]}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", "params": "x"}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": "steps/toolCallRequest", '
+     b'"params": {"request_id": 5, "metadata": {"session_id": 7}, "payload": {}}}', -32600),
+    (b'{"jsonrpc": "2.0", "id": "1", "method": 9, "params": {}}', -32600),
+    (b"\xff\xfe{}", -32700),
+])
+def test_a_malformed_request_gets_a_json_rpc_answer(guardian, body, code):
+    # A dropped connection reads as transport_failure, which a proceed posture runs ungoverned.
+    status, answer = _post_raw(guardian(closed_port_url()), body)
+    assert answer["error"]["code"] == code

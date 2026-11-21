@@ -14,5 +14,11 @@ except ImportError as _rfc8785_import_error:
     ) from _rfc8785_import_error
 
 
+# Every way canonicalizing a value can fail: rfc8785's own errors (the integer and float domain errors among them),
+# a lone surrogate that can't encode as UTF-8, and a value nested past the interpreter's recursion limit.
+CANONICALIZATION_ERRORS: tuple[type[BaseException], ...] = (
+    _rfc8785.CanonicalizationError, UnicodeEncodeError, RecursionError)
+
+
 def jcs_canonicalize(obj: Any) -> bytes:
     return _rfc8785.dumps(obj)

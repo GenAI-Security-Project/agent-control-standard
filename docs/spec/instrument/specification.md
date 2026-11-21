@@ -6,6 +6,17 @@ The Instrument pillar covers real-time interception, evaluation, and enforcement
 
 A deployment that implements **ACS-Core** (this section's mandatory baseline) is v0.1.0-conformant. Additional capabilities (Trace event emission, AgBOM serialization, field-level provenance, cryptographic signatures, strengthened audit chains) are organized as **conformance profiles** (see [Conformance](../conformance.md)).
 
+!!! note "Decided, not yet in this text"
+    This page is the normative text of specification v0.1.0. The project has settled some changes that this text does not carry yet. The rules below are the published ones. The [decision log](../../decisions/index.md) records each decision:
+
+    - Deny becomes the default failure posture, and the startup posture follows ([D-036](../../decisions/index.md#d-036-default-the-failure-posture-to-deny)). Only the Observed Agent's own configuration can opt into proceed, and a Guardian can make the posture stricter but never looser ([D-045](../../decisions/index.md#d-045-only-the-observed-agents-own-configuration-can-opt-into-proceed)).
+    - A refusal or an integrity failure blocks the step whatever the posture says. Only a step with no usable answer follows the posture ([D-040](../../decisions/index.md#d-040-split-decision-failures-from-refusals)), and an HTTP 429 from the Guardian counts as a refusal ([D-046](../../decisions/index.md#d-046-treat-http-429-as-a-refusal)).
+    - Every request and every response is signed, errors and the ServerHello included ([D-039](../../decisions/index.md#d-039-sign-every-request-and-response)).
+    - An ASK that gets no answer in time means deny ([D-043](../../decisions/index.md#d-043-treat-ask-as-a-soft-deny)).
+    - Shared-secret signing serves one trust domain, and public-key signing serves agents that cross trust domains ([D-047](../../decisions/index.md#d-047-use-symmetric-keys-inside-a-trust-domain-and-asymmetric-keys-across-trust-domains)).
+
+    Notes headed "In release 0.1.5" say what the reference implementations do today. [What runs in release 0.1.5](./README.md#what-runs-in-release-015) lists them.
+
 ## 1. Design Principles
 
 1. **Opinionated on contract, permissive on implementation.** The wire format and semantics are locked. Engines, crypto suites, OS, and transport are deployment-owned.
@@ -36,6 +47,9 @@ flowchart LR
     DET -->|"allow / deny / modify / ask / defer"| OA
 ```
 
+!!! note "Non-normative: policy engines"
+    The diagram's Cedar/Rego label names the engines the interface allows. Rego is the reference language in specification v0.1.0, and a Cedar binding is planned for specification v0.2.0 (§12.1, [D-006](../../decisions/index.md#d-006-use-rego-as-the-reference-policy-language)). In release 0.1.5, every reference Guardian runs the deterministic layer only, and none ships an agent layer.
+
 ### 2.1 End-to-end flow
 
 ```
@@ -55,6 +69,9 @@ Observed Agent                                Guardian Agent
      │ 9. Enforce decision (allow/deny/modify/ask/defer)
      │ 10. Audit entry written to SessionContext
 ```
+
+!!! note "Non-normative: two steps the flow compresses"
+    Before step 9, the Observed Agent verifies the response signature with the key of the request it sent and checks that the response answers that request. A reply that fails either check blocks the step whatever the posture says ([D-029](../../decisions/index.md#d-029-verify-a-response-against-the-request-it-answers)). The audit entry in step 10 belongs to the Guardian: SessionContext is Guardian state (§8), and the Guardian writes the ContextEntry when it evaluates the step. The Observed Agent records decision failures in its own audit log (§6.4).
 
 A worked example appears in [ACS in Action](../../topics/ACS_in_action_example.md).
 
@@ -98,6 +115,9 @@ sequenceDiagram
 ### 4.1 Handshake failure (normative)
 
 `on_decision_failure` is negotiated in the handshake, so it cannot govern a handshake that never completes. When `handshake/hello` fails — the Guardian is unreachable, silent past the deployment's connection timeout, or errors without producing a ServerHello — the Observed Agent applies its **startup posture**, configured out of band: `proceed` starts the session unguarded, `refuse` does not start it. The default is `proceed`, matching `on_decision_failure`, so a Guardian outage does not block new sessions.
+
+!!! note "In release 0.1.5"
+    The leads decided that deny is the default and that the startup posture follows it ([D-036](../../decisions/index.md#d-036-default-the-failure-posture-to-deny)), and the text above has not changed yet. The reference adapters already default to `refuse`: a session whose handshake gets no answer denies every step unless the hook's own environment sets `ACS_STARTUP_POSTURE=proceed`. In enforce mode, the gateway denies every step of a session whose handshake failed.
 
 A Guardian that answers with a refusal (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) has decided; the startup posture applies only when no answer arrives. A session started unguarded MUST be recorded in the deployment's own audit log — there is no Guardian to receive the event — and SHOULD be surfaced on Trace as an `acs.decision.failure` event with class `handshake_failure` and posture `fail_open` on the session span when the deployment claims ACS-Trace. The Observed Agent SHOULD retry the handshake for subsequent sessions. Whether a Guardian can attach mid-flight to a session that started unguarded is undefined in v0.1; renegotiation is deferred to v0.2 alongside `system/handshake_renegotiate` (§13).
 
@@ -144,6 +164,9 @@ Inspect-pillar methods (`agbom/*`): `agbom/snapshot` and `agbom/changed` (see [I
 DEFER reasons: `insufficient_context`, `conflicting_policies`, `low_confidence`, `pending_dependency`. DEFER MUST include `resolution_method`, `resolution_timeout_ms`, and `timeout_decision` (default `deny`). Cascading deferrals MUST be bounded per session.
 
 `timeout_decision` defaulting to `deny` is deliberately the opposite of `on_decision_failure` defaulting to `proceed` (§6.4). An expired DEFER is a Guardian that flagged a concern and failed to resolve it, not one that never answered: a degraded Guardian that can still emit DEFER fails closed where a silent one fails open.
+
+!!! note "Decided, not yet in this text"
+    The leads decided to make `on_decision_failure` default to deny ([D-036](../../decisions/index.md#d-036-default-the-failure-posture-to-deny)). This text does not carry that decision yet.
 
 The diagram below shows the five dispositions. ALLOW, DENY, and MODIFY resolve immediately. ASK and DEFER pause the step until it resolves.
 
@@ -200,6 +223,19 @@ A hook is a control point only if the Observed Agent waits for the verdict and a
 A step suffers a **decision failure** when no usable decision arrives within the negotiated timeout: the Guardian stays silent, the transport fails (connection refused, TLS failure, malformed response), or the Guardian returns an error instead of a decision. All three resolve the same way: the Observed Agent applies the deployment's failure posture, declared as `on_decision_failure` in the handshake (§4) and defaulting to `proceed` (fail-open) so that a slow, erroring, or unreachable Guardian does not halt production. A deployment MAY set `on_decision_failure: deny` (fail-closed). The negotiated timeout bounds every failure mode: an error from the §17.1 registry carries a recovery action the agent MAY attempt within the remaining budget, and an unambiguous failure (a refused connection) MAY resolve immediately rather than waiting out the clock.
 
 Every decision failure MUST be recorded as an audit event, under either posture. Under `proceed` the record makes the bypass visible rather than silent, and under `deny` it shows why the step was blocked. The Observed Agent records it in the deployment's own audit log, the rule §4.1 sets for a session started unguarded, and SHOULD also emit it as an `acs.decision.failure` event when the deployment claims ACS-Trace ([Trace Events](../trace/events.md)). At `sessionEnd`, the Observed Agent SHOULD report how many failures it recorded in each failure class, in `summary.decision_failures`. A reader treats a session that ends without that count as unmeasurable. When a decision does arrive within the timeout, the agent MUST honor it regardless of the posture. Fail-open trades enforcement for availability under disruption: an adversary who can disrupt the channel converts control into audit. Deployments for which that trade is unacceptable set `on_decision_failure: deny`.
+
+!!! note "In release 0.1.5"
+    The leads decided to change these rules, and the text above has not changed yet. Deny becomes the default ([D-036](../../decisions/index.md#d-036-default-the-failure-posture-to-deny)), only the Observed Agent's own configuration can opt into `proceed` ([D-045](../../decisions/index.md#d-045-only-the-observed-agents-own-configuration-can-opt-into-proceed)), and a refusal, an integrity failure or an HTTP 429 blocks the step whatever the posture says ([D-040](../../decisions/index.md#d-040-split-decision-failures-from-refusals), [D-046](../../decisions/index.md#d-046-treat-http-429-as-a-refusal)).
+
+    The reference implementations differ in what they ship today:
+
+    - The adapters deny a step that gets no usable decision unless the adapter's own configuration opts into `proceed`: `ACS_DEFAULT_DENY=0` in the hook environment for Claude Code and Cursor, or `default_deny: false` in NAT's `workflow.yml`. A ServerHello that declares `deny` overrides that opt-in, so the Guardian can only tighten the posture.
+    - The adapters treat an HTTP 429 with no JSON-RPC body as a decision failure, so it follows the posture. The gateway denies it.
+    - The gateway in enforce mode always denies, and no ServerHello can loosen it.
+    - The example Guardian and the Go Guardian declare `on_decision_failure: deny` by default.
+    - The TypeScript Guardian (AGT) declares `proceed`, the default this text sets.
+
+    [What runs in release 0.1.5](./README.md#what-runs-in-release-015) links each implementation's README.
 
 ### 6.5 MODIFY-incapable clients (normative)
 
@@ -359,6 +395,9 @@ A signature over the §10 canonical input is REQUIRED in ACS-Core. The signature
 
 The registry is crypto-agile: the `{ algorithm, value, key_id }` envelope supports any registered algorithm, and the handshake declares which algorithms each side supports. v0.1 prioritizes adoption breadth over cryptographic maximalism: signatures are already field-optional, and a spec that ships without PQC mandates protects more deployments than a spec that mandates PQC and doesn't ship. PQC algorithms from NIST FIPS 203–205 (2024) are registered and available; a future version is expected to promote PQC to RECOMMENDED once ecosystem support matures.
 
+!!! note "Non-normative: signatures are required in ACS-Core"
+    "Field-optional" describes the schemas. The envelope schemas don't list `signature` as required, and §10 adds the requirement for ACS-Core. The leads also decided that every request and every response is signed, errors and the ServerHello included ([D-039](../../decisions/index.md#d-039-sign-every-request-and-response)).
+
 | Algorithm | Class | v0.1.0 status |
 |---|---|---|
 | `HMAC-SHA256` | Symmetric MAC | RECOMMENDED. Shared-secret integrity; simplest deployment path. Sufficient for same-host and trusted-network topologies where the threat is accidental tampering or replay. Both parties hold the key, so it attributes a message to neither (§8.6). |
@@ -371,6 +410,11 @@ The registry is crypto-agile: the `{ algorithm, value, key_id }` envelope suppor
 | `SLH-DSA-128f` | PQC, hash | OPTIONAL. Faster signing; larger signatures. |
 | `ML-DSA-65+ECDSA-P256` | Hybrid | OPTIONAL. Transitional composite for PQC forward-resistance with classical co-signature. |
 | `ML-DSA-65+RSA-PSS-SHA256` | Hybrid | OPTIONAL. Transitional composite. |
+
+!!! note "In release 0.1.5: experimental ML-DSA-65 decision signing"
+    Release 0.1.5 ships ML-DSA-65 decision signing as an experiment, off by default. HMAC-SHA256 stays the default. With `ACS_RESPONSE_SIGNING=ML-DSA-65`, the example Guardian signs each decision, publishes its public key document at `GET /keys`, and binds each signed answer to the request it answers by hash. The adapters and the gateway verify those answers, and [acs-verify](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/acs-verify.md) checks a recorded transcript offline.
+
+    The key document, the request hash field and the handshake fields are lab conventions, not part of this specification, and the release makes no ACS-Crypto claim. [Signing in the adapters](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/signing.md) explains the setup and its limits, and the [signature benchmark](../../topics/signature-benchmark.md) measures the cost.
 
 **PQC migration intent.** The long-term direction is PQC-primary. A future ACS version is expected to promote `ML-DSA-65` to RECOMMENDED and eventually deprecate classical-only algorithms, but the timeline depends on ecosystem readiness: library maturity across Java/Node/.NET, HSM/KMS support breadth, and operational experience at scale. The crypto-agile envelope ensures that migration requires no wire-format changes; only the handshake-negotiated algorithm set shifts.
 
@@ -403,6 +447,9 @@ Spec defines the **interface** to the deterministic-layer engine, not the engine
 |---|---|
 | OPA / Rego | v0.1 starting reference |
 | Cedar | v0.2 fast-follow |
+
+!!! note "In release 0.1.5"
+    The TypeScript and Go Guardians evaluate AGT Rego policies through the AGT runtime. The example Guardian has an opt-in OPA backend, `ACS_POLICY_BACKEND=opa`, that denies on every OPA failure. The backend's binding is a lab convention, not part of this specification.
 
 Custom engines plug in by respecting the interface. ACS layers conventions on top: modification format, reasoning format, no external HTTP calls in canonical policies, bundle layout, baseline policy bundle.
 

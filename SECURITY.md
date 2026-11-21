@@ -1,6 +1,6 @@
 # Security Policy
 
-ACS is a specification. Most of what lives here is prose and JSON Schema, so the security surface is narrower than a typical software project. Report anything you find anyway. A flaw in the specification propagates into every implementation that follows it.
+ACS is a specification, and this repository also ships code people install and run: hook adapters, three Guardians, and a gateway that sits between an agent and its model. Report anything you find. A flaw in the specification propagates into every implementation that follows it, and a flaw in the code reaches every developer who wires it into an agent.
 
 ## Report a vulnerability
 
@@ -31,16 +31,19 @@ Rock Lambros ([rock.lambros@owasp.org](mailto:rock.lambros@owasp.org)) is the pr
 | Hook or event definitions that leak sensitive data by design | Missing security headers on sites we do not operate |
 | Supply-chain issues in this repository's dependencies | Social engineering of maintainers or contributors |
 | The published site at owaspacs.org, including the landing page, the documentation, and the schema endpoints | Missing security response headers on the Pages site, which GitHub Pages does not allow us to set |
-| The reference implementation under `reference-implementations/`, which is runnable code people install and wire into a live development environment | Gaps the reference implementation documents about itself, which are tracked as issues rather than handled as reports |
+| The code under `adapters/` and `reference-implementations/`: the hook adapters, the example Guardian, the gateway, `acs-verify`, and the TypeScript and Go Guardians, all runnable code people install and wire into a live development environment | Gaps an implementation documents about itself, which are tracked as issues rather than handled as reports |
 
 Specification flaws are welcome here too. If a hook definition forces implementers to log secrets, or an event schema makes an authorization bypass easy to write, please tell us, even though no code here executes.
 
-Code here does now execute. The reference implementation under `reference-implementations/`
-runs a Guardian process and installs hooks into a coding agent, so a report against it is
-in scope on the same terms as everything else above. Read that tree's own README first. It
-states plainly which ACS-Core requirements it does not yet meet, including request signing
-and replay protection, and a report that restates a documented gap is better filed as an
-issue where the discussion is public.
+Code here does execute. The adapters under `adapters/` install hooks into a coding agent,
+the gateway there listens on the network and can hold a model API key, and the Guardians
+under `adapters/` and `reference-implementations/` run as their own processes. A report
+against any of them is in scope on the same terms as everything else above. Read the
+documents that state each one's limits first. `adapters/SECURITY.md` is the threat model for
+everything under `adapters/`. `reference-implementations/README.md` lists the expectations
+each Guardian does not meet yet, among them that the TypeScript Guardian under
+`reference-implementations/agt/` neither signs nor rejects replayed requests. A report that
+restates a documented gap is better filed as an issue where the discussion is public.
 
 ## Response times
 

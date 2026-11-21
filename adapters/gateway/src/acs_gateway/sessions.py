@@ -1,0 +1,244 @@
+"""ACS sessions for model conversations, and the outcome cache that keeps a resend from being governed twice (A.4)."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import uuid
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from acs.core import jcs_canonicalize
+
+from acs_gateway.strict import loads_strict
+
+
+def _text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def is_stream(body: Any) -> bool:
+    """Any stream value but an absent one, null or false asks for a stream, so an oddity can't slip past the gate.
+
+    Gating and replay both read it here, so they never disagree on what a request asked for."""
+    return isinstance(body, dict) and body.get("stream") is not None and body["stream"] is not False
+
+
+def conversation_key(body: dict[str, Any]) -> str:
+    """SHA-256 of the system text and the first user message, which every resend of one agent run repeats."""
+    system, user = conversation_parts(body)
+    joined = json.dumps([system, user], separators=(",", ":"))
+    return hashlib.sha256(joined.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def conversation_parts(body: dict[str, Any]) -> tuple[str, str]:
+    """(system text, first user message), the parts that name one agent run. Sessions and replay keys both read them
+    here, so the two never group requests differently.
+
+    The system text is the instructions field when present, otherwise the first system or developer item.
+    """
+    items = body.get("input")
+    if isinstance(items, str):
+        items = [{"role": "user", "content": items}]
+    items = items if isinstance(items, list) else []
+    system = body.get("instructions") if isinstance(body.get("instructions"), str) else None
+    user = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        if system is None and role in ("system", "developer"):
+            system = _text(item.get("content"))
+        elif user is None and role == "user":
+            user = _text(item.get("content"))
+    return system or "", user or ""
+
+
+@dataclass
+class CachedOutcome:
+    """How a gated item left the gateway, reapplied verbatim whenever the client resends it."""
+    # "delivered", "removed" or "rewritten"
+    outcome: str
+    name: str
+    # The item as delivered (rewritten arguments or output included), or None when it was removed.
+    item: dict[str, Any] | None
+    request_id: str | None = None
+    # What the gated item first said, raw and as a canonical fingerprint, so a reused call_id carrying something else
+    # is caught. The raw form is compared first, so an unchanged resend never pays for canonicalization.
+    fingerprint: str = ""
+    raw: Any = None
+    # The delivered call's arguments in canonical form, computed once.
+    canonical_arguments: Any = None
+    # The tool.version a call was gated under (A.10). A call_id has one life, so a repeat under another is refused.
+    digest: str | None = None
+    # For a call, how many input items the request that produced it forwarded. Replay's branch tokens put a removed
+    # call there, since the client never resends it (issue #579).
+    position: int | None = None
+
+
+def canonical_value(value: Any, raw: Any) -> Any:
+    """The RFC 8785 form of an already parsed JSON value, so a caller that parsed it doesn't parse it again. raw
+    stands in when RFC 8785 can't encode the value."""
+    try:
+        return jcs_canonicalize(value).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return raw
+
+
+def canonical(value: Any) -> Any:
+    """A JSON string in RFC 8785 form, so key order and whitespace don't change what it says. Any other value, and a
+    string that isn't JSON, repeats a key, or that RFC 8785 can't encode, stays as it is."""
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = loads_strict(value)
+    except Exception:  # noqa: BLE001
+        return value
+    return canonical_value(parsed, value)
+
+
+def content(item: dict[str, Any]) -> Any:
+    """What a function_call asks for (name, arguments) or what an output says (output), as sent."""
+    if item.get("type") == "function_call":
+        return [item.get("name"), item.get("arguments")]
+    return item.get("output")
+
+
+def same_content(item: dict[str, Any], cached: CachedOutcome) -> bool:
+    """Whether a resent item says what the cached one first said: raw equality first, canonical only on a mismatch."""
+    return content(item) == cached.raw or fingerprint(item) == cached.fingerprint
+
+
+_UNSET = object()
+
+
+def fingerprint(item: dict[str, Any], canonical_arguments: Any = _UNSET) -> str:
+    """SHA-256 over what a function_call asks for (name, arguments) or what an output says (output). A caller that
+    already canonicalized a call's arguments passes them in, so they aren't canonicalized twice."""
+    if item.get("type") == "function_call":
+        arguments = canonical(item.get("arguments")) if canonical_arguments is _UNSET else canonical_arguments
+        content: Any = [item.get("name"), arguments]
+    else:
+        content = canonical(item.get("output"))
+    try:
+        encoded = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+    except (ValueError, RecursionError):
+        encoded = repr(content)
+    return hashlib.sha256(encoded.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+# The retire cause for a session whose transcript holds an answer the gateway withheld and couldn't mark.
+DISCARD_UNWRITTEN = "discard_unwritten"
+
+
+@dataclass
+class Session:
+    session_id: str
+    epoch: int
+    # One lock per ACS session keeps its steps, and so its chain, in send order (PREMORTEM P20).
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    handshake: Any = None
+    posture: Any = None
+    # Keyed on call_id within this session, so the cache key is (session_id, call_id) (PREMORTEM P3).
+    calls: dict[str, CachedOutcome] = field(default_factory=dict)
+    results: dict[str, CachedOutcome] = field(default_factory=dict)
+    # Requests between their input and output phases. A session with any, or with its lock held, is never evicted.
+    active: int = 0
+    # time.monotonic() when opening last failed, so a retry waits out the backoff.
+    open_failed_at: float | None = None
+    # Why the session left the map and takes no more steps, or None while it is live. Only the event loop writes it.
+    retire_cause: str | None = None
+    # An answer line reached the transcript and its discards line did not. A worker thread sets it without reading
+    # anything first, and nothing ever clears it, so no write on the loop can lose it. Whether a sessionEnd may follow
+    # is decided on this flag, never on retire_cause alone (see ends_unmarked).
+    unmarked_answer: bool = False
+    # Requests counted as they pass the input phase, and the latest count at each request position, so a reply to an
+    # attempt the client has already retried never places its calls in the branch (issue #579, final review I-1).
+    arrivals: int = 0
+    latest_arrival: dict[int, int] = field(default_factory=dict)
+    # Order of creation across epochs, so an arrival on a newer session for the same conversation counts as later
+    # (round 2, R5 and R6).
+    ordinal: int = 0
+    # Set once the gateway scheduled steps/sessionEnd, so a session is never ended twice.
+    ending: bool = False
+    # The worker of a step the loop abandoned, which may still be sending or writing. sessionEnd waits for it, so
+    # the end never chains ahead of it and sees any unmarked answer it lands.
+    stray: Any = None
+
+    @property
+    def retired(self) -> bool:
+        return self.retire_cause is not None or self.unmarked_answer
+
+    def record_unmarked_answer(self) -> None:
+        """An answer line reached the transcript and its discards line did not. Safe from any thread, and final: a
+        single store of True, so a retirement the loop writes at the same moment can't undo it."""
+        self.unmarked_answer = True
+
+    @property
+    def ends_unmarked(self) -> bool:
+        """Whether the transcript holds an answer no discards line marks, so no sessionEnd may follow it."""
+        return self.unmarked_answer or self.retire_cause == DISCARD_UNWRITTEN
+
+    @property
+    def busy(self) -> bool:
+        return self.active > 0 or self.lock.locked()
+
+
+class SessionsBusy(Exception):
+    """Every session is busy, so a new conversation can't get one without evicting a turn in progress."""
+
+
+class SessionMap:
+    """Conversation key to ACS session, for the current epoch only, holding at most max_sessions."""
+
+    def __init__(self, max_sessions: int = 256, on_evict: Callable[[Session], None] | None = None) -> None:
+        self.epoch = 0
+        self._max = max_sessions
+        self._on_evict = on_evict
+        self._sessions: OrderedDict[str, Session] = OrderedDict()
+        self._created = 0
+
+    def get(self, key: str) -> Session:
+        session = self._sessions.get(key)
+        if session is not None:
+            self._sessions.move_to_end(key)
+            return session
+        while len(self._sessions) >= self._max:
+            # The least recently used idle run is the one most likely over. Its next resend opens a new session.
+            idle = next((k for k, s in self._sessions.items() if not s.busy), None)
+            if idle is None:
+                raise SessionsBusy()
+            evicted = self._sessions.pop(idle)
+            if self._on_evict is not None:
+                self._on_evict(evicted)
+        self._created += 1
+        session = Session(session_id=str(uuid.uuid4()), epoch=self.epoch, ordinal=self._created)
+        self._sessions[key] = session
+        return session
+
+    def peek(self, key: str) -> Session | None:
+        """The key's session if one exists, without creating one, evicting or touching the LRU order."""
+        return self._sessions.get(key)
+
+    def retire(self, session: Session, cause: str) -> None:
+        """Take a session out of the map, so the next request for its conversation opens a fresh one. The first
+        discard_unwritten stays the cause. That read and write are safe because only the loop writes retire_cause, and
+        a worker's record goes to unmarked_answer instead."""
+        if session.retire_cause != DISCARD_UNWRITTEN:
+            session.retire_cause = cause
+        for key in [k for k, s in self._sessions.items() if s is session]:
+            del self._sessions[key]
+
+    def held(self) -> list[Session]:
+        """Every session in the map, in LRU order."""
+        return list(self._sessions.values())
+
+    def bump_epoch(self) -> int:
+        """Forget every session and cached outcome, so a call_id seen before is gated afresh under a new session."""
+        self.epoch += 1
+        self._sessions = OrderedDict()
+        return self.epoch

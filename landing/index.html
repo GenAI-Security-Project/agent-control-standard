@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <!--ACS:CSP-->
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OWASP Agent Control Standard (ACS)</title>
+<title>OWASP GenAI Security Project Agent Control Standard (ACS)</title>
 <meta name="description" content="The open standard for runtime agent control. Declarative hooks, policy enforcement, and observability across AI agent frameworks.">
 <link rel="icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/acs.css">
@@ -59,12 +59,13 @@
     <section class="hero">
       <div>
         <h1>The runtime control plane for AI agents.</h1>
-        <p>OWASP Agent Control Standard (ACS) is the open standard that defines how agent
+        <p>OWASP GenAI Security Project Agent Control Standard (ACS) is the open standard that defines how agent
         platforms expose middleware hooks and how open-source tooling enforces safety
         policy through those hooks. Declarative controls. Portable across frameworks.
         Enforced at runtime.</p>
         <div class="cta-row">
           <a class="cta cta-primary" href="docs/">Read the specification</a>
+          <a class="cta" href="docs/topics/reference-implementations/">Run a Guardian</a>
           <a class="cta" href="https://github.com/GenAI-Security-Project/agent-control-standard">View on GitHub</a>
           <a class="cta" href="https://owasp.slack.com">Join the conversation</a>
         </div>
@@ -81,8 +82,9 @@
         <strong>One Guardian. Two coding agents. The same destructive command, blocked in both before it runs.</strong>
         You write the control once, and it holds no matter which agent shows up. OpenCode and Claude Code
         each try the command, and the same policy denies both. Then the conformance harness prints what
-        ACS can express of AGT. Run it yourself from the
-        <a href="https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/reference-implementations/agt">reference implementation</a>.
+        ACS can express of AGT, Microsoft's Agent Governance Toolkit, the policy engine the reference
+        Guardian runs. Run it yourself, or connect Claude Code, Cursor, NVIDIA NAT or an
+        OpenAI Responses client to a Guardian, with <a href="docs/topics/reference-implementations/">Run a Guardian</a>.
       </figcaption>
     </figure>
 
@@ -103,15 +105,16 @@
       <div class="cards">
         <div class="card">
           <h3>Instrument</h3>
-          <p>ACS defines standardized middleware hooks at every agent decision point. A
-          Guardian Agent intercepts the action and returns a verdict: allow, deny, or
-          modify.</p>
+          <p>ACS defines hooks at the agent's decision points. The agent asks a separate
+          Guardian before it acts, and the Guardian answers allow, deny, modify, ask, or
+          defer.</p>
         </div>
         <div class="card">
           <h3>Trace</h3>
-          <p>Agents emit structured trace data through OpenTelemetry, the pipeline your
-          teams already run. ACS maps those traces to OCSF so security events land in the
-          SIEM without a custom parser.</p>
+          <p>ACS defines how each step maps to an OpenTelemetry span and an OCSF event.
+          In release 0.1.5, the gateway and the TypeScript AGT Guardian
+          export OpenTelemetry spans. No component emits OCSF yet, and OCSF output is
+          planned.</p>
         </div>
         <div class="card">
           <h3>Inspect</h3>
@@ -125,17 +128,30 @@
     <section id="architecture">
       <h2>How it works</h2>
       <div class="tier tier-1">
-        <h3>Tier 1: Platform layer</h3>
-        <p>Agent frameworks expose standardized middleware hooks.</p>
+        <h3>1. The agent asks</h3>
+        <p>Before a step runs, the agent sends it to the Guardian as a signed JSON-RPC
+        request over HTTP. Adapters do this for Claude Code, Cursor, and NVIDIA NAT through
+        each host's own hook configuration, and a gateway does it for any OpenAI Responses
+        client without code changes.</p>
       </div>
       <div class="tier tier-2">
-        <h3>Tier 2: Enforcement layer</h3>
-        <p>An open-source SDK reads declarative policy and returns verdicts through those hooks.</p>
+        <h3>2. The Guardian decides</h3>
+        <p>A separate Guardian evaluates declarative policy and returns one of five
+        dispositions. The two AGT-based Guardians use Rego, a policy language. The example
+        Guardian uses a short built-in rule table by default, or, if you opt in, an OPA
+        (Open Policy Agent) server running Rego. When no usable answer arrives, the
+        adapters and the gateway block the step by default.</p>
       </div>
       <div class="tier tier-3">
-        <h3>Tier 3: Enterprise layer</h3>
-        <p>Custom classifiers and domain-specific logic plug in behind the same interface.</p>
+        <h3>3. The record holds</h3>
+        <p>The Guardian keeps a hash-chained audit record of every decision. The gateway
+        also writes a transcript of every envelope, each signed message it exchanged with the
+        Guardian, which <code>acs-verify</code>, the project's verification tool, checks
+        offline.</p>
       </div>
+      <p>Release <!--ACS:RELEASE_VERSION--> ships three Guardians, three adapters, and
+      the gateway. <a href="docs/topics/reference-implementations/">Run a Guardian</a>
+      shows where to start.</p>
     </section>
 
     <section id="why-now">
@@ -162,15 +178,15 @@
         </li>
         <li>
           <a href="https://aivss.owasp.org/">AIVSS</a>
-          <span>Severity scoring for the findings ACS surfaces.</span>
+          <span>A complementary OWASP system for scoring agentic AI risk.</span>
         </li>
         <li>
           <a href="https://opentelemetry.io/">OpenTelemetry</a>
-          <span>The transport ACS emits its trace data over.</span>
+          <span>One way ACS records trace data.</span>
         </li>
         <li>
           <a href="https://ocsf.io/">OCSF</a>
-          <span>The event schema ACS maps traces onto for the SIEM.</span>
+          <span>The event schema ACS maps each step onto for the SIEM.</span>
         </li>
         <li>
           <a href="https://cyclonedx.org/">CycloneDX</a>
@@ -186,7 +202,8 @@
         </li>
         <li>
           <a href="https://a2a-protocol.org/">A2A</a>
-          <span>An agent-to-agent protocol ACS hooks wrap without modifying.</span>
+          <span>An agent-to-agent protocol. Specification v0.1.0 reserves its namespace,
+          and wrapping is planned for v0.2.0.</span>
         </li>
       </ul>
     </section>
@@ -223,6 +240,9 @@
         <li>Propose new work through the
         <a href="https://github.com/GenAI-Security-Project/agent-control-standard/issues/new/choose">issue
         forms</a>. Only an accepted issue enters the backlog.</li>
+        <li>Read the <a href="docs/decisions/">decision log</a> for what the project has
+        decided and why, including choices the specification text does not reflect
+        yet.</li>
         <li>General questions about the project:
         <a href="mailto:rock.lambros@owasp.org">rock.lambros@owasp.org</a></li>
       </ul>
@@ -245,8 +265,9 @@
   <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.
   Documentation licensed under
   <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.</p>
-  <p>ACS is vendor neutral and community governed. A project of the OWASP GenAI Security
-  Project.</p>
+  <p>ACS is vendor neutral and community governed. A project of the
+  <a href="https://genai.owasp.org/resource/agent-control-standard-acs/">OWASP GenAI Security
+  Project</a>.</p>
   <nav aria-label="Project documents">
     <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md">Governance</a>
     <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SECURITY.md">Security</a>

@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/trace/ocsf-mapping.json",
+  "title": "ACS Trace → OCSF event-class mapping",
+  "description": "Normative mapping from ACS hooks and decisions to OCSF (Open Cybersecurity Schema Framework) event classes. v0.1.0 conformance requires that a deployment emitting OCSF for the Trace pillar uses these class UIDs and severity rules verbatim. Class UIDs, class names and activity IDs are those of OCSF 1.9.0.",
+  "type": "object",
+  "properties": {
+    "step_to_class": {
+      "type": "object",
+      "description": "Map ACS step methods to OCSF class UIDs. Every step event carries the step's request_id at unmapped.acs.request_id and its session_id at unmapped.acs.session_id, the same values as the OTel attributes acs.request_id and acs.session.id. Every step event also sets metadata.correlation_uid to its own pair, formatted as <session_id>:<request_id>, because SIEM content reads native fields and not unmapped. A steps/toolCallResult event also carries request_id_ref at unmapped.acs.request_id_ref whenever the payload carries it.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["class_uid", "class_name"],
+        "properties": {
+          "class_uid": { "type": "integer" },
+          "class_name": { "type": "string" },
+          "activity_id": { "type": "integer", "description": "OCSF activity_id within the class (e.g., 1=Logon, 2=Logoff for Authentication)." },
+          "_note": { "type": "string", "description": "Explanation for readers." }
+        }
+      },
+      "default": {
+        "steps/sessionStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1 },
+        "steps/sessionEnd": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "steps/userMessage": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/agentResponse": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/agentTrigger": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/turnStart": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/turnEnd": { "class_uid": 6002, "class_name": "Application Lifecycle" },
+        "steps/toolCallRequest": { "class_uid": 1007, "class_name": "Process Activity" },
+        "steps/toolCallResult": { "class_uid": 1007, "class_name": "Process Activity" },
+        "steps/knowledgeRetrieval": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/memoryStore": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/memoryContextRetrieval": { "class_uid": 6005, "class_name": "Datastore Activity" },
+        "steps/preCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99, "_note": "Compaction is a derived-data write into the agent's working context — modeled as Datastore Activity with a custom activity_id for the compaction subtype." },
+        "steps/postCompact": { "class_uid": 6005, "class_name": "Datastore Activity", "activity_id": 99 },
+        "steps/subagentStart": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 1, "_note": "Subagent spawn opens a new session — modeled as Authentication/Logon for OCSF symmetry with sessionStart." },
+        "steps/subagentStop": { "class_uid": 3002, "class_name": "Authentication", "activity_id": 2 },
+        "steps/skillRegister": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2, "_note": "Registration admits a skill to the component set and persists its definition ref and digest to the AgBOM. It is modeled as Device Inventory Info, the class agbom/* uses, with activity_id 2 (Collect)." },
+        "steps/skillLoad": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 1, "_note": "OCSF defines Module Activity as a process loading or unloading a module, and its required module object is the skill itself — not Process Activity, which needs a launched or terminated process that a skill load does not have; keeping loads off 1007 lets a reader tell a skill loading from the tool calls its actions raise." },
+        "steps/skillUnload": { "class_uid": 1005, "class_name": "Module Activity", "activity_id": 2 },
+        "agbom/snapshot": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 },
+        "agbom/changed": { "class_uid": 5001, "class_name": "Device Inventory Info", "activity_id": 2 }
+      }
+    },
+    "decision_class": {
+      "type": "object",
+      "description": "Decisions (deny/modify/ask/defer) are emitted as Detection Finding events. allow_class says where an allow goes. action_id and disposition_id record the Guardian's verdict. Only the Observed Agent sees the enforced outcome (Specification §6.4), so an action_id of 2 (Denied) or a disposition_id of 2 (Blocked) never proves the action was blocked. When any acs.decision.failure event in either party's stream carries the same session_id and request_id, a reader MUST NOT count the decision event as an enforced outcome. A missing failure event does not prove the decision was enforced. A Guardian SHOULD NOT set verdict_id or the finding's status_id, because both belong to whoever triages the finding.",
+      "properties": {
+        "class_uid": { "type": "integer", "const": 2004 },
+        "class_name": { "type": "string", "const": "Detection Finding" },
+        "allow_class": {
+          "type": "object",
+          "description": "Where an allow decision goes. An allow is emitted as Application Lifecycle (6002) with severity_id 1, unless the deployment elects to record allows as Detection Findings for audit symmetry, in which case every rule for a decision event applies to it. A 6002 allow carries the decision's join_fields and acs_fields under unmapped.acs, as a decision event does, so unmapped.acs.decision holds the disposition and unmapped.acs.metadata the evaluator, and it sets metadata.correlation_uid to the gated step's pair. Its activity_id is open with the other 6002 rows.",
+          "properties": {
+            "class_uid": { "type": "integer", "const": 6002 },
+            "class_name": { "type": "string", "const": "Application Lifecycle" },
+            "required_fields": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Fields every allow event emitted as Application Lifecycle carries. The rest of acs_fields ride under unmapped.acs whenever the response carries them.",
+              "default": ["severity_id", "metadata.correlation_uid", "unmapped.acs.request_id", "unmapped.acs.session_id", "unmapped.acs.decision"]
+            }
+          }
+        },
+        "required_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Fields every decision event carries. action and disposition are required beside their ids because ask and defer share 99 in both.",
+          "default": ["finding_info", "finding_info.title", "action_id", "action", "disposition_id", "disposition", "evidences", "metadata.correlation_uid"]
+        },
+        "profiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "OCSF profiles a decision event lists in metadata.profiles. The Security Control profile defines disposition_id, which Detection Finding does not define on its own.",
+          "default": ["security_control"]
+        },
+        "disposition_mapping": {
+          "type": "object",
+          "description": "OCSF disposition_id for decision events, keyed by ACS disposition. 99 (Other) means OCSF has no matching value. Defer takes 99, not 14 (Delayed), because an ACS defer holds the step and denies by default when it times out, where Delayed reads as an action that ran later. The disposition attribute carries the OCSF caption for 1 and 2, and the ACS disposition name for 99. The allow entry applies when the deployment records allows as Detection Findings.",
+          "additionalProperties": { "type": "integer" },
+          "default": {
+            "allow": 1,
+            "deny": 2,
+            "modify": 99,
+            "ask": 99,
+            "defer": 99
+          }
+        },
+        "action_mapping": {
+          "type": "object",
+          "description": "OCSF action_id for decision events, keyed by ACS disposition. modify takes 4 (Modified), which gives it a code disposition_id does not have. The action attribute carries the OCSF caption for 1 (Allowed), 2 (Denied) and 4 (Modified), and the ACS disposition name for 99.",
+          "additionalProperties": { "type": "integer" },
+          "default": {
+            "allow": 1,
+            "deny": 2,
+            "modify": 4,
+            "ask": 99,
+            "defer": 99
+          }
+        },
+        "alert_mapping": {
+          "type": "object",
+          "description": "OCSF is_alert for an on-time decision event, keyed by ACS disposition. It is true exactly when severity_id is 3 or higher, so the two fields never disagree. ask and defer alert because an ASK can time out to allow and a DEFER can fall back to that ASK, and v0.1.0 has no Trace event for how either one ends, so this event is the only signal a SOC gets. modify does not alert, because the action ran in the form the policy required. A MODIFY the client cannot apply becomes a DENY (Specification §6.5), which alerts.",
+          "additionalProperties": { "type": "boolean" },
+          "default": {
+            "allow": false,
+            "deny": true,
+            "modify": false,
+            "ask": true,
+            "defer": true
+          }
+        },
+        "evidence_fields": {
+          "type": "object",
+          "description": "What every decision event carries in evidences, the only native place on a Detection Finding for the agent and the action. Detection Finding has no ai_operation, and the class rejects a top-level ai_agent. api.operation is set only when the gated step is steps/toolCallRequest or steps/toolCallResult, to the tool name. For every other step, evidences carries ai_agent and actor.session only.",
+          "additionalProperties": { "type": "string" },
+          "default": {
+            "ai_agent.uid": "metadata.agent_id",
+            "actor.session.uid": "metadata.session_id",
+            "api.operation": "payload.tool.name"
+          }
+        },
+        "policy_fields": {
+          "type": "object",
+          "description": "When the response carries a non-empty policy_references, the event carries authorizations, one entry per policy_references entry in the same order, each with a policy object built from these fields. An entry with neither policy_id nor policy_name MUST be an authorizations entry with no policy object, so positions still line up: OCSF requires a policy to carry uid or name. policy_references stays under unmapped.acs as the exact copy.",
+          "additionalProperties": { "type": "string" },
+          "default": {
+            "policy.uid": "policy_id",
+            "policy.version": "policy_version",
+            "policy.name": "policy_name"
+          }
+        },
+        "late_decision": {
+          "type": "object",
+          "description": "A Guardian that finishes a decision after the negotiated timeout still emits the decision event. A late deny under fail-open means the policy said no and the action ran, so suppressing the event would leave OCSF silent exactly when someone slows the Guardian down. action_id and disposition_id stay the verdict, as on an on-time decision. finding_info.types includes late_decision_fail_open or late_decision_fail_closed, from the on_decision_failure posture the Guardian sent in its ServerHello. unmapped.acs.failure carries the failure facts, named as the OTel acs.failure.* attributes are. is_alert follows alert_mapping, and is also true for any verdict other than allow under fail-open, because the action ran without what the policy required. severity_id stays the value severity_mapping gives the verdict, so a late decision is the one case where is_alert can be true below severity 3. A reader MUST NOT count a decision event whose finding_info.types includes late_decision_fail_open or late_decision_fail_closed as an enforced outcome. The Guardian measures its own processing time, not network time, so a decision can still arrive late and look on time.",
+          "properties": {
+            "finding_types": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["late_decision_fail_open", "late_decision_fail_closed"]
+            },
+            "failure_fields": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": ["class", "posture", "timeout_ms", "elapsed_ms", "payload_bytes"]
+            }
+          }
+        },
+        "join_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Fields every decision event carries under unmapped.acs to join it to the step event it gated. request_id comes from the response, and session_id from the gated request's metadata.session_id. metadata.correlation_uid carries the same pair as <session_id>:<request_id>.",
+          "default": ["request_id", "session_id"]
+        },
+        "acs_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Decision facts carried under unmapped.acs with the response field's name whenever the response carries it, so the OCSF event holds the same facts as the OTel acs.decision event. finding_info.desc SHOULD carry reasoning, and unmapped.acs.reasoning is the exact copy. policy_references keeps its object form, so it needs no padding rule. An empty source array counts as absent. OCSF does not validate unmapped, so each field takes the type and pattern of its definition in response-envelope.json.",
+          "default": ["request_id", "decision", "reasoning", "reason_codes", "policy_references", "cited_provenance_ids", "chain_hash", "metadata"]
+        }
+      }
+    },
+    "severity_mapping": {
+      "type": "object",
+      "description": "OCSF severity_id values for decision events, keyed by ACS disposition.",
+      "additionalProperties": { "type": "integer", "minimum": 0, "maximum": 6 },
+      "default": {
+        "allow": 1,
+        "modify": 2,
+        "ask": 3,
+        "defer": 3,
+        "deny": 4
+      }
+    },
+    "provenance_metadata": {
+      "type": "object",
+      "description": "When Provenance is attached to the originating hook, the OCSF event MUST carry provenance facts in 'enrichments' (an OCSF-recognized extensibility field). Each enrichment carries name='acs_provenance_*' and value={origin, source_id, ...}. v0.1 carries factual provenance in enrichments; trust classification is computed by the Guardian against local policy and is not a v0.1 enrichment (see §7.1).",
+      "properties": {
+        "required_enrichments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs_provenance_origin"]
+        },
+        "optional_enrichments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["acs_provenance_source_id"]
+        }
+      }
+    }
+  }
+}

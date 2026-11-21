@@ -1,4 +1,4 @@
-# OWASP Agent Control Standard - Trace
+# OWASP GenAI Security Project Agent Control Standard - Trace
 
 AI agents make autonomous decisions that impact business outcomes. Without observability, enterprises can't understand, trust, or control these decisions.
 
@@ -29,17 +29,17 @@ Modern agents orchestrate complex workflows: reasoning chains, tool execution, k
 
 **The Problem**: Agents operate autonomously with complex internal logic. Traditional monitoring can't capture reasoning processes or decision context.
 
-**The Solution**: Comprehensive observability that traces every agent action from trigger to outcome, with full reasoning context.
+**The Solution**: A shared vocabulary of span names, attributes and event classes. With it, a deployment records each step it governs, from trigger to outcome, and the reasoning the Guardian gave for each decision, in observability tools it already runs.
 
 ## Observability Goals
 
-**Transparency**: Complete reconstruction of agent behavior. See not just what agents did, but why they made each decision.
+**Transparency**: Rebuild what an agent tried at each recorded step, what the Guardian decided, and the reason the Guardian gave.
 
 **Security**: Detect anomalous behavior in real-time. Trace attack vectors across multi-agent systems. Enforce policies at decision points.
 
 **Performance**: Identify bottlenecks in reasoning chains. Optimize tool usage patterns. Monitor resource consumption across agent workflows.
 
-**Trust**: Observable, reconstructable audit trails for regulatory compliance. Trace events are self-reported observations produced inside the environment being observed; they become evidence only when a party outside the emitting runtime attests to them (see the verifier-side discussion in issue #18). Explainable decisions for stakeholder confidence.
+**Trust**: Observable, reconstructable audit trails for regulatory compliance. Trace events are self-reported observations produced inside the environment being observed. They become evidence only when a party outside the emitting runtime attests to them. Explainable decisions for stakeholder confidence.
 
 ## How It Works
 
@@ -49,6 +49,8 @@ ACS provides specification for detailed tracing of agent behavior. Traces are im
 |--|--|--|
 | [OpenTelemetry](https://opentelemetry.io/) | [ACS with OpenTelemetry](./extend_opentelemetry.md) | Working draft |
 | [OCSF](https://ocsf.io/) | [ACS with OCSF](./extend_ocsf.md) | Working draft |
+
+In release 0.1.5, two components export OpenTelemetry spans: the TypeScript reference Guardian (AGT) and the OpenAI Responses API gateway. Both cover `steps/toolCallRequest` and `steps/toolCallResult`, and the gateway adds session and model-call spans. No component emits OCSF yet, and none makes an ACS-Trace conformance claim. [Trace with OpenTelemetry](./extend_opentelemetry.md#how-the-reference-guardian-produces-a-trace) shows both pipelines.
 
 ## Read Next
 

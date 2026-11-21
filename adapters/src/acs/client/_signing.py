@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
 from acs.client._secrets import load_hmac_secret, load_key_id, load_signing_material
 from acs.core import container_key, derive_session_key, sign_with_key, verify_with_key
+
+if TYPE_CHECKING:
+    from acs.core import Keyring
 
 
 def sign_envelope(envelope: dict, *, key: bytes | None = None,
@@ -21,8 +27,32 @@ def sign_envelope(envelope: dict, *, key: bytes | None = None,
 
 
 def verify_signature(envelope: dict, *, key: bytes | None = None,
-                     session_id: str | None = None, key_id: str | None = None) -> bool:
-    """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid."""
+                     session_id: str | None = None, key_id: str | None = None,
+                     keyring: Keyring | None = None, expected_key_id: str | None = None,
+                     request: Mapping | None = None) -> bool:
+    """Whether the envelope carries a valid signature under key_id (default ACS_HMAC_KEY_ID); an unsigned envelope is not valid.
+
+    With a keyring, the signature must name expected_key_id, the key this caller trusts to
+    answer, and the response must answer request, the envelope this caller sent (D-029).
+    That key's algorithm decides (RFC 8725 section 3.1). Core verify_with_keyring enforces
+    both. The ACS_HMAC_* settings play no part. Keyring verification needs the pqc extra
+    (issue #574). Without it, the keyring path raises AttributeError naming the extra, since
+    it reaches verify_with_keyring through acs.core's gated export. On an OpenSSL without
+    ML-DSA, building a VerificationKey for the keyring raises acs.core.MLDSAUnavailableError
+    first. acs.core.ml_dsa_available() answers that question before any key is built.
+    """
+    if keyring is None:
+        if expected_key_id is not None or request is not None:
+            raise ValueError("expected_key_id and request apply only to keyring verification")
+    else:
+        if key is not None or session_id is not None or key_id is not None:
+            raise ValueError("keyring verification takes no HMAC key, session_id or key_id")
+        # The lazy public export loads cryptography only here, never on the HMAC path, and
+        # raises AttributeError naming the pqc extra when it is missing. Core checks the key_id
+        # pin and the request binding.
+        import acs.core
+        return acs.core.verify_with_keyring(envelope, keyring, expected_key_id=expected_key_id,
+                                            request=request)
     container = envelope.get(container_key(envelope)) or {}
     if not isinstance(container, dict):
         return False

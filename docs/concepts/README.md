@@ -1,6 +1,6 @@
 # Concepts
 
-These pages define the foundational concepts ACS uses across every pillar: agents, identity, the session lifecycle, intent, provenance, capability, and trust basis. They are the single source of truth. Each pillar's specification references down into these definitions rather than restating them.
+These pages define the foundational concepts ACS uses across every pillar: agents, identity, the session lifecycle, intent, capability, skill, provenance, and trust basis. They are the single source of truth. Each pillar's specification references down into these definitions rather than restating them.
 
 This split exists because these concepts are horizontal. Intent, for example, flows through all three pillars: Instrument fires decisions against it, Trace records it as a span attribute, and Inspect catalogs what it authorized. Defining it inside any one pillar would subordinate a concept the other two depend on.
 
@@ -30,4 +30,4 @@ When you add a concept, hoist the invariant and leave the mechanics. If a requir
 
 Every page carries the canonical definition, any cross-cutting invariants tagged **(normative)**, and a **Referenced by** footer pointing into the pillars that consume the concept. The graph is navigable in both directions.
 
-> **Migration note.** These pages are being established as the source of truth. The pillar specifications still carry some of these definitions inline; those will be updated to reference these pages rather than restate them. Until that pass lands, treat these pages as canonical where they disagree with a pillar's inline copy.
+> **Migration note.** These pages are the source of truth for the terms they define. The pillar specifications still carry some of these definitions inline. Where a pillar's inline copy disagrees with these pages, treat these pages as canonical.

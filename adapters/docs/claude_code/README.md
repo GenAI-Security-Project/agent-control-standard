@@ -40,7 +40,7 @@ Installing the package puts `acs-claude-code-hook`, `acs-claude-code-wire` and `
 Both the adapter and the Guardian read this file. Mode 0600 is enforced by the adapter — anything looser and it refuses to start.
 
 ```bash
-mkdir -p ~/.acs
+mkdir -p -m 700 ~/.acs
 openssl rand -hex 32 > ~/.acs/hmac.key
 chmod 600 ~/.acs/hmac.key
 ```
@@ -131,7 +131,7 @@ Run from `adapters/`:
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py claude
-# Runs the shared Guardian, _common, core, client and package checks, then Claude Code's suite.
+# Runs the shared Guardian, _common, core, client, package and benchmarks checks, then Claude Code's suite.
 ```
 
 The command reports passes, skips, and failures separately. It fails on any test failure or unexpected skip. The live tests, which drive the real `claude` CLI on your account, run only with `ACS_LIVE_CLAUDE=1`:
@@ -196,7 +196,7 @@ acs-claude-code-hook 2>&1 <<'EOF'
 EOF
 ```
 
-Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, signed with its own secret. The hook cannot verify that answer, so it refuses the session whatever the posture (spec issue #32), and stdout carries a deny:
+Expected: the Guardian answers the handshake with `-32004 SIGNATURE_INVALID`, signed with its own secret. The hook cannot verify that answer, so it refuses the session whatever the posture ([D-040](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals)), and stdout carries a deny:
 
 ```
 ACS_AUDIT {"acs_audit_event": "session_refused", "cause": "error_signature_invalid", "claimed_cause": "signature_invalid_response", "claimed_error_code": -32004, ...}
@@ -219,8 +219,8 @@ Expected: the handshake gets no answer, so the session has no negotiated Guardia
 ```
 ACS_AUDIT {"acs_audit_event": "session_without_negotiated_guardian", "cause": "transport_failure", "failure_class": "handshake_failure", "posture": "fail_closed", ...}
 ACS_AUDIT {"acs_audit_event": "session_not_started_fail_closed", "cause": "transport_failure", ..., "hook": "PreToolUse", ...}
-```
 {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "ACS adapter: session not started (transport_failure)", "additionalContext": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}, "systemMessage": "ACS blocked this tool call: ACS adapter: session not started (transport_failure)"}
+```
 
 Distinct `acs_audit_event` and `cause`: a rejection refuses the session (`session_refused_fail_closed`) whatever the posture, and an unreachable Guardian follows the startup posture (`session_not_started_fail_closed`, or `unguarded_session_bypass` under `ACS_STARTUP_POSTURE=proceed`). Operators grep on either to triage. A hook with no secret sends nothing and refuses the session with `secret_missing`.
 
@@ -268,7 +268,7 @@ The adapter is configured by environment variables, typically set per-hook by `a
 | `ACS_HMAC_SECRET_FILE` | (unset) | Path to a 0600 file holding the shared HMAC secret. |
 | `ACS_HMAC_SECRET` | (unset) | Inline secret. Less secure (visible in `ps eauxw`). Prefer the file. |
 | `ACS_HMAC_KEY_ID` | (unset) | The label that names the secret (§10); the Guardian holds the same one. Required with a secret: a secret without a label refuses the session, and a response signed under another label fails verification. |
-| `ACS_DEFAULT_DENY` | (unset) | Unset, or any value but `0`: a step with no usable decision is denied. `0`: it proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins); this is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting — see spec issue #32. |
+| `ACS_DEFAULT_DENY` | (unset) | Unset, or any value but `0`: a step with no usable decision is denied. `0`: it proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins). This is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless of this setting. See [D-040](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals). |
 | `ACS_STARTUP_POSTURE` | `refuse` | `proceed` or `refuse`: what this hook does in a session with no negotiated Guardian, because its handshake got no answer (§4.1). `proceed` lets the step run, audited, with nothing sent to the Guardian; `refuse` denies it. The session keeps no negotiated Guardian for its lifetime, and the next session handshakes again. Any other value refuses. |
 | `ACS_REQUIRE_PROFILES` | (unset) | Comma-separated conformance profiles the Guardian must accept, such as `acs-core`. When the session's negotiation leaves one out, this hook's steps are refused and it sends no `sessionStart`; the stored record keeps what the Guardian answered, so each hook applies its own setting, and a later hook without the requirement starts the session. |
 | `ACS_HANDSHAKE` | `1` | Set to `0` to skip the handshake; the session then counts as unanswered, and `ACS_STARTUP_POSTURE` settles every step. |
@@ -308,9 +308,9 @@ Honest, item-by-item against the ACS-Core baseline in `docs/spec/conformance.md`
 
 | Symptom | Likely cause |
 |---|---|
-| Adapter exits 0 with empty stdout; Guardian terminal silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your settings.json); check stderr for `ACS_AUDIT cause=transport_failure`. |
+| Every tool call is denied with `session not started (transport_failure)`, and the Guardian terminal is silent | Adapter pointed at the wrong URL (check `ACS_GUARDIAN_URL` in your settings.json). Stderr shows an `ACS_AUDIT` line with `"cause": "transport_failure"`. Empty stdout means an allow, not a missing Guardian. |
 | Every hook gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its steps unless `ACS_STARTUP_POSTURE=proceed`, and a step with no usable decision is denied unless the hook sets `ACS_DEFAULT_DENY=0`. Check the Guardian process is running. |
-| Adapter says `SecretFilePermissionsError` | The HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
+| Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. The file's directory must also be readable by the adapter, not only traversable: a 0711 directory fails with `its directory ... cannot be opened` (`SecretFileUnreadableError`). Fix: `chmod a+r` on that directory. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time (`sudo sntp -sS time.apple.com` on macOS). |
 | Guardian returns `-32600 Invalid Request` for `metadata.session_id` | Session ID isn't a UUID. Real Claude Code always sends UUIDs; if you're hand-crafting envelopes for testing, fix the fixture. |

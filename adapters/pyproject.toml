@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "acs-adapters"
-version = "0.2.0"
+version = "0.1.5"
 description = "Reference adapters that connect Claude Code, Codex, Cursor and NVIDIA NeMo Agent Toolkit to an ACS Guardian"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,6 +15,10 @@ dependencies = ["rfc8785>=0.1.4,<0.2", "jsonschema[format-nongpl]>=4.25,<5"]
 
 [project.optional-dependencies]
 nat = ["nvidia-nat-core>=1.7,<1.8", "ruamel.yaml>=0.19,<0.20"]
+# ML-DSA-65 signing (issue #574). cryptography 50 is the first release this package pins with
+# ML-DSA-65 in its public API. Lab convention: nvidia-nat-core pins cryptography below 47, so
+# this extra and nat can't share an environment until issue #543 replaces the NAT dependency.
+pqc = ["cryptography>=50,<51"]
 
 [project.scripts]
 acs-claude-code-hook = "acs.integrations.claude_code.hook:main"
@@ -40,8 +44,16 @@ acs_guardian = "acs.integrations.nat.adapter"
 [dependency-groups]
 test = ["import-linter>=2", "pytest>=8"]
 
+[tool.uv]
+# One universal lock holds both extras, so uv needs to know they never install together.
+conflicts = [[{ extra = "nat" }, { extra = "pqc" }]]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/acs"]
+
+# The gateway is its own project with its own lockfile, so it never ships inside the adapters' sdist.
+[tool.hatch.build.targets.sdist]
+exclude = ["gateway/"]
 
 [tool.hatch.build.hooks.custom]
 path = "hatch_build.py"

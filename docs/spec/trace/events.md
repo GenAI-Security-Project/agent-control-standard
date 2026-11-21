@@ -108,6 +108,9 @@ OCSF `action_id` and `disposition_id` for decision events are also set from the 
 
 On an on-time decision event, `is_alert` is true exactly when `severity_id` is 3 or higher, so the two fields never disagree. `ask` and `defer` alert because an ASK can time out to `allow`, a DEFER can fall back to that ASK, and v0.1.0 has no Trace event for how either one ends, so the decision event is the only signal a SOC gets. `modify` does not alert, because the action ran in the form the policy required, and a MODIFY the client cannot apply becomes a DENY (§6.5), which alerts.
 
+!!! note "Decided, not yet in this text"
+    The leads decided that an ASK with no answer in time means deny, and that the Observed Agent never turns an ASK into an allow by itself ([D-043](../../decisions/index.md#d-043-treat-ask-as-a-soft-deny)). The specification text has not changed yet, so the alerting rule above stays as published.
+
 A Guardian SHOULD NOT set `verdict_id` or the finding's `status_id`, because both belong to whoever triages the finding.
 
 SIEM content reads native fields, not `unmapped`, so each decision event also carries these:
