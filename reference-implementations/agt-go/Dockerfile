@@ -1,5 +1,5 @@
-FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm AS go
-FROM --platform=$BUILDPLATFORM rust:1.99.0-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS go
+FROM --platform=$BUILDPLATFORM rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS build
 COPY --from=go /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,7 +20,7 @@ RUN case "${TARGETARCH}" in \
     if [ "${EVALUATOR}" = agt ]; then cp .acs/agt/linux-${TARGETARCH}/bin/opa /out/opa; fi && \
     mkdir /data
 
-FROM gcr.io/distroless/cc-debian13:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2
 COPY --from=build --chown=65532:65532 /data/ /data/
 WORKDIR /app
 COPY --from=build /out/ ./

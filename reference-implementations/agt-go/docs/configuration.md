@@ -142,7 +142,7 @@ communication fails. The `guardian.Config` zero value advertises `proceed`;
 | `limits.max_reservations` | Requests remembered per session for replay protection. Each reservation stores the request ID and its nonce when present. | Positive integer. |
 | `limits.max_skill_approvals` | Skill approvals retained across sessions. | Positive integer. |
 | `limits.max_engine_calls` | Policy evaluations allowed to run concurrently. Under `agt` each one is an `opa` process. | Positive integer. `guardian.yaml` ships 32, measured in [Load](load.md); the library default is 256. |
-| `limits.max_policy_state_bytes` | Per-session engine state size. | Positive integer. |
+| `limits.max_policy_state_bytes` | Per-session engine state size, and separately the size of the session's open MCP calls. A step past either bound is DENY `policy_state_too_large`. | Positive integer. |
 | `limits.max_body_bytes` | HTTP request-body size. | Positive integer. |
 | `limits.max_deferrals` | DEFER decisions allowed in one session. | Positive integer. |
 | `limits.session_retention` | Idle time before an in-memory session may be removed. | At least twice `protocol.skew_window`. |

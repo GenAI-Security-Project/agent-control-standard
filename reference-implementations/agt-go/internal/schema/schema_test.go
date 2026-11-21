@@ -2,6 +2,7 @@ package schema
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,8 +11,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 )

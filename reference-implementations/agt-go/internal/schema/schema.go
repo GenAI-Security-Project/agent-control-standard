@@ -12,12 +12,12 @@ package schema
 import (
 	"bytes"
 	"embed"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
 
-	"github.com/go-json-experiment/json"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"

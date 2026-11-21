@@ -58,3 +58,30 @@ func TestCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestReadToolCall(t *testing.T) {
+	for name, tt := range map[string]struct {
+		payload string
+		want    ToolCall
+	}{
+		"request":        {`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"Read","arguments":{}}}`, ToolCall{ID: "3", Tool: "Read"}},
+		"request_no_id":  {`{"jsonrpc":"2.0","method":"tools/call","params":{"name":"Read"}}`, ToolCall{Tool: "Read"}},
+		"response":       {`{"jsonrpc":"2.0","id":3,"result":{"content":[]}}`, ToolCall{ID: "3", Response: true}},
+		"equivalent_id":  {`{"jsonrpc":"2.0","id":3.0,"result":{"content":[]}}`, ToolCall{ID: "3", Response: true}},
+		"escaped_string": {`{"jsonrpc":"2.0","id":"a","result":{"content":[]}}`, ToolCall{ID: `"a"`, Response: true}},
+		"error_response": {`{"jsonrpc":"2.0","id":"a","error":{"code":-1,"message":"no"}}`, ToolCall{ID: `"a"`, Response: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ReadToolCall(json.RawMessage(tt.payload))
+			if err != nil || got != tt.want {
+				t.Fatalf("got %+v, %v; want %+v", got, err, tt.want)
+			}
+		})
+	}
+	if _, err := ReadToolCall(json.RawMessage(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":7}}`)); err == nil {
+		t.Fatal("a tool name that is not a string was read")
+	}
+	if err := (Handler{}).Check("tools/call", json.RawMessage(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":7}}`)); err == nil {
+		t.Fatal("the handler accepted a tools/call whose tool name is not a string")
+	}
+}

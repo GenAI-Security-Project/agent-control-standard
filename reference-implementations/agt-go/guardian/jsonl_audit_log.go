@@ -3,6 +3,7 @@ package guardian
 import (
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
@@ -12,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
 )
 
 // JSONLAuditLog is an AuditLog, cmd/guardian's: it appends envelopes to one JSON

@@ -64,6 +64,10 @@ type SessionContext struct {
 	Intent *acs.Intent
 	// Handshake is what the session negotiated.
 	Handshake Handshake
+	// MCPCalls is Session.MCPCalls before this step: the tool of each open
+	// wrapped tools/call, by canonical MCP id. The Guardian keeps it from its
+	// final decisions. An engine reads it and records no calls itself.
+	MCPCalls map[string]string
 	// PolicyState is what the engine returned as State for an earlier step
 	// of the session, nil until it returned any.
 	PolicyState json.RawMessage
@@ -93,6 +97,9 @@ type PolicyDecision struct {
 	// State, when not nil, is valid JSON kept with the session and given back
 	// as SessionContext.PolicyState on its later steps, so an engine whose
 	// policy carries state across steps keeps it where the chain is kept.
+	// When the Guardian answers with another disposition than this decision's,
+	// or refuses its Grant, State is not kept, and the session keeps the state
+	// it had.
 	State json.RawMessage
 }
 

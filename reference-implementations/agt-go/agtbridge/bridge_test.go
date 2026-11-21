@@ -5,6 +5,7 @@ package agtbridge_test
 import (
 	"context"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,13 +13,12 @@ import (
 	"testing"
 	"time"
 
-	jsonv2 "github.com/go-json-experiment/json"
-
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge/agteval"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/handshake"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/observedagent"
 )
 
@@ -677,17 +677,13 @@ func mustWrite(t *testing.T, dir, name, body string) {
 // directly, and a redaction of its result is addressed into the MCP message.
 func TestWrappedMCPToolCalls(t *testing.T) {
 	e := newEngine(t, agtbridge.Options{})
-	var state json.RawMessage
-	decide := func(method string, payload any) guardian.PolicyDecision {
+	decide := func(method string, payload any, calls map[string]string) guardian.PolicyDecision {
 		t.Helper()
 		in := input(t, method, payload)
-		in.Session.PolicyState = state
+		in.Session.MCPCalls = calls
 		d, err := e.Decide(context.Background(), in)
 		if err != nil {
 			t.Fatal(err)
-		}
-		if d.State != nil {
-			state = d.State
 		}
 		return d
 	}
@@ -695,31 +691,96 @@ func TestWrappedMCPToolCalls(t *testing.T) {
 		return map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": map[string]any{"name": tool, "arguments": map[string]any{"command": command}}}
 	}
 	for _, m := range []string{"protocols/MCP/tools/call", "wrapped:mcp-2025-06-18/tools/call"} {
-		if d := decide(m, call(1, "Bash", "rm -rf /")); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "destructive_shell_command_blocked") {
+		if d := decide(m, call(1, "Bash", "rm -rf /"), nil); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "destructive_shell_command_blocked") {
 			t.Fatalf("%s: a destructive command through MCP got %+v", m, d.Decision)
 		}
 	}
-	if d := decide("protocols/MCP/tools/call", call(2, "Write", "x")); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "runtime_error:tool_unknown") {
+	if d := decide("protocols/MCP/tools/call", call(2, "Write", "x"), nil); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "runtime_error:tool_unknown") {
 		t.Fatalf("an unregistered tool through MCP got %+v", d.Decision)
 	}
-	if d := decide("protocols/MCP/tools/call", call(3, "Bash", "ls")); d.Disposition != acs.Allow {
-		t.Fatalf("a benign command through MCP got %+v", d.Decision)
+	if d := decide("protocols/MCP/tools/call", call(3, "Bash", "ls"), nil); d.Disposition != acs.Allow || strings.Contains(string(d.State), "mcp") {
+		t.Fatalf("a benign command through MCP got %+v, state %s", d.Decision, d.State)
 	}
 	response := map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": []any{
 		map[string]any{"type": "image", "data": "", "mimeType": "image/png"},
 		map[string]any{"type": "text", "text": "token ghp_abcdef123456 here"},
 	}}}
-	d := decide("protocols/MCP/tools/call", response)
+	d := decide("protocols/MCP/tools/call", response, map[string]string{"3": "Bash"})
 	if d.Disposition != acs.Modify || len(d.Modifications.Redactions) != 1 || d.Modifications.Redactions[0].Path != "/result/content/1/text" {
 		t.Fatalf("a secret in an MCP result got %+v", d.Decision)
 	}
-	// Answered once, the call is no longer pending.
 	in := input(t, "protocols/MCP/tools/call", response)
-	in.Session.PolicyState = state
 	if _, err := e.Decide(context.Background(), in); err == nil {
-		t.Fatal("a second response to the same MCP id was decided")
+		t.Fatal("a response to no open call was decided")
 	}
-	if d := decide("protocols/MCP/tools/list", map[string]any{"jsonrpc": "2.0", "id": 4, "method": "tools/list"}); d.Disposition != acs.Allow {
+	if d := decide("protocols/MCP/tools/list", map[string]any{"jsonrpc": "2.0", "id": 4, "method": "tools/list"}, nil); d.Disposition != acs.Allow {
 		t.Fatalf("an MCP method AGT has no gate for got %+v", d.Decision)
+	}
+}
+
+// A response the bridge cannot decode is denied, so the policy never decides
+// on an incomplete result.
+func TestWrappedMCPUndecodableResponse(t *testing.T) {
+	e := newEngine(t, agtbridge.Options{})
+	broken := map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": "token ghp_abcdef123456 here"}}
+	in := input(t, "protocols/MCP/tools/call", broken)
+	in.Session.MCPCalls = map[string]string{"3": "Bash"}
+	d, err := e.Decide(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, "mcp_result_unreadable") || d.State != nil {
+		t.Fatalf("an MCP result that does not decode got %+v, state %s", d.Decision, d.State)
+	}
+}
+
+// cannotModify is an engine whose Observed Agent cannot apply a MODIFY, so
+// the Guardian answers DENY modify_unsupported in its place.
+type cannotModify struct{ guardian.PolicyEngine }
+
+func (e cannotModify) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.PolicyDecision, error) {
+	pd, err := e.PolicyEngine.Decide(ctx, in)
+	pd.Client.CannotApplyModify = true
+	return pd, err
+}
+
+// Through the Guardian with AGT: AGT redacts a secret in an MCP response.
+// The Observed Agent cannot apply the redaction, so the Guardian answers DENY
+// in AGT's place. The response still ends its call. So AGT decides a later
+// request that reuses the MCP id, as MCP allows.
+func TestWrappedMCPIDReusableAfterAGuardianDenial(t *testing.T) {
+	signer := testSigner(t)
+	g, err := guardian.New(guardian.Config{Engine: cannotModify{newEngine(t, agtbridge.Options{})}, Signer: signer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wrapped = "protocols/MCP/tools/call"
+	client := &observedagent.Client{
+		Transport: func(ctx context.Context, body []byte) ([]byte, error) { return g.Handle(ctx, body), nil },
+		Signer:    signer, AgentID: "agent", SessionID: observedagent.NewUUID(),
+	}
+	hello := observedagent.DefaultHello(append(handshake.CoreMethods(), wrapped)...)
+	hello.WrappedProtocols = []acs.WrappedProtocol{{Protocol: "MCP", Version: "2026-07-28"}}
+	if o, err := client.Handshake(context.Background(), hello); err != nil || o.Hello == nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	send := func(payload any) acs.Decision {
+		t.Helper()
+		o, err := client.Send(context.Background(), observedagent.Request{Method: wrapped, Payload: payload})
+		if err != nil || o.Result == nil {
+			t.Fatalf("no decision: %v %s", err, o.Raw)
+		}
+		return o.Result.Decision
+	}
+	call := map[string]any{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": map[string]any{"name": "Bash", "arguments": map[string]any{"command": "ls"}}}
+	if d := send(call); d.Disposition != acs.Allow {
+		t.Fatalf("a benign command through MCP got %+v", d)
+	}
+	secret := map[string]any{"jsonrpc": "2.0", "id": 3, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "token ghp_abcdef123456 here"}}}}
+	if d := send(secret); d.Disposition != acs.Deny || !slices.Contains(d.ReasonCodes, disposition.ReasonModifyUnsupported) {
+		t.Fatalf("an unapplied redaction of an MCP result got %+v", d)
+	}
+	if d := send(call); d.Disposition != acs.Allow {
+		t.Fatalf("a request reusing MCP id 3 got %+v", d)
 	}
 }
