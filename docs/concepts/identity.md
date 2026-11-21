@@ -10,11 +10,28 @@ A principal is the authenticated party initiating or acting within a session. AC
 
 *Example.* A POSIX deployment carries `{ "type": "posix_uid", "uid": 1000 }`; an OAuth deployment carries `{ "type": "oauth_subject", "sub": "..." }`. ACS reads the discriminator and stays agnostic to the rest.
 
-Three identities are distinct and MUST NOT be conflated:
+Four identities are distinct and MUST NOT be conflated:
 
 - **Observed Agent identity**: which agent is under governance.
 - **Guardian identity**: which policy authority is deciding.
 - **Policy-author identity**: who authored the policy that produced a decision.
+- **Executing service identity**: the service account or workload credential under which an action executes.
+
+## Executing service identity
+
+An Observed Agent MAY carry `metadata.service_identity` on a request so a Guardian can evaluate the credential that will execute the action. This descriptor uses a stable common shape: `type` and `id` are required; `issuer`, `scopes`, and `claims` are optional. For example:
+
+```json
+{
+  "type": "spiffe",
+  "id": "spiffe://acme.example/workload/email-worker",
+  "issuer": "https://spire.acme.example",
+  "scopes": ["mail.send"],
+  "claims": { "environment": "production" }
+}
+```
+
+The descriptor identifies the executing workload, not the human principal, the Observed Agent, or the Guardian. A deployment chooses how it verifies the descriptor before using it in policy.
 
 ## Authentication is deployment-defined
 
@@ -30,7 +47,7 @@ An identity descriptor is itself a fact with a [trust basis](./trust.md). An ass
 
 **Referenced by**
 
-- **Instrument**, [specification](../spec/instrument/specification.md): `user_identity` at session start; Approver identity verification (§9); identity declared at handshake.
+- **Instrument**, [specification](../spec/instrument/specification.md): `user_identity` at session start, `metadata.service_identity` for an executing workload, Approver identity verification (§9); identity declared at handshake.
 - **Trace**, [extend OCSF](../spec/trace/extend_ocsf.md): agent vs human actors distinguished in emitted events.
 - **Inspect**, [AgBOM](../spec/inspect/README.md): peer identity on `a2a_peer` components.
 - See also [Agents](./agents.md), [Capability](./capability.md), and [Trust basis](./trust.md).

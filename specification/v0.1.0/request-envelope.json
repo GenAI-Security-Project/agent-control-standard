@@ -92,8 +92,41 @@
             "roles": { "type": "array", "items": { "type": "string" } },
             "authentication_method": { "type": "string" }
           }
+        },
+        "service_identity": {
+          "$ref": "#/$defs/ServiceIdentity",
+          "description": "Service account or workload credential under which this action executes."
         }
       }
+    },
+    "ServiceIdentity": {
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Identity scheme, such as spiffe, oauth_client, workload_identity, or service_account."
+        },
+        "id": {
+          "type": "string",
+          "description": "Scheme-specific service or workload identity."
+        },
+        "issuer": {
+          "type": "string",
+          "description": "Issuer that authenticated or issued the credential."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Credential scopes relevant to the action."
+        },
+        "claims": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Additional scheme-specific credential claims."
+        }
+      },
+      "additionalProperties": false
     },
     "Signature": {
       "type": "object",
