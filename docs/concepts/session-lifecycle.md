@@ -20,9 +20,9 @@ A step is an atomic action or decision within the agent's reasoning process. Ste
 
 When a parent agent spawns a subagent in the same runtime, the spawn is observed through `subagentStart`. Each subagent gets its own `session_id` and its own SessionContext; the parent–child relation is recorded.
 
-> **Intent derivation is auditable (normative).** When a subagent is spawned, the audit chain MUST record how the subagent's `Intent.parsed` relates to the parent's: inherited in full, a strict subset, derived from a parent directive, or fresh. A Guardian MAY deny a spawn whose derivation would grant capabilities the parent's [Intent](./intent.md) does not authorize.
+> **Intent derivation is auditable and bounded (normative).** When a subagent is spawned, the audit chain MUST record how the subagent's `Intent.parsed` relates to the parent's: inherited in full, a subset, derived from a parent directive, or fresh. Every spawn carries a `subagent_intent`. A Guardian MUST deny a spawn whose `subagent_intent` grants capabilities outside the parent's [Intent](./intent.md) under `inherit_full`, `inherit_subset` or `derived_from_parent`, and MUST deny a `fresh` spawn whose intent did not come from user input. The subagent's SessionContext starts from the parent's provenance and IFC labels, not empty, and its session id MUST differ from the parent's. The [`subagentStart` hook](../spec/instrument/hooks.md#subagentstart) states each rule.
 
-*Example.* A research agent spawns a summarizer subagent with `inherit_subset`: the child may read files but not write them. A Guardian that sees a write capability in the child's derived intent can deny the spawn.
+*Example.* A research agent spawns a summarizer subagent with `inherit_subset`: the child may read files but not write them. A Guardian that sees a write capability in the child's intent denies the spawn. If the parent had read untrusted web content, the child starts with that content's labels too.
 
 Delegation that crosses an A2A boundary is not a subagent spawn; it flows through `agentTrigger` and is reserved for v0.2.
 
