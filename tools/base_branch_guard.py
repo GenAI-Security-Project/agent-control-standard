@@ -1,6 +1,6 @@
 """Keep specification and code changes off the publishing branch.
 
-`main` publishes the site and all 44 schema $id URIs on every merge. A change to
+`main` publishes the site and all 46 schema $id URIs on every merge. A change to
 normative content lands on `integration` first, so those URIs move only on a deliberate
 promotion. GitHub rulesets cannot express "the paths in the diff decide the base
 branch", so this does. A page added under docs/ also needs `integration`, because its
@@ -149,7 +149,7 @@ def decide(
         parts.append(
             f"These paths may not target `{PUBLISHING_BRANCH}`. Retarget this pull "
             f"request at `integration`:\n{listing}\n\n"
-            f"`{PUBLISHING_BRANCH}` publishes the site and all 44 schema $id URIs on "
+            f"`{PUBLISHING_BRANCH}` publishes the site and all 46 schema $id URIs on "
             "merge, so specification and code changes land on `integration` and "
             "publish on a promotion."
         )

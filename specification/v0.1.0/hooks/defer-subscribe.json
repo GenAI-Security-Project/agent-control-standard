@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/defer-subscribe.json",
+  "title": "defer/subscribe payload",
+  "description": "The Observed Agent sends this payload to subscribe to the resolution of a deferred step. Specification 6.6 defines the subscription.",
+  "type": "object",
+  "required": ["deferred_request_id"],
+  "properties": {
+    "deferred_request_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "The request_id that the request of the deferred step carried (Specification 6.6)."
+    }
+  },
+  "$defs": {
+    "PendingNotification": {
+      "description": "The complete defer/pending message: a JSON-RPC 2.0 Notification from the Guardian, so it has no id.",
+      "type": "object",
+      "required": ["jsonrpc", "method", "params"],
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "const": "defer/pending" },
+        "params": { "$ref": "#/$defs/PendingParams" }
+      }
+    },
+    "PendingParams": {
+      "description": "params of the one defer/pending notification for a pending deferral. The notification carries no decision and no signature.",
+      "type": "object",
+      "required": ["acs_version", "deferred_request_id"],
+      "not": { "anyOf": [{ "required": ["decision"] }, { "required": ["signature"] }] },
+      "properties": {
+        "acs_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "deferred_request_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The deferred_request_id of the subscription, so the Observed Agent can correlate the notification on a shared channel such as stdio."
+        }
+      }
+    }
+  }
+}

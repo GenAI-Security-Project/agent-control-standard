@@ -24,9 +24,9 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|wrapped:).+"
+            "pattern": "^(steps/|protocols/|agbom/|trace/|system/|handshake/|defer/|wrapped:).+"
           },
-          "description": "Hook and wrapped-protocol method names the Observed Agent will emit during this session. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped MCP/A2A), agbom/* (Inspect AgBOM methods — required when ACS-Inspect profile is claimed; agbom/changed additionally required under ACS-Inspect-Dynamic), handshake/* (capability negotiation), trace/* (reserved for future ACS-native trace methods), system/* (low-level transport/control; system/ping for liveness — clients SHOULD include it), wrapped: (explicit-version wrapped form). Used by the Guardian to know which hooks to expect and which it can safely treat as not-emitted."
+          "description": "Hook and wrapped-protocol method names the Observed Agent will emit during this session. Reserved namespaces: steps/* (Instrument hooks), protocols/* (wrapped MCP/A2A), agbom/* (Inspect AgBOM methods — required when ACS-Inspect profile is claimed; agbom/changed additionally required under ACS-Inspect-Dynamic), handshake/* (capability negotiation), trace/* (reserved for future ACS-native trace methods), system/* (low-level transport/control; system/ping for liveness — clients SHOULD include it), defer/* (DEFER resolution; defer/subscribe needs no listing, Specification 6.6), wrapped: (explicit-version wrapped form). Used by the Guardian to know which hooks to expect and which it can safely treat as not-emitted."
         },
         "transports_supported": {
           "type": "array",
@@ -77,7 +77,7 @@
         "methods_evaluated": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Subset of the client's methods_implemented that this Guardian will actually evaluate. Methods listed by the client but absent here are NOT evaluated; the Guardian's enforcement does not cover them. Clients MAY still emit them for audit but MUST treat them as ALLOW-by-default."
+          "description": "Subset of the client's methods_implemented that this Guardian will actually evaluate. Methods listed by the client but absent here are NOT evaluated; the Guardian's enforcement does not cover them. Clients MAY still emit them for audit but MUST treat them as ALLOW-by-default. A Guardian that returns DEFER handles defer/subscribe whether or not this list names it (Specification 6.6)."
         },
         "selected_transport": {
           "type": "string",
