@@ -22,6 +22,9 @@ on:
       # the Trace mappings at runtime, so a spec-only change can break them.
       - "specification/**"
       - ".github/workflows/reference-implementation.yml"
+      # The negative controls start this tree's Guardian, so they run here too.
+      - "tests/negative_controls_runner.py"
+      - "tests/test_negative_controls.py"
   push:
     branches: ["main", "integration"]
     paths:
@@ -30,6 +33,9 @@ on:
       # the Trace mappings at runtime, so a spec-only change can break them.
       - "specification/**"
       - ".github/workflows/reference-implementation.yml"
+      # The negative controls start this tree's Guardian, so they run here too.
+      - "tests/negative_controls_runner.py"
+      - "tests/test_negative_controls.py"
   workflow_dispatch:
 
 permissions: {}
@@ -74,3 +80,19 @@ jobs:
       # schemas in this repository rather than a copy of them.
       - name: Run the tests
         run: bun test
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
+
+      # The test job in deploy-pages.yml has no Bun, so the reference Guardian group in
+      # this file skips there. Here the variable turns a missing Guardian into a failure,
+      # so the group cannot skip in the one job that can run it.
+      - name: Run the negative controls against this Guardian
+        working-directory: .
+        env:
+          ACS_REQUIRE_REFERENCE_GUARDIAN: "1"
+        run: |
+          uv sync --locked
+          uv run pytest -v tests/test_negative_controls.py
