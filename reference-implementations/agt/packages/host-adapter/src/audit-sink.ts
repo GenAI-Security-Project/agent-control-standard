@@ -35,7 +35,7 @@
  * because no gate asked. They record different things at different sides of
  * the wire, and this package stays free of the Guardian's imports.
  */
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, fchmodSync, fstatSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { SessionFailureKind, StepFailureKind } from "./failure-kinds.ts";
 
@@ -284,6 +284,24 @@ function highestSeqIn(path: string): number {
   }
 }
 
+/**
+ * Appends to a file only its owner can read. The mode on `openSync` applies
+ * only when this call creates the file, so a log left by an older version
+ * keeps its 0644. `fchmodSync` tightens that log too. Windows has no such
+ * bits, and a device such as /dev/null is not ours to change.
+ */
+function appendPrivate(path: string, text: string): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    if (process.platform !== "win32" && fstatSync(fd).isFile()) {
+      fchmodSync(fd, 0o600);
+    }
+    appendFileSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function createAuditSink({ path, now = () => new Date(), onError }: CreateAuditSinkOptions): AuditSink {
   // Undefined until the first write reads the log. Deferred deliberately:
   // most hook invocations never write an audit entry at all (nothing failed
@@ -322,8 +340,8 @@ export function createAuditSink({ path, now = () => new Date(), onError }: Creat
           seq = highestSeqIn(path);
         }
         const entry: AuditEntry = { seq: seq + 1, recorded_at: now().toISOString(), ...event };
-        mkdirSync(dirname(path), { recursive: true });
-        appendFileSync(path, `${JSON.stringify(entry)}\n`);
+        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+        appendPrivate(path, `${JSON.stringify(entry)}\n`);
         // Only after a successful append, so a failed write does not consume
         // a sequence number and invent a gap that never happened.
         seq += 1;

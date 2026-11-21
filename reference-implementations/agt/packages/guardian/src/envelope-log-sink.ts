@@ -25,7 +25,7 @@
  * mode this module must never have. Observability degrades; governance does
  * not.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, closeSync, fchmodSync, fstatSync, mkdirSync, openSync } from "node:fs";
 import { dirname } from "node:path";
 
 /**
@@ -95,6 +95,24 @@ export function extractRpcId(envelope: unknown): string | number | null {
   return null;
 }
 
+/**
+ * Appends to a file only its owner can read. The mode on `openSync` applies
+ * only when this call creates the file, so a log left by an older version
+ * keeps its 0644. `fchmodSync` tightens that log too. Windows has no such
+ * bits, and a device such as /dev/null is not ours to change.
+ */
+export function appendPrivate(path: string, text: string): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    if (process.platform !== "win32" && fstatSync(fd).isFile()) {
+      fchmodSync(fd, 0o600);
+    }
+    appendFileSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function createEnvelopeLogSink({
   path,
   now = () => new Date(),
@@ -119,7 +137,7 @@ export function createEnvelopeLogSink({
   };
 
   try {
-    mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   } catch (error) {
     fail(error);
   }
@@ -142,7 +160,7 @@ export function createEnvelopeLogSink({
           envelope,
         };
         const line = `${JSON.stringify(entry)}\n`;
-        appendFileSync(path, line);
+        appendPrivate(path, line);
         seq += 1;
         return true;
       } catch (error) {
