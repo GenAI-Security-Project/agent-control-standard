@@ -58,6 +58,7 @@
  * line.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { escapeControlCharacters } from "./terminal-safe.ts";
 
 // "finding" is a fact the Guardian established about a request that the spec
 // requires it to record, such as an unresolved request_id_ref. Its envelope is
@@ -315,7 +316,9 @@ function reportMalformedLine(
 
 function warnMalformedLine(line: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`skipping unparseable envelope-log line (${message}): ${line.slice(0, 120)}`);
+  console.error(
+    `skipping unparseable envelope-log line (${escapeControlCharacters(message)}): ${escapeControlCharacters(line.slice(0, 120))}`,
+  );
 }
 
 function warnPollError(error: unknown): void {

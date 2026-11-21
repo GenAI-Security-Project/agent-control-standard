@@ -29,10 +29,17 @@
  * `renderDecisionBadge` for a decision, `renderRpcError` for a response that
  * carried none -- and `renderOutcome` dispatches between them for the
  * stream renderer.
+ *
+ * Every string a renderer takes from a log goes through `safe` (see
+ * terminal-safe.ts) before it is interpolated, and always before `paint`
+ * wraps it: the logs record what a request author chose, and a control
+ * character written to a terminal is an instruction to it. The Inspector's
+ * own ANSI styling is added afterwards and is not touched.
  */
 import type { AuditEntry } from "./tail-audit-log.ts";
 import type { EnvelopeLogEntry } from "./tail-envelope-log.ts";
 import type { SessionContextLogEntry } from "./tail-session-context.ts";
+import { escapeControlCharacters as safe, escapeControlCharactersKeepingNewlines } from "./terminal-safe.ts";
 
 export type RenderOptions = { color?: boolean; indent?: number };
 
@@ -93,7 +100,7 @@ function paint(text: string, color: string, enabled: boolean): string {
  * locale-independent, so rendered output is the same everywhere. */
 function clockOf(recordedAt: string): string {
   const time = recordedAt.slice(11, 23);
-  return time.length === 12 ? time : recordedAt;
+  return safe(time.length === 12 ? time : recordedAt);
 }
 
 function stringList(value: unknown): string[] {
@@ -116,7 +123,9 @@ function policyReferenceList(value: unknown): PolicyReference[] {
  * not require `rule_id` on a policy_reference, so that fallback is a real
  * shape this renders deliberately, not a defect. */
 function formatReferences(references: PolicyReference[]): string[] {
-  return references.map((ref) => (ref.rule_id ? `${ref.policy_id ?? "?"}#${ref.rule_id}` : `${ref.policy_id ?? "?"}`));
+  return references.map((ref) =>
+    ref.rule_id ? `${safe(ref.policy_id ?? "?")}#${safe(ref.rule_id)}` : `${safe(ref.policy_id ?? "?")}`,
+  );
 }
 
 /**
@@ -166,8 +175,8 @@ export function outcomeMessageOf(entry: EnvelopeLogEntry): OutcomeMessage | null
  */
 export function renderRpcError(message: RpcErrorMessage, options: RenderOptions = {}): string {
   const color = options.color ?? false;
-  const code = message.code ?? "?";
-  const text = message.message;
+  const code = safe(message.code ?? "?");
+  const text = safe(message.message);
   return paint(`✖ ERROR ${code}${text ? `  ${text}` : ""}`, RED, color);
 }
 
@@ -193,7 +202,7 @@ export function renderDecisionBadge(message: DecisionMessage, options: RenderOpt
   } else if (message.decision === "allow") {
     head = paint("○ ALLOW", GREEN, color);
   } else {
-    head = paint(`◆ ${message.decision.toUpperCase()}`, CYAN, color);
+    head = paint(`◆ ${safe(message.decision).toUpperCase()}`, CYAN, color);
   }
 
   // Dimmed rather than left plain: with color:true, painting only `head`
@@ -202,7 +211,7 @@ export function renderDecisionBadge(message: DecisionMessage, options: RenderOpt
   // color:false output the exact-string tests above assert byte-for-byte.
   const parts = [head];
   if (reasonCodes.length > 0) {
-    parts.push(paint(`reason_codes=[${reasonCodes.join(", ")}]`, DIM, color));
+    parts.push(paint(`reason_codes=[${reasonCodes.map(safe).join(", ")}]`, DIM, color));
   }
   if (references.length > 0) {
     parts.push(paint(`policy_references=[${references.join(", ")}]`, DIM, color));
@@ -234,10 +243,10 @@ export function renderOutcome(message: OutcomeMessage, options: RenderOptions = 
 export function renderEnvelopeLogEntry(entry: EnvelopeLogEntry, options: RenderOptions = {}): string {
   const color = options.color ?? false;
   const arrow = { request: "→ REQUEST ", response: "← RESPONSE", finding: "! FINDING " }[entry.direction];
-  const method = entry.method ?? "(no method)";
-  const id = entry.rpc_id === null ? "(unpaired)" : `id=${entry.rpc_id}`;
+  const method = safe(entry.method ?? "(no method)");
+  const id = entry.rpc_id === null ? "(unpaired)" : `id=${safe(entry.rpc_id)}`;
 
-  const header = paint(`── #${entry.seq}  ${clockOf(entry.recorded_at)}  ${arrow}  ${method}  ${id}`, DIM, color);
+  const header = paint(`── #${safe(entry.seq)}  ${clockOf(entry.recorded_at)}  ${arrow}  ${method}  ${id}`, DIM, color);
   const message = outcomeMessageOf(entry);
   const outcome = message === null ? null : renderOutcome(message, options);
   // `JSON.stringify` returns `undefined` -- not a string -- for an entry
@@ -245,7 +254,12 @@ export function renderEnvelopeLogEntry(entry: EnvelopeLogEntry, options: RenderO
   // line indistinguishable from a real blank body. `isEnvelopeLogEntryShape`
   // does not require `envelope` (it is `unknown` by design), so a
   // hand-written or truncated envelope-log line can reach here without one.
-  const body = JSON.stringify(entry.envelope, null, options.indent ?? 2) ?? "(no envelope recorded)";
+  // `JSON.stringify` escapes C0 controls inside strings but passes DEL and C1
+  // controls through, so the body is escaped too -- keeping the newlines the
+  // pretty-printer itself put between lines.
+  const body = escapeControlCharactersKeepingNewlines(
+    JSON.stringify(entry.envelope, null, options.indent ?? 2) ?? "(no envelope recorded)",
+  );
 
   return [header, ...(outcome === null ? [] : [outcome]), body].join("\n");
 }
@@ -324,22 +338,22 @@ export function renderAuditEntry(entry: AuditEntry, options: RenderOptions = {})
   const color = options.color ?? false;
   const outcomeLabel = entry.outcome === "blocked" ? "BLOCKED" : entry.outcome === "proceeded" ? "PROCEEDED" : "UNGOVERNED";
   const outcomeColor = entry.outcome === "blocked" ? RED : YELLOW;
-  const id = entry.rpc_id === null ? "(unpaired)" : `id=${entry.rpc_id}`;
+  const id = entry.rpc_id === null ? "(unpaired)" : `id=${safe(entry.rpc_id)}`;
   // Same fallback renderEnvelopeLogEntry uses for a log line with no method,
   // and for the same reason: an entry written before any request could be built
   // has no ACS method, and this renderer has no other vocabulary to fall back
   // on.
-  const method = entry.method ?? "(no method)";
+  const method = safe(entry.method ?? "(no method)");
 
   // No `posture=` on an ungoverned line, because no posture was consulted --
   // printing this session's declared one there would read as "the deployment
   // chose to proceed", which is not what happened. The writer does not carry
   // the field on that arm at all, so this is the type being honest rather
   // than this renderer choosing to omit something it was given.
-  const postureField = entry.outcome === "ungoverned" ? "" : `posture=${entry.posture}/${entry.posture_source}  `;
+  const postureField = entry.outcome === "ungoverned" ? "" : `posture=${safe(entry.posture)}/${safe(entry.posture_source)}  `;
   const header = paint(
-    `── #${entry.seq}  ${clockOf(entry.recorded_at)}  ${outcomeLabel}  ${method}  ${id}  ` +
-      `${postureField}audit_session=${entry.session_id}`,
+    `── #${safe(entry.seq)}  ${clockOf(entry.recorded_at)}  ${outcomeLabel}  ${method}  ${id}  ` +
+      `${postureField}audit_session=${safe(entry.session_id)}`,
     outcomeColor,
     color,
   );
@@ -348,13 +362,13 @@ export function renderAuditEntry(entry: AuditEntry, options: RenderOptions = {})
   // exists to make visible is a `tools` list that stopped matching the names
   // the host sends, and neither half shows it alone.
   if (entry.outcome === "ungoverned") {
-    const declared = entry.ungoverned.tools.length === 0 ? "(none)" : entry.ungoverned.tools.join(", ");
-    return [header, paint(`ungoverned=${entry.ungoverned.tool}: not in this gate's tools [${declared}]`, DIM, color)].join(
+    const declared = entry.ungoverned.tools.length === 0 ? "(none)" : entry.ungoverned.tools.map(safe).join(", ");
+    return [header, paint(`ungoverned=${safe(entry.ungoverned.tool)}: not in this gate's tools [${declared}]`, DIM, color)].join(
       "\n",
     );
   }
 
-  const failureLine = paint(`failure=${entry.failure.kind}: ${entry.failure.message}`, DIM, color);
+  const failureLine = paint(`failure=${safe(entry.failure.kind)}: ${safe(entry.failure.message)}`, DIM, color);
   // A second, separately labelled line rather than a merged one: the session's
   // configuration failing and this step's decision failing are different
   // events, and the whole point of recording both is that neither gets
@@ -362,7 +376,7 @@ export function renderAuditEntry(entry: AuditEntry, options: RenderOptions = {})
   const sessionLine =
     entry.session_failure === undefined
       ? []
-      : [paint(`session_failure=${entry.session_failure.kind}: ${entry.session_failure.message}`, DIM, color)];
+      : [paint(`session_failure=${safe(entry.session_failure.kind)}: ${safe(entry.session_failure.message)}`, DIM, color)];
 
   return [header, failureLine, ...sessionLine].join("\n");
 }
@@ -470,10 +484,10 @@ export function renderSessionChainRow(
   const findings =
     entry.findings === undefined || entry.findings.length === 0
       ? ""
-      : `  ! ${entry.findings.join(", ")}${entry.request_id_ref === undefined ? "" : ` ref=${entry.request_id_ref}`}`;
+      : `  ! ${entry.findings.map(safe).join(", ")}${entry.request_id_ref === undefined ? "" : ` ref=${safe(entry.request_id_ref)}`}`;
   const row =
-    `#${entry.seq}  ${entry.tool_name}  hash=${entry.hash.slice(0, SHORT_HASH_LENGTH)}  ` +
-    `session_id=${entry.session_id}${findings}`;
+    `#${safe(entry.seq)}  ${safe(entry.tool_name)}  hash=${safe(entry.hash.slice(0, SHORT_HASH_LENGTH))}  ` +
+    `session_id=${safe(entry.session_id)}${findings}`;
   return link.broken ? paint(`✖ CHAIN BREAK  ${row}`, RED, color) : row;
 }
 

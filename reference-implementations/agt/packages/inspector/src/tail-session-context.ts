@@ -38,6 +38,7 @@
  * entries happened to interleave.
  */
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { escapeControlCharacters } from "./terminal-safe.ts";
 
 /**
  * The Inspector's own reader-side entry type. Declares its own shape rather
@@ -348,7 +349,9 @@ function reportPollError(onPollError: (error: unknown) => void, error: unknown):
 
 function warnMalformedLine(line: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(`skipping unparseable session-context-log line (${message}): ${line.slice(0, 120)}`);
+  console.error(
+    `skipping unparseable session-context-log line (${escapeControlCharacters(message)}): ${escapeControlCharacters(line.slice(0, 120))}`,
+  );
 }
 
 function warnPollError(error: unknown): void {
