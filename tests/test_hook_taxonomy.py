@@ -352,3 +352,27 @@ def test_agbom_update_triggers_cover_every_component_type():
             f"AgBOM update triggers omit component type {comp_type!r}"
         )
 
+
+def decision_line(hook):
+    page = HOOKS_PAGE.read_text(encoding="utf-8")
+    section = page.split(f"\n## {hook}\n")[1].split("\n---")[0]
+    return next(line for line in section.splitlines() if line.startswith("**Decision:**"))
+
+
+def test_post_event_hooks_carry_one_label_on_every_surface():
+    """Issue #146: each rule has one label, and every surface says the same thing."""
+    hooks_text = HOOKS_PAGE.read_text(encoding="utf-8")
+    schema_texts = [path.read_text(encoding="utf-8") for path in HOOK_SCHEMAS.glob("*.json")]
+    for text in [hooks_text, *schema_texts]:
+        assert "not decision-eligible" not in text.lower()
+
+    assert "| ALLOW / MODIFY (no DENY" in hooks_text
+    assert decision_line("postCompact").startswith("**Decision:** ALLOW / MODIFY (DENY not permitted)")
+    for hook, schema in (("subagentStop", "subagent-stop.json"), ("turnEnd", "turn-end.json")):
+        assert decision_line(hook).startswith("**Decision:** Audit only (ALLOW only)")
+        description = json.loads((HOOK_SCHEMAS / schema).read_text(encoding="utf-8"))["description"]
+        assert "Audit-only" in description
+        assert "No other disposition is legal" in description
+
+    faq = (DOCS / "topics" / "faq.md").read_text(encoding="utf-8")
+    assert "`postCompact`" not in faq.split("audit-only records:")[1].split(".")[0]
