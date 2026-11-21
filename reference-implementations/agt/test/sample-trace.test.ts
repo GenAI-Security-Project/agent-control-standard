@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONVERTER_SERVICE_NAME } from "../packages/guardian/src/audit-to-otlp.ts";
 import { OTEL_SERVICE_NAME } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { stepSpanName } from "../packages/guardian/src/otel-mapping.ts";
 import { generateSampleTrace, REJECTED, SAMPLE_PATH, SCENARIOS } from "../scripts/make-sample-trace.ts";
 
 /**
@@ -89,9 +90,11 @@ type MappingSchema = {
   };
 };
 const MAPPING = JSON.parse(readFileSync(MAPPING_PATH, "utf8")) as MappingSchema;
-const STEP_BY_SPAN_NAME = Object.fromEntries(
-  Object.entries(MAPPING.properties.step_to_span.default).map(([method, entry]) => [entry.span_name, entry]),
-);
+function entryFor(span: OtlpSpan) {
+  const scenario = SCENARIOS.find((item) => item.requestId === attributes(span)["acs.request_id"]);
+  const method = scenario?.name === "result" ? "steps/toolCallResult" : "steps/toolCallRequest";
+  return MAPPING.properties.step_to_span.default[method]!;
+}
 
 /** Required attributes a span reported by the host audit converter cannot
  * carry, and why. Anything not named here is required of every span. */
@@ -118,7 +121,8 @@ describe("the committed sample trace matches the mapping", () => {
   it("names every step span with a step_to_span value", () => {
     expect(STEP_SPANS.length).toBeGreaterThan(0);
     for (const span of STEP_SPANS) {
-      expect({ name: span.name, mapped: span.name in STEP_BY_SPAN_NAME }).toEqual({ name: span.name, mapped: true });
+      const tool = attributes(span)["gen_ai.tool.name"];
+      expect(span.name).toBe(stepSpanName(entryFor(span), typeof tool === "string" ? tool : undefined));
     }
   });
 
@@ -135,7 +139,7 @@ describe("the committed sample trace matches the mapping", () => {
     for (const span of STEP_SPANS) {
       const present = attributes(span);
       const fromConverter = failureOf(span)?.["acs.failure.reported_by"] === "observed_agent";
-      for (const attribute of [...always, ...STEP_BY_SPAN_NAME[span.name]!.required_attributes]) {
+      for (const attribute of [...always, ...entryFor(span).required_attributes]) {
         if (fromConverter && attribute in CONVERTER_EXEMPT) continue;
         expect({ span: span.name, attribute, present: attribute in present }).toEqual({ span: span.name, attribute, present: true });
       }
@@ -162,6 +166,8 @@ describe("the committed sample trace matches the mapping", () => {
     for (const scenario of SCENARIOS) {
       const decision = attributes(spanFor(scenario.requestId)?.events?.find((e) => e.name === "acs.decision"));
       expect({ scenario: scenario.name, decision: decision["acs.decision"] }).toEqual({ scenario: scenario.name, decision: scenario.decision });
+      expect(attributes(spanFor(scenario.requestId))["acs.decision"]).toBe(scenario.decision);
+      expect(attributes(spanFor(scenario.requestId))["gen_ai.operation.name"]).toBe("execute_tool");
       expect(String(decision["acs.reason_codes"] ?? "")).not.toContain("runtime_error");
     }
   });

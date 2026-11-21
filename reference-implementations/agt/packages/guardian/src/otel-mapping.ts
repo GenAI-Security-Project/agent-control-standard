@@ -148,7 +148,14 @@ type StepSpanEntry = {
   required_attributes: string[];
   conditional_attributes?: string[];
   optional_attributes?: string[];
+  response_attributes?: string[];
 };
+
+export function stepSpanName(entry: StepSpanEntry, toolName?: string): string {
+  return toolName === undefined
+    ? entry.span_name.replace(" {gen_ai.tool.name}", "")
+    : entry.span_name.replace("{gen_ai.tool.name}", () => toolName);
+}
 
 /**
  * Methods this Guardian evaluates that have no `step_to_span` entry in
@@ -278,6 +285,7 @@ export const STEP_ATTRIBUTE_SOURCES: Readonly<Record<string, Source<RequestParts
   "acs.session.id": (r) => asString(r.metadata.session_id),
   "acs.agent.id": (r) => asString(r.metadata.agent_id),
   "gen_ai.tool.name": (r) => asString(r.tool.name),
+  "gen_ai.operation.name": () => "execute_tool",
   "acs.tool.provider": (r) => asString(r.tool.provider),
   "acs.tool.version": (r) => asString(r.tool.version),
   "acs.capability": (r) => asString(r.payload.capability),

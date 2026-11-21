@@ -12,6 +12,7 @@ import {
   sessionUuid as converterSessionUuid,
 } from "../packages/guardian/src/audit-to-otlp.ts";
 import { loadOtelMapping, OTEL_SERVICE_NAME, SPAN_LIMITS } from "../packages/guardian/src/otel-trace-exporter.ts";
+import { stepSpanName } from "../packages/guardian/src/otel-mapping.ts";
 
 /**
  * The converter's contract, measured with the Guardian down. The host
@@ -123,7 +124,7 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
       });
       const spans = spansIn(otelPath);
       expect(spans).toHaveLength(1);
-      expect(spans[0]?.name).toBe(loadOtelMapping().stepToSpan["steps/toolCallRequest"]!.span_name);
+      expect(spans[0]?.name).toBe(stepSpanName(loadOtelMapping().stepToSpan["steps/toolCallRequest"]!));
       expect(attribute(spans[0], "acs.session.id")).toBe(toSessionUuid(entry!.session_id));
       const failure = spans[0]?.events?.find((event) => event.name === "acs.decision.failure");
       expect(attribute(failure, "acs.failure.class")).toBe("unreachable");

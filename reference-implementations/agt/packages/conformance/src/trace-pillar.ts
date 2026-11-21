@@ -203,6 +203,7 @@ type StepSpanEntry = {
   required_attributes: string[];
   conditional_attributes?: string[];
   optional_attributes?: string[];
+  response_attributes?: string[];
 };
 
 type OtelMappingSchema = {
@@ -367,27 +368,28 @@ export function checkTracePillar(): TraceRow[] {
   // a $ref -- there is exactly one place in this file it could come from.
   const acsResult = responseEnvelope.$defs?.AcsResult;
 
-  /** Resolves the wire site for each of the ten (span, attribute) pairs the
+  /** Resolves the wire site for each (method, attribute) pair the
    * six in-scope spans' `required_attributes` and `conditional_attributes`
    * name. Domain knowledge --
    * which file and field an OTel attribute NAME resolves to -- not
    * something any schema states directly, so it is written here once, by
-   * hand, and checked by `resolveField` above rather than trusted. */
-  function stepAttributeSite(spanName: string, attribute: string): FieldSite {
-    switch (`${spanName}::${attribute}`) {
-      case "gen_ai.tool.call::gen_ai.tool.name":
+   * hand, and checked by `resolveField` above rather than trusted.
+   * Methods disambiguate request and result spans sharing one name. */
+  function stepAttributeSite(method: string, attribute: string): FieldSite {
+    switch (`${method}::${attribute}`) {
+      case "steps/toolCallRequest::gen_ai.tool.name":
         return { file: "hooks/tool-call-request.json", fileRoot: toolCallRequest, startNode: toolCallRequest, path: ["tool", "name"], label: "tool.name" };
-      case "gen_ai.tool.call::acs.capability":
+      case "steps/toolCallRequest::acs.capability":
         return { file: "hooks/tool-call-request.json", fileRoot: toolCallRequest, startNode: toolCallRequest, path: ["capability"], label: "capability" };
-      case "gen_ai.tool.result::gen_ai.tool.name":
+      case "steps/toolCallResult::gen_ai.tool.name":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["tool", "name"], label: "tool.name" };
-      case "gen_ai.tool.result::acs.request_id_ref":
+      case "steps/toolCallResult::acs.request_id_ref":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["request_id_ref"], label: "request_id_ref" };
-      case "gen_ai.tool.result::acs.exit_status":
+      case "steps/toolCallResult::acs.exit_status":
         return { file: "hooks/tool-call-result.json", fileRoot: toolCallResult, startNode: toolCallResult, path: ["exit_status"], label: "exit_status" };
-      case "acs.session::acs.session.id":
-      case "acs.message.user::acs.session.id":
-      case "acs.message.agent::acs.session.id":
+      case "steps/sessionStart::acs.session.id":
+      case "steps/userMessage::acs.session.id":
+      case "steps/agentResponse::acs.session.id":
         return {
           file: "request-envelope.json",
           fileRoot: requestEnvelope,
@@ -395,9 +397,9 @@ export function checkTracePillar(): TraceRow[] {
           path: ["metadata", "session_id"],
           label: "AcsParams.metadata.session_id",
         };
-      case "acs.session.end::acs.session.reason":
+      case "steps/sessionEnd::acs.session.reason":
         return { file: "hooks/session-end.json", fileRoot: sessionEnd, startNode: sessionEnd, path: ["reason"], label: "reason" };
-      case "acs.message.user::acs.content.types":
+      case "steps/userMessage::acs.content.types":
         return {
           file: "hooks/user-message.json",
           fileRoot: userMessage,
@@ -405,7 +407,7 @@ export function checkTracePillar(): TraceRow[] {
           path: ["content", "[]", "type"],
           label: "content[].type",
         };
-      case "acs.message.agent::acs.agent.id":
+      case "steps/agentResponse::acs.agent.id":
         return {
           file: "request-envelope.json",
           fileRoot: requestEnvelope,
@@ -415,7 +417,7 @@ export function checkTracePillar(): TraceRow[] {
         };
       default:
         throw new Error(
-          `checkTracePillar: no known wire site for attribute "${attribute}" on span "${spanName}" -- add one to stepAttributeSite`,
+          `checkTracePillar: no known wire site for attribute "${attribute}" on method "${method}" -- add one to stepAttributeSite`,
         );
     }
   }
@@ -429,10 +431,14 @@ export function checkTracePillar(): TraceRow[] {
       throw new Error(`checkTracePillar: trace/otel-mapping.json's step_to_span.default has no entry for "${method}"`);
     }
     for (const attribute of entry.required_attributes) {
-      rows.push(buildRow(attribute, entry.span_name, "required", stepAttributeSite(entry.span_name, attribute)));
+      if (attribute === "gen_ai.operation.name") {
+        rows.push({ attribute, span: entry.span_name, obligation: "required", wireSource: "constant:execute_tool", emittableByWireConsumer: true });
+      } else {
+        rows.push(buildRow(attribute, entry.span_name, "required", stepAttributeSite(method, attribute)));
+      }
     }
     for (const attribute of entry.conditional_attributes ?? []) {
-      rows.push(buildRow(attribute, entry.span_name, "conditional", stepAttributeSite(entry.span_name, attribute)));
+      rows.push(buildRow(attribute, entry.span_name, "conditional", stepAttributeSite(method, attribute)));
     }
   }
 
@@ -552,6 +558,12 @@ export function checkTracePillar(): TraceRow[] {
   }
 
   const decisionEvent = otelMapping.properties.decision_event.properties;
+  for (const method of METHODS_IN_SCOPE) {
+    const entry = stepDefaults[method]!;
+    for (const attribute of entry.response_attributes ?? []) {
+      rows.push(buildRow(attribute, entry.span_name, "conditional", decisionAttributeSite(attribute)));
+    }
+  }
   for (const attribute of decisionEvent.required_attributes.default) {
     rows.push(buildRow(attribute, DECISION_SPAN, "required", decisionAttributeSite(attribute)));
   }
