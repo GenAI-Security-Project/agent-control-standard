@@ -72,7 +72,7 @@ The run's session opens with its own `handshake/hello` and then its `sessionStar
       "agent_id": "nat:00000000",
       "session_id": "00000000-0000-4000-8000-000000000000",
       "platform": "nat",
-      "adapter_version": "0.2.0"
+      "adapter_version": "0.1.5"
     },
     "payload": {
       "platform_context": {
@@ -100,7 +100,7 @@ The run's session opens with its own `handshake/hello` and then its `sessionStar
       "agent_id": "nat:00000000",
       "session_id": "00000000-0000-4000-8000-000000000000",
       "platform": "nat",
-      "adapter_version": "0.2.0"
+      "adapter_version": "0.1.5"
     },
     "payload": {
       "tool": {"name": "Bash"},
@@ -126,7 +126,7 @@ The run's session opens with its own `handshake/hello` and then its `sessionStar
       "agent_id": "nat:00000000",
       "session_id": "00000000-0000-4000-8000-000000000000",
       "platform": "nat",
-      "adapter_version": "0.2.0"
+      "adapter_version": "0.1.5"
     },
     "payload": {
       "tool": {"name": "Bash"},

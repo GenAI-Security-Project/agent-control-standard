@@ -1,5 +1,8 @@
 # Extending A2A
 
+!!! note "Planned for specification v0.2.0"
+    A2A wrapping is not part of specification v0.1.0. The `protocols/A2A/*` namespace is reserved, and the wrapping rules are planned for specification v0.2.0 ([Specification §15](../specification.md#15-out-of-scope-deferred), [D-008](../../../decisions/index.md#d-008-defer-the-hardest-protocol-features-past-v01)). This page and the A2A hook pages show the intended design. Nothing on them is normative yet, including the lines that say "must", and its message shapes predate the v0.1.0 envelope schemas. No release 0.1.5 component wraps A2A.
+
 ## A2A protocol
 [A2A](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/) is a communication protocol that enables AI agents or autonomous systems to exchange information, coordinate actions, or delegate tasks in a structured and secure way.<br><br>
 It defines how two or more agents exchange messages, requests, responses or task results and enables AI agents, built on diverse frameworks by different companies running on separate servers, to communicate and collaborate effectively.<br><br>
@@ -16,7 +19,21 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
 1. Agents using A2A ***must*** use ACS as a transport protocol to deliver A2A messages to the guardian agent.
 2. Agents using A2A ***must*** understand and enforce ACS responses. <br><br>
 
-![Extend A2A protocol](../../../assets/extend_a2a.png "Extend A2A protocol illustration")
+The diagram below shows the planned flow. Each agent asks its own Guardian before an A2A message leaves it and before it acts on one it received. The numbers match the hook points in the flow that follows.
+
+```mermaid
+flowchart LR
+    GA["Guardian Agent<br/>(client side)"]
+    GB["Guardian Agent<br/>(server side)"]
+    A["Agent A<br/>(client)"]
+    B["Agent B<br/>(server)"]
+    A -->|"ACS request"| GA
+    GA -->|"ACS response"| A
+    B -->|"ACS request"| GB
+    GB -->|"ACS response"| B
+    A -->|"1 → 2: A2A request"| B
+    B -->|"3 → 4: A2A response"| A
+```
 
 #### The following flow explains how this should be done:
 1. Client agent **A** prepares A2A-compliant message.
@@ -72,7 +89,7 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
    }
    ```
 
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` message 
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` message 
    ```json
    {
         "jsonrpc": "2.0",
@@ -113,7 +130,7 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
                 },
                 "to": {
                     "agent": {
-                        "url": "https://api.jokes.com/v1",
+                        "url": "https://jokes.example.org/v1",
                         "name": "Jokes teller",
                         "version": "1.0.0"
                     },
@@ -180,7 +197,7 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
         }
     }
    ```
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` message with sensitive info
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` message with sensitive info
    ```json
     {
         "jsonrpc": "2.0",
@@ -230,19 +247,19 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
                 "from": {
                     "agent": {
                         "name": "Health services",
-                        "url": "https://health.openai.com/api/v1",
+                        "url": "https://health.example.com/api/v1",
                         "instructions": "You are a helpful assistant specializes in healthcare.",
                         "version": "1.0.0",
                         "provider": {
-                            "name": "OpenAI",
-                            "url": "https://openai.com"
+                            "name": "Example Model Provider",
+                            "url": "https://provider.example.com"
                         }
                     },
                     "role": "client"
                 },
                 "to": {
                     "agent": {
-                        "url": "https://api.diagnosis.com/v1",
+                        "url": "https://diagnosis.example.org/v1",
                         "name": "Disease diagnosis",
                         "version": "1.0.0"
                     },
@@ -311,19 +328,19 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
                         "from": {
                             "agent": {
                                 "name": "Health services",
-                                "url": "https://health.openai.com/api/v1",
+                                "url": "https://health.example.com/api/v1",
                                 "instructions": "You are a helpful assistant specializes in healthcare.",
                                 "version": "1.0.0",
                                 "provider": {
-                                    "name": "OpenAI",
-                                    "url": "https://openai.com"
+                                    "name": "Example Model Provider",
+                                    "url": "https://provider.example.com"
                                 }
                             },
                             "role": "client"
                         },
                         "to": {
                             "agent": {
-                                "url": "https://api.diagnosis.com/v1",
+                                "url": "https://diagnosis.example.org/v1",
                                 "name": "Disease diagnosis",
                                 "version": "1.0.0"
                             },
@@ -362,7 +379,7 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
    ```
 
 
-#### 2. Client agent **A** uses ASOP as a transport and sends `message/send` with disallowed content
+#### 2. Client agent **A** uses ACS as a transport and sends `message/send` with disallowed content
    ```json
    {
         "jsonrpc": "2.0",
@@ -391,19 +408,19 @@ Observed agent can be either [client agent](https://google-a2a.github.io/A2A/lat
                 "from": {
                     "agent": {
                         "name": "Personal assistant",
-                        "url": "https://assistant.openai.com/api/v1",
+                        "url": "https://assistant.example.com/api/v1",
                         "instructions": "You are a helpful assistant.",
                         "version": "1.0.0",
                         "provider": {
-                            "name": "OpenAI",
-                            "url": "https://openai.com"
+                            "name": "Example Model Provider",
+                            "url": "https://provider.example.com"
                         }
                     },
                     "role": "client"
                 },
                 "to": {
                     "agent": {
-                        "url": "https://api.hacker.com/v1",
+                        "url": "https://attacker.example.net/v1",
                         "name": "Hacker Agent",
                         "version": "1.0.0"
                     },

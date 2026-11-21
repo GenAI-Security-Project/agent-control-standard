@@ -1,8 +1,8 @@
 # Checking a Transcript With acs-verify
 
-`acs-verify` checks a Guardian session after the fact, with nothing but the transcript and the Guardian's key document. It recomputes the audit chain, verifies every decision signature, checks that each answer belongs to the request before it, and checks that the signing key was valid when the request was made. It names the first line that fails. Issue #584 adds it.
+`acs-verify` checks a Guardian session after the fact, with nothing but the transcript and the Guardian's key document. It recomputes the audit chain, verifies every decision signature, checks that each answer belongs to the request before it, and checks that the signing key was valid when the request was made. It names the first line that fails. It ships in release 0.1.5.
 
-Until now only the example Guardian computed its chain (`compute_entry_hash` in `acs/guardian/example_guardian.py`). `acs-verify` lets someone other than the Guardian that wrote a log check it.
+Before it, only the example Guardian computed its chain (`compute_entry_hash` in `acs/guardian/example_guardian.py`). `acs-verify` lets someone other than the Guardian that wrote a log check it.
 
 ## Running it
 
@@ -36,7 +36,7 @@ A transcript line that isn't strict JSON is a verification failure at that line,
 
 ## What it reads
 
-The transcript is the lab gateway's file (A.7): one `{"dir": "req" | "resp", "envelope": {...}}` object per line, in send order. A request that got no usable answer is followed by `{"dir": "resp", "envelope": null, "cause": "..."}`. Each response line answers the request line just before it.
+The transcript is the [gateway's](../gateway/README.md#records) file: one `{"dir": "req" | "resp", "envelope": {...}}` object per line, in send order. A request that got no usable answer is followed by `{"dir": "resp", "envelope": null, "cause": "..."}`. Each response line answers the request line just before it.
 
 ## What it checks
 
@@ -44,7 +44,7 @@ Each request and its answer go through these checks in order, and the first fail
 
 1. Every request names the same `session_id` as the first one.
 2. With `--hmac-secret`, the request's signature verifies under the HMAC session key.
-3. With `--keys`, the answer must be signed with ML-DSA-65 by a key the document holds, under the `key_id` the signature names. The key comes from the document, never from the envelope's `algorithm` (issue #308, RFC 8725 section 3.1). With `--hmac-secret` alone, the answer must verify under the HMAC session key.
+3. With `--keys`, the answer must be signed with ML-DSA-65 by a key the document holds, under the `key_id` the signature names. The key comes from the document, never from the envelope's `algorithm` (RFC 8725 section 3.1). With `--hmac-secret` alone, the answer must verify under the HMAC session key.
 4. The key must be live and not revoked at the request's own `timestamp`. That timestamp sits inside the request hash the signed answer carries, so nobody without the Guardian's private key can move it. Whoever holds a stolen private key can, though: they can sign a request hash with a timestamp from before the revocation. Offline, acs-verify can't tell that apart from a genuine early entry. So a key revoked after an entry's timestamp still verifies that entry, and whenever a revoked key signed any entry in the transcript, the output prints a warning that the entry could be backdated.
 5. With `--expect-fingerprint`, the key that verified the answer has one of the expected fingerprints.
 6. A ServerHello must carry `negotiated_version` and pass `acs.core.server_hello_problem` against the ClientHello it answers, the rule acs.client applies before it negotiates.
@@ -74,7 +74,7 @@ A transcript is complete only when its last line is the verified answer to `step
 The lab gateway (`adapters/gateway/README.md`, Records) writes three kinds of line besides signed pairs. Each is an unsigned claim, which anyone who can edit the file can add or remove. acs-verify reports each one, never reads it as a decision, and never calls a transcript that carries one complete, since a complete pass rests on signatures alone.
 
 - A recorded failure is a gap line, `{"dir": "resp", "envelope": null, "cause": "..."}`, or a body that decodes to a JSON object but isn't a JSON-RPC answer, written verbatim with the cause acs.client gave it, such as a 429's `{"detail": ...}` with `http_429_error`, a 200 that isn't an answer with `malformed_response`, or a failed ServerHello. It is listed under `recorded failures` (`recorded_failures` in JSON, each with the request line and its cause) and under `no signed decision`, and it is held for the chain by the rule above. A non-answer body with no cause isn't a line the gateway writes, so it fails as `unsigned_response`. A body with a cause that says the request was never sent, such as `request_exceeds_max_payload`, fails as `line_invalid`, because a request that got a body was sent.
-- A withheld answer is a signed answer the gateway didn't carry out. One that arrived after the deadline is written with `"cause": "decision_timeout"`. An answer the gateway found late after writing it is followed by a discards line, `{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}`. Either way the answer is verified and chained as usual, and its request line is listed under `withheld by the gateway` (`discarded_lines`): the gateway's unsigned line says it withheld the answer and denied the step as `decision_timeout`, and no signature covers that claim. Any other cause on a discards line or on a JSON-RPC answer, a missing one included, fails as `line_invalid`, and so does a discards line without its `"envelope": null`. Only a verified answer to a step can be withheld, so `decision_timeout` on a ServerHello, a ping or an unsigned -32004 fails as `line_invalid` too. When a withheld answer is all that keeps a transcript from complete, the chain line says so instead of naming requests with no signed decision. A discards line must directly follow the verified answer to a step for the request it names. One that names a request the transcript hasn't seen, follows anything else (a ServerHello, an unsigned error, a gap line), or repeats fails as `discards_invalid`. The discards line is a lab convention until issue #577 settles it.
+- A withheld answer is a signed answer the gateway didn't carry out. One that arrived after the deadline is written with `"cause": "decision_timeout"`. An answer the gateway found late after writing it is followed by a discards line, `{"dir": "resp", "envelope": null, "cause": "decision_timeout", "discards": "<request_id>"}`. Either way the answer is verified and chained as usual, and its request line is listed under `withheld by the gateway` (`discarded_lines`): the gateway's unsigned line says it withheld the answer and denied the step as `decision_timeout`, and no signature covers that claim. Any other cause on a discards line or on a JSON-RPC answer, a missing one included, fails as `line_invalid`, and so does a discards line without its `"envelope": null`. Only a verified answer to a step can be withheld, so `decision_timeout` on a ServerHello, a ping or an unsigned -32004 fails as `line_invalid` too. When a withheld answer is all that keeps a transcript from complete, the chain line says so instead of naming requests with no signed decision. A discards line must directly follow the verified answer to a step for the request it names. One that names a request the transcript hasn't seen, follows anything else (a ServerHello, an unsigned error, a gap line), or repeats fails as `discards_invalid`. The discards line is a lab convention. The specification doesn't define it.
 - An unsigned -32004 is the one exemption. Specification section 10 names one error a Guardian sends unsigned: `SIGNATURE_INVALID` (-32004) for a `key_id` it holds no secret for. Decision D-039 says the same. acs-verify accepts exactly that error, by acs.client's `key_id_rejected` rule (code -32004, no signature), when it binds by `id` to a request that names a `key_id`. It is listed under `unsigned -32004 for an unknown key_id` (`unsigned_errors`) and under `no signed decision`. Such a request was signed under a secret the Guardian doesn't hold, so its own signature failing under `--hmac-secret` is expected and doesn't fail it. A `key_id` the Guardian both refuses with this error and accepts with a verified answer in the same transcript fails as `unsigned_response`. Every other unsigned answer still fails as `unsigned_response`, the Guardian's unsigned -32603 floor included, since the specification exempts no other error.
 
 ## What a pass proves
@@ -87,11 +87,11 @@ Under HMAC-SHA256, a pass proves only that someone holding the shared secret wro
 
 ## Lab conventions
 
-Each item below is a lab convention, off unless you use it, and named with the issue that would settle it.
+Each item below is a lab convention, off unless you use it. The specification v0.1.0 text defines none of them.
 
-- The key document format `acs-lab-keys/1` and the startup fingerprint, until issue #460 settles key publication.
-- The request hash `x_acs_lab_request_sha256`, from issue #576. Issue #13 (Handshake downgrade is undetectable without transcript binding to subsequent traffic) is the closest tracking issue.
-- ML-DSA-65 response signing and the handshake fields that negotiate it, until issue #316 settles verifier rules.
-- The transcript format, from the lab plan's A.7, and the gateway's discards line, until issue #577 settles it.
+- The key document format `acs-lab-keys/1` and the startup fingerprint. The specification doesn't yet say how an asymmetric key is published.
+- The request hash `x_acs_lab_request_sha256`. The specification doesn't yet bind a response to the request it answers beyond its ids, or bind the handshake to the traffic that follows it.
+- ML-DSA-65 response signing and the handshake fields that negotiate it. The specification doesn't yet say which algorithms a verifier accepts.
+- The transcript format and the gateway's discards line, as the [gateway README](../gateway/README.md#records) defines them.
 
-The audit chain itself is in the specification. Checking it across Guardians is issue #18 (Audit chain trust depends on a single Guardian, no cross-Guardian verification protocol).
+The audit chain itself is in the specification. No protocol checks it across Guardians yet, so trust in the chain rests on a single Guardian.

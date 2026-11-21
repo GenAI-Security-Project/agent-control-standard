@@ -1,4 +1,8 @@
 ### Set Task Push Notification Config Request (Client)
+
+!!! note "Planned for specification v0.2.0"
+    A2A wrapping is not part of specification v0.1.0. The `protocols/A2A/*` namespace is reserved, and the wrapping rules are planned for specification v0.2.0 ([D-008](../../../../decisions/index.md#d-008-defer-the-hardest-protocol-features-past-v01)). This page shows the intended design. Nothing on it is normative yet, including the lines that say "must", and its message shapes predate the v0.1.0 envelope schemas. [Instrument A2A](../extend_a2a.md) explains the planned flow.
+
 #### 1. Description
 This hook is called when the observed client agent sets or updates notification configuration of a delegated task through A2A protocol.<br>
 This hook **must** be used before the observed agent sends the A2A-compliant message to server agent.
@@ -23,7 +27,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
      "method": "tasks/pushNotificationConfig/set",
      "params": {
         "pushNotificationConfig": {
-            "url": "https://agent.notifications.com/webhooks/7767"
+            "url": "https://notifications.example.com/webhooks/7767"
         },
         "taskId": "2232321",
         "metadata": {}
@@ -43,7 +47,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             "method": "tasks/pushNotificationConfig/set",
             "params": {
                 "pushNotificationConfig": {
-                    "url": "https://agent.notifications.com/webhooks/7767"
+                    "url": "https://notifications.example.com/webhooks/7767"
                 },
                 "taskId": "2232321",
                 "metadata": {}
@@ -54,12 +58,12 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             "from": {
                 "agent": {
                     "name": "Content generator",
-                    "url": "https://cooking-assistant.openai.com/api/v1",
+                    "url": "https://cooking-assistant.example.com/api/v1",
                     "instructions": "You are a helpful assistant that can answer questions and help with tasks.",
                     "version": "1.0.0",
                     "provider": {
-                        "name": "OpenAI",
-                        "url": "https://openai.com"
+                        "name": "Example Model Provider",
+                        "url": "https://provider.example.com"
                     },
                     "identity": {
                         "signatures": [{
@@ -76,7 +80,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             },
             "to": {
                 "agent": {
-                    "url": "https://api.story.com/v1",
+                    "url": "https://story.example.org/v1",
                     "name": "Story teller",
                     "version": "1.0.0",
                     "identity": {
@@ -123,7 +127,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
      "method": "tasks/pushNotificationConfig/set",
      "params": {
         "pushNotificationConfig": {
-            "url": "https://agent.notifications.com/webhooks/7767"
+            "url": "https://notifications.example.com/webhooks/7767"
         },
         "taskId": "2232321",
         "metadata": {}
@@ -143,7 +147,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             "method": "tasks/pushNotificationConfig/set",
             "params": {
                 "pushNotificationConfig": {
-                    "url": "https://agent.notifications.com/webhooks/7767"
+                    "url": "https://notifications.example.com/webhooks/7767"
                 },
                 "taskId": "2232321",
                 "metadata": {}
@@ -153,7 +157,7 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             "from": {
                 "agent": {
                     "name": "Content generator",
-                    "url": "https://cooking-assistant.openai.com/api/v1",
+                    "url": "https://cooking-assistant.example.com/api/v1",
                     "version": "1.0.0",
                     "identity": {
                         "signatures": [{
@@ -170,12 +174,12 @@ The response is an [response envelope](../../specification.md#6-disposition-voca
             },
             "to": {
                 "agent": {
-                    "url": "https://api.story.com/v1",
+                    "url": "https://story.example.org/v1",
                     "name": "Story teller",
                     "instruction": "You are a very creative story teller.",
                     "provider": {
-                        "name": "AzureAIFoundry",
-                        "url": "https://ai.azure.com"
+                        "name": "Example Agent Platform",
+                        "url": "https://platform.example.net"
                     },
                     "version": "1.0.0",
                     "identity": {
