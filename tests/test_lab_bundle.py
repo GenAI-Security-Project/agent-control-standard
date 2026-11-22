@@ -173,11 +173,14 @@ def test_acs_net_internal_and_ui_net_not():
 
 def test_finbot_joins_only_internal_networks_and_publishes_nothing():
     # Rock, 2026-11-22 (C-17): FinBot has no route out of the stack. The gateway is its only way to a model.
-    merged = _merged(COMPOSE, COMPOSE_OPENAI)
-    finbot = merged["services"]["finbot"]
-    for network in finbot["networks"]:
-        assert merged["networks"][network].get("internal") is True, network
-    assert not finbot.get("ports") and "extra_hosts" not in finbot
+    # Under the live overlay and under a capture take's overlays alike, so an overlay edit can't move FinBot out.
+    for merged in (_merged(COMPOSE, COMPOSE_OPENAI), _merged(COMPOSE, COMPOSE_OPENAI, COMPOSE_CAPTURE, env=CAPTURE_ENV)):
+        finbot = merged["services"]["finbot"]
+        for network in finbot["networks"]:
+            assert merged["networks"][network].get("internal") is True, network
+        assert not finbot.get("ports") and "extra_hosts" not in finbot
+        on_upstream = {name for name, s in merged["services"].items() if "upstream-net" in s.get("networks", {})}
+        assert on_upstream == {"acs-gateway"}
 
 
 def test_only_the_gateway_joins_the_outside_network():

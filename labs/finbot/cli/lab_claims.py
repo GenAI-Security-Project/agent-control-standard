@@ -46,8 +46,9 @@ PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
 EVIDENCE_TOKEN = re.compile(r"`([^`]+)`")
 # A line number, a line range or an anchor after a cited path points into the file, so it goes before the check.
 EVIDENCE_POINTER = re.compile(r"(?::\d+(?:-\d+)?|#[^/]*)$")
-# A retired row keeps its id and opens with the date of the ruling that retired it (Rock, 2026-11-22).
-RETIRED = re.compile(r"Retired \d{4}-\d{2}-\d{2}:")
+# A retired row keeps its id, and its claim cell holds only the date of the ruling that retired it, as
+# "Retired 2026-11-22." (Rock, 2026-11-22). Nothing else may share the cell, so no claim rides on a retired id.
+RETIRED = re.compile(r"Retired \d{4}-\d{2}-\d{2}\.")
 # A space may sit inside a part, as in docs/my file.md, but never at either end of one.
 CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?"
                         r"(?:/[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?)*/?")
@@ -67,6 +68,8 @@ class Ledger:
     signed: bool
     # Claim rows the sign gate refuses: Unconfirmed in any case anywhere in the row, or empty or placeholder evidence.
     unconfirmed: tuple[str, ...] = ()
+    # Rows whose claim cell reads only "Retired YYYY-MM-DD.". A marker naming one backs nothing.
+    retired: tuple[str, ...] = ()
     # The sign-off row is filled in but its digest no longer matches the ledger text above it.
     stale: bool = False
     # (Not claimed id, the banned phrases that row excuses), from the claims-not-claimed block.
@@ -101,12 +104,20 @@ def _block(text: str, tag: str) -> tuple[str, ...]:
 
 
 def _retired(text: str) -> frozenset[str]:
-    """Not claimed rows whose text opens with Retired and an ISO date. The id stays so nothing renumbers."""
+    """Claim and Not claimed rows whose claim cell reads exactly "Retired YYYY-MM-DD.". The id stays so nothing
+    renumbers. A cell that opens with "retired" in any case but holds anything else is refused, so a retired label
+    can never sit beside a live claim (review round 4, I3)."""
     found = set()
     for line in text.splitlines():
         cells = _cells(line) if ROW_LINE.match(line) else []
-        if len(cells) >= 2 and re.fullmatch(r"N-\d{2}", cells[0]) and RETIRED.match(cells[1]):
+        if len(cells) < 2 or not re.fullmatch(r"[CN]-\d{2}", cells[0]):
+            continue
+        shown = _cell_text(cells[1])
+        if RETIRED.fullmatch(shown):
             found.add(cells[0])
+        elif shown.lower().startswith("retired"):
+            raise ValueError(f"{cells[0]} looks retired, so its claim cell must read exactly "
+                             f"'Retired YYYY-MM-DD.', got {shown!r}")
     return frozenset(found)
 
 
@@ -171,12 +182,14 @@ def _unconfirmed(text: str) -> tuple[str, ...]:
     """Claim rows the sign gate refuses.
 
     Unconfirmed matches in any case anywhere in the row, because a row can open with the evidence that exists and
-    name the gap later. An empty or placeholder evidence cell is refused too, since it says nothing was checked.
+    name the gap later. An empty or placeholder evidence cell is refused too, since it says nothing was checked. A
+    retired row is neither confirmed nor unconfirmed. The gate names it on a line of its own.
     """
+    retired = _retired(text)
     rows = []
     for line in text.splitlines():
         cells = _cells(line) if ROW_LINE.match(line) else []
-        if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]):
+        if len(cells) >= 3 and re.fullmatch(r"C-\d{2}", cells[0]) and cells[0] not in retired:
             # The gate reads cells as a reader sees them, so an entity or emphasis can't hide a word from it.
             shown = [_cell_text(c) for c in cells]
             if "unconfirmed" in " ".join(shown).lower() or _placeholder(shown[2]):
@@ -288,6 +301,7 @@ def load_ledger(path: Path) -> Ledger:
         exclude=_block(above, "claims-exclude"),
         signed=signed,
         unconfirmed=_unconfirmed(rows),
+        retired=tuple(sorted(_retired(rows))),
         stale=stale,
         excuses=_excuses(above, ids, banned),
         evidence=evidence,
@@ -299,7 +313,7 @@ def load_ledger(path: Path) -> Ledger:
 class Finding:
     path: str
     line: int
-    # "banned", "unledgered", "unknown_id", "unreadable", or at the sign gate
+    # "banned", "unledgered", "unknown_id", "retired_id", "unreadable", or at the sign gate
     # "unsigned", "unconfirmed", "missing_evidence" and "no_claims".
     kind: str
     text: str
@@ -752,6 +766,9 @@ def _sentences(unit: Unit) -> list[tuple[str, tuple[str, ...]]]:
 def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], triggers: re.Pattern[str],
            excused: dict[str, frozenset[str]]) -> list[tuple[str, str]]:
     found = [("unknown_id", f"claim:{m}") for m in unit.markers if m not in ledger.ids]
+    # A retired id stays in the ledger so nothing renumbers, but it backs no claim, so its marker is a finding and
+    # never clears a trigger or a banned phrase (review round 4, I2).
+    found += [("retired_id", f"claim:{m}") for m in unit.markers if m in ledger.retired]
     # kind -> the first sentence that earns it. A unit gets one claim finding, banned first.
     kinds: dict[str, str] = {}
     pieces = _sentences(unit)
@@ -768,7 +785,7 @@ def _check(unit: Unit, suffix: str, ledger: Ledger, banned: re.Pattern[str], tri
         shown_piece = plain[start:start + len(text)]
         start += len(text)
         seen = _seen(text, suffix)
-        valid = [m for m in markers if m in ledger.ids]
+        valid = [m for m in markers if m in ledger.ids and m not in ledger.retired]
         # Only a Not claimed marker excuses a banned phrase, because a banned phrase asserted under a claim row is the
         # defect. It excuses only the phrases its own row names.
         allowed = frozenset().union(*(excused.get(m, frozenset()) for m in valid))
@@ -937,6 +954,8 @@ def _report(root: Path, ledger: Ledger, ledger_path: Path, require_signed: bool)
         # A skipped token isn't a failure, but the signer should know the gate didn't check it.
         notes = [f"NOTE: {ledger_path.name}:0 skipped {row} {token}, not a path the sign gate checks"
                  for row, token in ledger.skipped]
+        # A retired row is neither confirmed nor unconfirmed, so the signer sees each one by name.
+        notes += [f"NOTE: {ledger_path.name}:0 retired {row}, which claims nothing" for row in ledger.retired]
     else:
         notes = []
     for f in findings:
