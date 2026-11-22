@@ -13,8 +13,8 @@ Steps:
    clone has nothing to reset.
 3. Each guide's commands run in order, exactly as written, from labs/finbot. When the first guide doesn't open with
    `init`, this runs `./lab.sh init` and `./lab.sh up` before its first step.
-4. Every Docker call lab.sh makes goes through a shim that adds compose.offline.yaml after compose.yaml, so finbot-net
-   is internal and no service on the model path can reach outside the stack. test_lab_bundle.py holds lab.sh to
+4. Every Docker call lab.sh makes goes through a shim that adds compose.offline.yaml after compose.yaml, so upstream-net
+   is internal too and no service on the model path can reach outside the stack. test_lab_bundle.py holds lab.sh to
    starting every compose call with `-f compose.yaml`, which is what the shim keys on.
 
 It fails, and stops, on the first of these:

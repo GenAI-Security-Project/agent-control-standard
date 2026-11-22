@@ -1,13 +1,13 @@
 #!/bin/sh
 # smoke.sh: checks a running lab end to end in replay mode with no model key (issue #588, LAB-15).
 #
-# Version 1.1.0. Owner: Rock Lambros. Run after `./lab.sh init` and `./lab.sh up`, from any directory:
+# Version 1.2.0. Owner: Rock Lambros. Run after `./lab.sh init` and `./lab.sh up`, from any directory:
 #   labs/finbot/images/smoke.sh
 # The labs workflow's smoke job runs it, and so does anyone rerunning the stack check by hand. The model path is
 # module 1 itself, played with lab mode, lab run s1 and lab check 1 (issue #589, LAB-16), answered by replay.
 #
-# Prints one DONE or NOT YET: line per check, plus NOTE: lines that record what FinBot can reach without checking
-# it. Exit 0 when every check passes, 1 otherwise. The NOTE: lines never change the exit code.
+# Prints one DONE or NOT YET: line per check, plus a NOTE: line that records, without checking, that FinBot reaches the
+# gateway's approver port. Exit 0 when every check passes, 1 otherwise. The NOTE: line never changes the exit code.
 set -u
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,6 @@ admin_ip=$(env_value LAB_GATEWAY_ADMIN_IP)
 admin_ip=${admin_ip:-10.88.47.10}
 uid=$(id -u)
 [ "$uid" -ne 0 ] || uid=10001
-finbot_port=$(env_value LAB_PORT_FINBOT)
 approver_port=$(env_value LAB_PORT_APPROVER)
 viewer_port=$(env_value LAB_PORT_VIEWER)
 jaeger_port=$(env_value LAB_PORT_JAEGER)
@@ -72,10 +71,11 @@ else
     fail "finbot can't reach the gateway's model port"
 fi
 
-# The accepted residual from the LAB-15 review: finbot-net isn't internal, so FinBot can reach the approver port, the
-# host's published ports and the internet. FinBot's own tools make no network call at 1450fc4, so this is recorded on
-# every run, never checked, and a change in what FinBot reaches shows in the log. "@gateway" is the container's default
-# route, which is the host on a Linux bridge network. host.docker.internal is the host on Docker Desktop.
+# FinBot joins only internal networks (Rock, 2026-11-22, C-17), so it must reach nothing outside the compose networks:
+# a public address, a public name, the host's published ports, or a model served on the host. Each of those is a check.
+# The approver port shares finbot-net and its token guards it, so that one is recorded and not checked. "@gateway" is
+# the container's default route, which is the host on a Linux bridge network and absent on an internal one.
+# host.docker.internal is the host on Docker Desktop.
 reach_probe='# lab-reach-record
 import socket, struct, sys, threading, time
 def default_route():
@@ -124,17 +124,27 @@ for host, port in zip(args[::2], args[1::2]):
     except OSError as e:
         print(f"cannot reach {host}:{port} ({type(e).__name__})")'
 reach_targets="acs-gateway 8090"
-for port in "${finbot_port:-8000}" "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}"; do
+for port in "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}"; do
     reach_targets="$reach_targets host.docker.internal $port @gateway $port"
 done
-# 11434 is Ollama's default port. On Docker Desktop FinBot could send model traffic there without the gateway.
-reach_targets="$reach_targets host.docker.internal 11434 @gateway 11434 example.com 443"
-printf 'NOTE: what FinBot reaches from finbot-net, recorded and not checked (the residual the LAB-15 review accepted)\n'
+# 1.1.1.1 is a public address, so no name lookup stands between FinBot and the connect. 11434 is Ollama's default port.
+reach_targets="$reach_targets host.docker.internal 11434 @gateway 11434 example.com 443 1.1.1.1 443"
 # shellcheck disable=SC2086
 if reach=$(in_service finbot python -c "$reach_probe" $reach_targets 2>&1); then
-    printf '%s\n' "$reach" | sed 's/^/NOTE: finbot /'
+    # A here-document, not a pipe, so the loop runs in this shell and fail sets status.
+    while IFS= read -r line; do
+        case $line in
+            "reaches acs-gateway:"* | "cannot reach acs-gateway:"*) printf 'NOTE: finbot %s\n' "$line" ;;
+            "cannot reach "*) target=${line#cannot reach }
+                              pass "finbot can't reach ${target%% *}, outside the compose networks" ;;
+            "reaches "*) fail "finbot reached ${line#reaches }, outside the compose networks" ;;
+            *) fail "the reachability probe printed $line" ;;
+        esac
+    done <<REACH
+$reach
+REACH
 else
-    printf 'NOTE: the reachability probe did not run: %s\n' "$(printf '%s' "$reach" | tail -n 1)"
+    fail "the reachability probe did not run: $(printf '%s' "$reach" | tail -n 1)"
 fi
 
 for service_file in "acs-guardian /run/acs/guardian.key" "acs-guardian /run/acs/hmac.key" \
@@ -212,11 +222,6 @@ case $no_token in
     *) fail "a call to the model port without the client token didn't get 401: $no_token" ;;
 esac
 
-if curl -fsS "http://127.0.0.1:${finbot_port:-8000}/healthz" >/dev/null 2>&1; then
-    pass "FinBot answers on 127.0.0.1:${finbot_port:-8000}"
-else
-    fail "FinBot doesn't answer on 127.0.0.1:${finbot_port:-8000}"
-fi
 if curl -fsS "http://127.0.0.1:${viewer_port:-8095}/api/rows?after=0" >/dev/null 2>&1; then
     pass "the viewer answers on 127.0.0.1:${viewer_port:-8095}"
 else

@@ -1,8 +1,8 @@
-"""smoke.sh's reachability record (issue #588, LAB-15), driven against a fake docker. No Docker needed.
+"""smoke.sh's reachability checks (issue #588, LAB-15), driven against a fake docker. No Docker needed.
 
-The LAB-15 review accepted that finbot-net isn't internal, so FinBot can reach the gateway's approver port, the host's
-published ports and the internet. smoke.sh records what FinBot reaches on every run, so a change in that residual
-shows in the log. It records and never fails the run on it.
+FinBot joins only internal networks (Rock, 2026-11-22, C-17), so smoke.sh fails the run when FinBot reaches anything
+outside the compose networks: a public address, a public name, or the host's ports. It still records, without
+checking, that FinBot reaches the gateway's approver port on finbot-net, where the approver token guards it.
 
 Run from the repository root: python3 -m pytest labs/finbot/images/tests/test_smoke.py -v
 """
@@ -68,7 +68,7 @@ def bundle(tmp_path: Path) -> Path:
     shutil.copy2(SMOKE, root / "images" / "smoke.sh")
     (root / "lab.sh").write_text(FAKE_LAB, encoding="utf-8")
     (root / "lab.sh").chmod(0o755)
-    (root / ".env").write_text("LAB_PORT_FINBOT=18000\nLAB_PORT_JAEGER=26686\n", encoding="utf-8")
+    (root / ".env").write_text("LAB_PORT_APPROVER=18090\nLAB_PORT_JAEGER=26686\n", encoding="utf-8")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, text in (("docker", FAKE_DOCKER), ("curl", "#!/bin/sh\nexit 7\n")):
@@ -104,32 +104,48 @@ def _probe_targets(calls: list[str]) -> list[str]:
     return pairs
 
 
+OUTSIDE = ["1.1.1.1:443", "example.com:443", "host.docker.internal:11434", "@gateway:11434"]
+
+
 def test_smoke_probes_the_approver_the_host_and_the_internet_from_finbot(bundle):
     _, calls = run_smoke(bundle)
     targets = _probe_targets(calls)
     assert "acs-gateway:8090" in targets
     # The host's published ports, overrides from .env included, by Docker Desktop's host name and by the default route.
-    for port in ("18000", "8090", "8095", "26686"):
+    for port in ("18090", "8095", "26686"):
         assert f"host.docker.internal:{port}" in targets, port
         assert f"@gateway:{port}" in targets, port
-    assert "example.com:443" in targets
-    # A model served on the host, such as Ollama, is model traffic that never passes the gateway (LAB-15 re-review).
-    assert "host.docker.internal:11434" in targets
-    assert "@gateway:11434" in targets
+    # A public address with no name lookup, a public name, and a model served on the host, such as Ollama.
+    for target in OUTSIDE:
+        assert target in targets, target
+    assert not any(t.endswith(":8000") or t.endswith(":18000") for t in targets)
 
 
-def test_smoke_writes_the_record_and_never_fails_on_it(bundle):
+def test_smoke_passes_when_finbot_reaches_nothing_outside(bundle):
     result, _ = run_smoke(bundle, reachable="acs-gateway")
     lines = result.stdout.splitlines()
-    notes = [line for line in lines if line.startswith("NOTE:")]
-    assert "NOTE: finbot reaches acs-gateway:8090" in notes
-    assert "NOTE: finbot cannot reach example.com:443 (TimeoutError)" in notes
-    assert not any("reach" in line and "example.com" in line for line in lines if line.startswith("NOT YET"))
-    # The record changes no check: the same run with nothing reachable fails exactly the same checks.
-    other, _ = run_smoke(bundle, reachable="nothing")
-    assert [line for line in other.stdout.splitlines() if not line.startswith("NOTE:")] == \
-        [line for line in lines if not line.startswith("NOTE:")]
-    assert other.returncode == result.returncode
+    assert "NOTE: finbot reaches acs-gateway:8090" in lines
+    for target in OUTSIDE:
+        assert f"DONE: finbot can't reach {target}, outside the compose networks" in lines, target
+    assert not any("outside the compose networks" in line for line in lines if line.startswith("NOT YET"))
+
+
+@pytest.mark.parametrize("host", ["1.1.1.1", "example.com", "host.docker.internal", "@gateway"])
+def test_smoke_fails_when_finbot_reaches_outside(bundle, host):
+    result, _ = run_smoke(bundle, reachable=host)
+    failed = [line for line in result.stdout.splitlines()
+              if line.startswith("NOT YET: finbot reached") and line.endswith("outside the compose networks")]
+    assert failed and all(host in line for line in failed), result.stdout
+    assert result.returncode == 1
+
+
+def test_smoke_fails_when_the_probe_does_not_run(bundle):
+    (bundle.parent / "bin" / "docker").write_text(FAKE_DOCKER.replace("*lab-reach-record*)", "*lab-reach-record*)\n"
+                                                  "        echo 'exec failed' >&2; exit 1 ;;\n    *never-matches*)"),
+                                                  encoding="utf-8")
+    result, _ = run_smoke(bundle)
+    assert "NOT YET: the reachability probe did not run: exec failed" in result.stdout.splitlines()
+    assert result.returncode == 1
 
 
 def test_a_kept_model_key_names_the_reset_flag(bundle):

@@ -54,9 +54,10 @@ COMPOSE_OPENAI = BUNDLE / "compose.openai.yaml"
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 LAB_IMAGES = {"LAB_RUNTIME_IMAGE": "ghcr.io/genai-security-project/acs-lab-runtime",
               "LAB_FINBOT_IMAGE": "ghcr.io/genai-security-project/acs-lab-finbot"}
-# A.2 as amended: four published ports, each on loopback with its own override variable.
-PORTS = {"finbot": ("LAB_PORT_FINBOT", 8000), "acs-gateway": ("LAB_PORT_APPROVER", 8090),
-         "acs-viewer": ("LAB_PORT_VIEWER", 8095), "jaeger": ("LAB_PORT_JAEGER", 16686)}
+# A.2 as amended: three published ports, each on loopback with its own override variable. FinBot joins only internal
+# networks, so it publishes none (Rock, 2026-11-22, C-17).
+PORTS = {"acs-gateway": ("LAB_PORT_APPROVER", 8090), "acs-viewer": ("LAB_PORT_VIEWER", 8095),
+         "jaeger": ("LAB_PORT_JAEGER", 16686)}
 # FinBot's own docker-compose.yml at 1450fc4, its app service's environment block, vendored so the test needs no
 # network. The lab may differ from it in exactly the four A.3 settings.
 FINBOT_OWN_ENV = {"REDIS_URL": "redis://redis:6379", "DATABASE_URL": "${DATABASE_URL:-sqlite://data/finbot.db}",
@@ -143,7 +144,7 @@ def test_ports_bind_loopback_with_override():
         assert services[name]["ports"] == [f"127.0.0.1:${{{variable}:-{port}}}:{port}"], name
 
 
-def test_only_four_ports_published():
+def test_only_three_ports_published():
     published = {name for path in (COMPOSE, COMPOSE_OPENAI) for name, s in _services(path).items() if s.get("ports")}
     assert published == set(PORTS)
     for path in (COMPOSE, COMPOSE_OPENAI):
@@ -166,7 +167,25 @@ def test_acs_net_internal_and_ui_net_not():
     networks = _compose()["networks"]
     assert networks["acs-net"]["internal"] is True
     assert not networks["ui-net"].get("internal", False)
-    assert not networks["finbot-net"].get("internal", False)
+    assert networks["finbot-net"]["internal"] is True
+    assert not networks["upstream-net"].get("internal", False)
+
+
+def test_finbot_joins_only_internal_networks_and_publishes_nothing():
+    # Rock, 2026-11-22 (C-17): FinBot has no route out of the stack. The gateway is its only way to a model.
+    merged = _merged(COMPOSE, COMPOSE_OPENAI)
+    finbot = merged["services"]["finbot"]
+    for network in finbot["networks"]:
+        assert merged["networks"][network].get("internal") is True, network
+    assert not finbot.get("ports") and "extra_hosts" not in finbot
+
+
+def test_only_the_gateway_joins_the_outside_network():
+    # The gateway reaches OpenAI for live runs and capture takes, and the host for a local model, over upstream-net.
+    on_upstream = {name for name, s in _services().items() if "upstream-net" in s.get("networks", [])}
+    assert on_upstream == {"acs-gateway"}
+    outside = {name for name, n in _compose()["networks"].items() if not (n or {}).get("internal")}
+    assert outside == {"upstream-net", "ui-net"}
 
 
 def test_published_services_have_a_non_internal_network():
@@ -179,7 +198,8 @@ def test_published_services_have_a_non_internal_network():
 
 def test_service_networks_match_a2():
     expected = {"finbot": {"finbot-net", "drive-net"}, "redis": {"finbot-net"},
-                "acs-gateway": {"finbot-net", "acs-net"}, "acs-guardian": {"acs-net"}, "opa": {"acs-net"},
+                "acs-gateway": {"finbot-net", "acs-net", "upstream-net"}, "acs-guardian": {"acs-net"},
+                "opa": {"acs-net"},
                 "acs-viewer": {"ui-net"}, "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net", "drive-net"}}
     services = _services()
     assert set(services) == set(expected)
@@ -831,10 +851,11 @@ def test_smoke_runs_module_1():
     assert "./lab.sh _" not in text
 
 
-def test_offline_override_makes_finbot_net_internal():
-    assert _compose(OFFLINE) == {"networks": {"finbot-net": {"internal": True}}}
+def test_offline_override_makes_upstream_net_internal():
+    # finbot-net is internal in the base file, so upstream-net is the one network on the model path left to close.
+    assert _compose(OFFLINE) == {"networks": {"upstream-net": {"internal": True}}}
     merged = _merged(COMPOSE, OFFLINE)
-    assert merged["networks"]["finbot-net"].get("internal") is True
+    assert merged["networks"]["upstream-net"].get("internal") is True
     # With the override, every network the model path joins is internal, so no call from the gateway or FinBot can
     # leave the stack.
     for name in ("acs-gateway", "finbot", "redis", "lab"):
@@ -843,8 +864,8 @@ def test_offline_override_makes_finbot_net_internal():
     # Everything else is the base file as it stands.
     plain = _merged(COMPOSE)
     assert merged["services"] == plain["services"]
-    assert {k: v for k, v in merged["networks"].items() if k != "finbot-net"} == \
-        {k: v for k, v in plain["networks"].items() if k != "finbot-net"}
+    assert {k: v for k, v in merged["networks"].items() if k != "upstream-net"} == \
+        {k: v for k, v in plain["networks"].items() if k != "upstream-net"}
 
 
 def test_every_lab_sh_compose_call_starts_with_the_base_file():
