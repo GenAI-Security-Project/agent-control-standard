@@ -128,7 +128,7 @@ You are building ten things:
 - **An envelope.** JSON-RPC 2.0 carrying `request_id`, `timestamp`, `acs_version`, and `metadata`.
 - **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, sub-agent spawns where the framework has them, and the session end.
 - **The disposition vocabulary.** The five dispositions: `allow`, `deny`, `modify`, `ask`, and `defer`.
-- **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
+- **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on responses for steps that write a chain entry. Intent is optional at Core; when a deployment uses Intent (for example, under an IBAC-style policy), its immutability and extension rules apply.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
 - **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default in the specification text today, which is fail-open, with deny decided as the new default) and record every decision failure as an audit event, fail-open or fail-closed.

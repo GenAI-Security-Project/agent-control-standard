@@ -23,7 +23,7 @@ ACS specifies the Guardian interface, not the engine:
 
 To try working Rego and OPA policy backends in the shipped reference Guardians, see [Choose a policy backend](./reference-implementations.md#choose-a-policy-backend).
 
-An ordinary OPA/Rego rule needs no research paradigm at all. The illustrative snippet below restricts `email.send` to internal `@example.com` recipients for employees (the exact OPA input/output binding is implementation-defined in v0.1; see [§12.1](../spec/instrument/specification.md#121-policy-engine-interface)):
+An ordinary OPA/Rego rule needs no research paradigm at all. The policy below restricts `email.send` to internal `@example.com` recipients for employees using the shipped example Guardian's lab-convention OPA interface (`{method, payload, metadata}` input and `verdict` object output at `data.acs.email.verdict`; see the [OPA backend README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/guardian/README.md#opa-backend-lab-convention)). The normative OPA binding remains open in [§12.1](../spec/instrument/specification.md#121-policy-engine-interface):
 
 ```rego
 package acs.email
@@ -32,26 +32,23 @@ import rego.v1
 
 is_email_send if {
   input.method == "steps/toolCallRequest"
-  input.params.payload.tool.name == "email.send"
+  input.payload.tool.name == "email.send"
 }
 
 is_employee if {
-  "employee" in input.params.metadata.user_context.roles
+  "employee" in input.metadata.user_context.roles
 }
 
-has_string_recipient if {
-  is_string(input.params.payload.arguments.recipient.value)
-}
-
-is_internal_recipient if {
-  has_string_recipient
-  parts := split(lower(input.params.payload.arguments.recipient.value), "@")
+recipient_parts := parts if {
+  recipient := input.payload.arguments.recipient.value
+  is_string(recipient)
+  parts := split(lower(recipient), "@")
   count(parts) == 2
   parts[0] != ""
-  parts[1] == "example.com"
+  parts[1] != ""
 }
 
-decision := {
+verdict := {
   "decision": "deny",
   "reasoning": "Caller role is not authorized to send email.",
   "reason_codes": ["role_not_authorized"],
@@ -63,14 +60,14 @@ decision := {
   not is_employee
 } else := {
   "decision": "deny",
-  "reasoning": "Email recipient must be a string address.",
+  "reasoning": "Email recipient must be a valid single email address.",
   "reason_codes": ["invalid_recipient"],
   "policy_references": [
-    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-string-recipient"}
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-valid-recipient"}
   ],
 } if {
   is_email_send
-  not has_string_recipient
+  not recipient_parts
 } else := {
   "decision": "deny",
   "reasoning": "External email recipients are not allowed for this role.",
@@ -78,18 +75,28 @@ decision := {
   "policy_references": [
     {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "internal-recipients-only"}
   ],
+  "policy_data": {
+    "recipient_domain": recipient_parts[1],
+    "allowed_domains": ["example.com"],
+    "caller_roles": input.metadata.user_context.roles,
+  },
 } if {
   is_email_send
-  not is_internal_recipient
+  recipient_parts[1] != "example.com"
 } else := {
   "decision": "allow",
+  "reason_codes": ["internal_recipient_allowed"],
   "policy_references": [
     {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "allow-employee-internal-email"}
   ],
 } if {
   is_email_send
+} else := {"decision": "allow"} if {
+  input.method in {"steps/toolCallRequest", "steps/toolCallResult"}
 }
 ```
+
+In production, bind caller roles from an authenticated identity token or Guardian-verified session state rather than trusting unverified `metadata.user_context.roles` asserted by the Observed Agent (see [Identity](../identity/overview.md)).
 
 ## Optional authorization paradigms
 
@@ -97,7 +104,7 @@ Four published agent-security architectures appear across ACS documentation. Non
 
 | Paradigm | Core idea | ACS profiles used | Wire fields cited | v0.1 mapping completeness |
 |---|---|---|---|---|
-| **IBAC** | Bind runtime actions to an immutable task-scoped `Intent` committed before untrusted data enters | `acs-core` (`acs-provenance` not required) | `SessionContext.intent`, `ASK` (`intent_extension`), `policy_data.ibac` | **Partial (wire fields and immutability).** ACS defines `Intent`, immutability (§8.4), and `ask_details.intent_extension` (§9.1), while v0.1 leaves ASK answer delivery ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and capability-to-`Intent.parsed` matching ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)) open; intent parsing stays Guardian-internal. |
+| **IBAC** | Bind runtime actions to an immutable task-scoped `Intent` committed before untrusted data enters | `acs-core` (`acs-provenance` not required) | `sessionStart`/`agentTrigger` `payload.intent`, `ASK` (`intent_extension`), `policy_data.ibac` | **Partial (wire fields and immutability).** ACS defines `Intent`, immutability (§8.4), and `ask_details.intent_extension` (§9.1), while v0.1 leaves ASK answer delivery ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and capability-to-`Intent.parsed` matching ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)) open; intent parsing stays Guardian-internal. |
 | **FIDES** | Deterministic information-flow control with confidentiality/integrity labels across tool calls and compaction | `acs-core`, `acs-provenance` | Per-field `Provenance` (`origin`, `source_id`, `derived_from`), `preCompact`/`postCompact`, `cited_provenance_ids`, `policy_data.fides` | **Partial (wire-data level).** ACS carries factual lineage; label lattice arithmetic, P-T/P-F rules, and planner hiding/revealing primitives live in the Guardian and framework. |
 | **CaMeL** | Separate trusted control flow from untrusted data via a synthesized program and per-argument capability checks | `acs-core`, `acs-provenance` | Per-argument `ToolArgumentValue.provenance` (`derived_from` graph) on `steps/toolCallRequest`, `cited_provenance_ids`, `policy_data.camel` | **Partial (enforcement-boundary level).** ACS enforces tool-call boundaries and carries argument lineage; the dual-LLM architecture and custom interpreter live inside the Observed Agent framework. |
 | **AARM** | Pre-execution interception of autonomous actions with identity binding, cumulative context tracking, and tamper-evident receipts | `acs-core`, `acs-audit` (plus `acs-crypto` for non-repudiable receipts and `acs-provenance` for cumulative-taint rules) | Dispositions, `chain_hash`, `request_hash`, `turnStart`/`turnEnd`, `provenance_summary`, `cited_provenance_ids`, `policy_data.aarm` | **High-level alignment.** The formal requirement-by-requirement R1–R9 mapping and gap analysis is tracked in [issue #213](https://github.com/GenAI-Security-Project/agent-control-standard/issues/213). |
@@ -126,7 +133,7 @@ Four published agent-security architectures appear across ACS documentation. Non
 **How it maps to ACS:**
 
 - The Observed Agent claims the `acs-provenance` profile and attaches factual `Provenance` objects (`provenance_id`, `origin`, `source_id`, `derived_from`) to every data-bearing field ([§7](../spec/instrument/specification.md#7-provenance)).
-- `steps/preCompact` and `steps/postCompact` preserve lineage across context-window compaction ([Hooks](../spec/instrument/hooks.md#precompact)).
+- `preCompact` and `postCompact` preserve lineage across context-window compaction ([Hooks](../spec/instrument/hooks.md#precompact)).
 - The Guardian derives trust/integrity labels from `origin` + `source_id` against local policy ([§7.1](../spec/instrument/specification.md#71-optional-trust-enum)), cites the relevant IDs in `cited_provenance_ids`, and records flow facts in `policy_data.fides`.
 
 **Completeness:** Partial at the wire-data layer. ACS supplies factual lineage and interception hooks, while FIDES's label lattice arithmetic and planner-side variable-hiding/revealing primitives are implemented outside the wire contract.
@@ -148,13 +155,13 @@ Four published agent-security architectures appear across ACS documentation. Non
 
 **Source:** *Autonomous Action Runtime Management (AARM): A System Specification for Securing AI-Driven Actions at Runtime* ([arXiv:2602.09433](https://arxiv.org/abs/2602.09433); [aarm.dev](https://aarm.dev/), Cloud Security Alliance).
 
-**What it is:** A system-level specification defining requirements (Core R1–R6 and Extended R7–R9) for intercepting autonomous agent actions before execution, binding identity and context, tracking cumulative drift/taint, and emitting tamper-evident action receipts.
+**What it is:** A system-level specification defining requirements (R1–R9) for intercepting autonomous agent actions before execution, binding identity and context, tracking cumulative drift/taint, and emitting tamper-evident action receipts.
 
 **How it maps to ACS:**
 
 - `acs-core` covers pre-execution interception, dispositions, decision honoring, and baseline signed envelopes.
 - `acs-audit` adds `request_hash` to the hash-chained `ContextEntry` log; `acs-crypto` adds asymmetric/post-quantum signatures when third parties need to verify receipts without sharing a symmetric key.
-- `steps/turnStart`, `steps/turnEnd`, `provenance_summary`, and `acs-provenance` support cumulative-context lookback rules, cited in `cited_provenance_ids` and `policy_data.aarm`.
+- `turnStart`, `turnEnd`, `provenance_summary`, and `acs-provenance` support cumulative-context lookback rules, cited in `cited_provenance_ids` and `policy_data.aarm`.
 
 **Completeness:** High-level alignment only on this page. A formal requirement-by-requirement R1–R9 mapping and gap analysis reviewed with the AARM authors is tracked in [issue #213](https://github.com/GenAI-Security-Project/agent-control-standard/issues/213).
 

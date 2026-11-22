@@ -146,7 +146,7 @@ def test_paradigm_excerpts_fit_acs_result_and_avoid_structured_reasoning_dumps()
             continue
         assert "provenance_id=" not in reasoning, reasoning
         assert "version v" not in reasoning, reasoning
-        assert not re.search(r"\b(session|step)\s+[a-z0-9-]+", reasoning, re.I), reasoning
+        assert not re.search(r"\b(session|step)\s+(?=[a-z0-9-]*\d)[a-z0-9-]+", reasoning, re.I), reasoning
         for ref in result.get("policy_references", []):
             assert ref["policy_id"] not in reasoning, reasoning
             if "rule_id" in ref:

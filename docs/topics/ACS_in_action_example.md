@@ -4,7 +4,7 @@ A worked example of an Observed Agent calling the `email.send` tool while a Guar
 
 ## Sequence
 
-The diagram below shows a full session exchange: handshake, session start, AgBOM snapshot, user message, and a `steps/toolCallRequest` gate with both an `allow` path and a `deny` path. `agbom/snapshot` fires **after** `steps/sessionStart` and before any content-bearing hook ([Hooks](../spec/instrument/hooks.md#agbomsnapshot), [Inspect](../spec/inspect/README.md#wire-methods)). Under `acs-core`, every hook request and decision response carries `signature`, and every content-bearing response carries the updated `chain_hash`.
+The diagram below shows a full session exchange: handshake, session start, AgBOM snapshot, user message, and a `steps/toolCallRequest` gate with both an `allow` path and a `deny` path. `agbom/snapshot` fires **after** `steps/sessionStart` and before any content-bearing hook ([Hooks](../spec/instrument/hooks.md#agbomsnapshot), [Inspect](../spec/inspect/README.md#wire-methods)). Under `acs-core`, every hook request and decision response carries `signature`, and every step where the Guardian writes a `ContextEntry` — including `steps/sessionStart`, `agbom/snapshot`, and each content-bearing hook — returns the updated `chain_hash` ([§8.6](../spec/instrument/specification.md#86-chain-head-publication-normative)).
 
 ```mermaid
 sequenceDiagram
@@ -52,7 +52,7 @@ The Observed Agent has been asked by an authenticated employee (`user-12345`, ro
 
 This example claims `acs-core`, `acs-trace`, `acs-inspect`, and `acs-provenance`. Following v0.1 expected practice ([§7.1](../spec/instrument/specification.md#71-optional-trust-enum)), the Provenance objects carry **factual provenance only** (`provenance_id`, `origin`, `source_id`, `derived_from`) and omit the optional `trust` enum. Any Guardian policy that needs trust derives it from `origin` and `source_id` against local policy, as [Trust basis](../concepts/trust.md) explains.
 
-The `signature.value` strings and `chain_hash` digests below are uncomputed placeholders, not valid Base64 tags or live digests. On the wire, `signature.value` is the Base64 signature over the UTF-8 RFC 8785 (JCS) canonical envelope with `signature` removed ([§10](../spec/instrument/specification.md#10-cryptographic-signatures)). Separately, `chain_hash` is the lowercase-hex SHA-256 of the UTF-8 JCS-canonical `ContextEntry` (with `entry_hash` and `previous_hash` removed) concatenated with the raw bytes of `previous_hash` ([§8.2](../spec/instrument/specification.md#82-chain-hashing-normative)).
+The `signature.value` strings and `chain_hash` digests below are uncomputed placeholders, not valid Base64 tags or live digests. On the wire, `signature.value` is the Base64 signature over the UTF-8 RFC 8785 (JCS) canonical envelope with `signature` removed ([§10](../spec/instrument/specification.md#10-cryptographic-signatures)). Separately, `chain_hash` is the lowercase-hex SHA-256 of the UTF-8 JCS-canonical `ContextEntry` (with `entry_hash` and `previous_hash` removed) concatenated with the raw 32 bytes decoded from the previous entry's hex `previous_hash`, or empty bytes for the session's first entry ([§8.2](../spec/instrument/specification.md#82-chain-hashing-normative)).
 
 ### Request
 
@@ -112,29 +112,80 @@ The `signature.value` strings and `chain_hash` digests below are uncomputed plac
 
 ### Plain OPA/Rego policy (identity, role, and resource)
 
-[Specification §12.1](../spec/instrument/specification.md#121-policy-engine-interface) names OPA/Rego as the v0.1 starting reference engine. A straightforward deployment checks who is acting, what role they hold, and which resource the tool targets — no specialized research paradigm required:
+[Specification §12.1](../spec/instrument/specification.md#121-policy-engine-interface) names OPA/Rego as the v0.1 starting reference engine. A straightforward deployment checks who is acting, what role they hold, and which resource the tool targets — no specialized research paradigm required. The policy below uses the shipped example Guardian's lab-convention OPA interface (`{method, payload, metadata}` input → `verdict` object at `data.acs.email.verdict`; see the [OPA backend README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/guardian/README.md#opa-backend-lab-convention)):
 
 ```rego
 package acs.email
 
 import rego.v1
 
-default allow := false
-
-allow if {
+is_email_send if {
   input.method == "steps/toolCallRequest"
-  input.params.payload.tool.name == "email.send"
-  "employee" in input.params.metadata.user_context.roles
-  recipient := input.params.payload.arguments.recipient.value
+  input.payload.tool.name == "email.send"
+}
+
+is_employee if {
+  "employee" in input.metadata.user_context.roles
+}
+
+recipient_parts := parts if {
+  recipient := input.payload.arguments.recipient.value
   is_string(recipient)
   parts := split(lower(recipient), "@")
   count(parts) == 2
   parts[0] != ""
-  parts[1] == "example.com"
+  parts[1] != ""
+}
+
+verdict := {
+  "decision": "deny",
+  "reasoning": "Caller role is not authorized to send email.",
+  "reason_codes": ["role_not_authorized"],
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-employee-role"}
+  ],
+} if {
+  is_email_send
+  not is_employee
+} else := {
+  "decision": "deny",
+  "reasoning": "Email recipient must be a valid single email address.",
+  "reason_codes": ["invalid_recipient"],
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-valid-recipient"}
+  ],
+} if {
+  is_email_send
+  not recipient_parts
+} else := {
+  "decision": "deny",
+  "reasoning": "External email recipients are not allowed for this role.",
+  "reason_codes": ["external_recipient_denied"],
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "internal-recipients-only"}
+  ],
+  "policy_data": {
+    "recipient_domain": recipient_parts[1],
+    "allowed_domains": ["example.com"],
+    "caller_roles": input.metadata.user_context.roles,
+  },
+} if {
+  is_email_send
+  recipient_parts[1] != "example.com"
+} else := {
+  "decision": "allow",
+  "reason_codes": ["internal_recipient_allowed"],
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "allow-employee-internal-email"}
+  ],
+} if {
+  is_email_send
+} else := {"decision": "allow"} if {
+  input.method in {"steps/toolCallRequest", "steps/toolCallResult"}
 }
 ```
 
-The Guardian wraps this boolean verdict into the ACS decision envelope below (see [Authorization Paradigms](./authorization-paradigms.md#policy-engines-vs-authorization-paradigms) for a fuller Rego rule that emits structured `decision`, `reason_codes`, and `policy_references` directly).
+The Guardian merges the `verdict` object above with `type`, `acs_version`, `request_id`, `chain_hash`, optional `metadata`, and `signature` to produce the full decision envelopes below. In production, bind caller roles from an authenticated identity token or Guardian-verified session state rather than trusting unverified `metadata.user_context.roles` asserted by the Observed Agent (see [Identity](../identity/overview.md)).
 
 ### Decision: `allow` (internal recipient)
 
@@ -234,13 +285,13 @@ The four architectures below are **optional policy and citation styles** that ri
 
 **Source:** [ibac.dev](https://ibac.dev/) (Potti, 2026). **Mapping:** partial — ACS defines `Intent`, immutability (§8.4), and `ask_details.intent_extension` (§9.1), while `ASK` answer delivery ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and `capability`-to-`Intent.parsed` matching ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)) remain open in v0.1; intent parsing stays Guardian-internal. Requires `acs-core` only.
 
-User's committed `Intent.parsed`: `[{"tool": "kb.search", "operation": "read", "resource": "project-x/*"}]` (each entry is a `{tool, operation, resource}` object per [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json)). The agent attempts `email.send` outside that list. An IBAC-style policy denies; the user can extend `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) if deployment policy permits.
+In a read-only summarization session ("summarize Project X status", with no instruction to send email), the user's committed `Intent.parsed` is `[{"tool": "kb.search", "operation": "read", "resource": "project-x/*"}]` (each entry is a `{tool, operation, resource}` object per [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json)). When untrusted content steers the agent to call `email.send` outside that list, an IBAC-style policy denies (or returns `ask` / `defer` if deployment policy permits extending `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative)).
 
 ```json
 {
   "decision": "deny",
   "reasoning": "Sending email is outside the task authorized for this session.",
-  "reason_codes": ["ibac_capability_mismatch"],
+  "reason_codes": ["ibac_intent_mismatch"],
   "policy_references": [
     { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "tool-call-must-be-in-intent" }
   ],
@@ -260,13 +311,13 @@ User's committed `Intent.parsed`: `[{"tool": "kb.search", "operation": "read", "
 
 **Source:** Costa et al., *Securing AI Agents with Information-Flow Control* ([arXiv:2505.23643](https://arxiv.org/abs/2505.23643), 2025). **Mapping:** partial (wire-data level) — ACS carries factual `Provenance` under `acs-provenance`; label lattice arithmetic and planner hiding/revealing primitives stay in the Guardian and framework.
 
-Later in the session, `email.send` is called with both `recipient` and `body` derived from untrusted retrieved content (`p2`) with no trusted re-grounding, failing a FIDES-style Trusted action (`P-T`) check.
+Later in a session, `email.send` is called with `recipient` derived from untrusted retrieved content (`p2`) with no trusted re-grounding, failing a FIDES-style Trusted action (`P-T`) check.
 
 ```json
 {
   "decision": "deny",
-  "reasoning": "Cannot send email when both recipient and body come from untrusted retrieved content.",
-  "reason_codes": ["fides_p_t_failed", "untrusted_recipient_derivation"],
+  "reasoning": "Cannot send email to a recipient derived from untrusted retrieved content.",
+  "reason_codes": ["fides_p_t_violation", "untrusted_recipient_derivation"],
   "policy_references": [
     { "policy_id": "acme-fides", "policy_version": "v1", "rule_id": "no-untrusted-recipient-derivation" }
   ],
@@ -292,7 +343,7 @@ A calendar agent's unprivileged model populates `attendees` from a forwarded inv
 {
   "decision": "deny",
   "reasoning": "Meeting attendees cannot come from untrusted retrieved content.",
-  "reason_codes": ["camel_argument_dependency_violation"],
+  "reason_codes": ["camel_dependency_graph_violation"],
   "policy_references": [
     { "policy_id": "acme-camel", "policy_version": "v1", "rule_id": "consequential-args-must-trace-to-trusted-input" }
   ],
@@ -337,13 +388,13 @@ After a session processes untrusted email content, the agent attempts `payment.t
 
 ### Composition: IBAC outer + FIDES inner
 
-In multi-paradigm deployments a single decision can cite all firing rules — `policy_references` carries one entry per rule, `reason_codes` aggregates, and `policy_data` is keyed by paradigm name:
+In multi-paradigm deployments a single decision can cite all firing rules — `policy_references` carries one entry per rule, `reason_codes` aggregates, and `policy_data` is keyed by paradigm name. For example, in the read-only summarization session above, if untrusted content causes the agent to call `email.send` with a body derived from that retrieval, both rules fire:
 
 ```json
 {
   "decision": "deny",
   "reasoning": "Sending email is outside the authorized task and uses untrusted retrieved content.",
-  "reason_codes": ["ibac_capability_mismatch", "fides_p_t_failed"],
+  "reason_codes": ["ibac_intent_mismatch", "fides_p_t_violation"],
   "policy_references": [
     { "policy_id": "acme-ibac", "policy_version": "v1", "rule_id": "tool-call-must-be-in-intent" },
     { "policy_id": "acme-fides", "policy_version": "v1", "rule_id": "p-t-blocks-untrusted-derivation" }
