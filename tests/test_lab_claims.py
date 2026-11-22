@@ -2212,7 +2212,7 @@ def test_n07_and_n12_are_retired_and_excuse_nothing():
 def test_a_retired_not_claimed_row_needs_no_phrase_line(tree):
     root, ledger = tree
     text = ledger.read_text(encoding="utf-8")
-    ledger.write_text(text.replace("| N-02 | That requests are attributable. |", "| N-02 | Retired 2026-11-22. |", 1)
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. | Requests stay on HMAC inside the trust boundary by design. |", "| N-02 | Retired 2026-11-22. | Rock, 2026-11-22. |", 1)
                       .replace("N-02: attributable\n", "", 1), encoding="utf-8")
     parsed = lab_claims.load_ledger(ledger)
     assert "N-02" in parsed.ids and "N-02" not in dict(parsed.excuses)
@@ -2224,7 +2224,7 @@ def test_a_retired_not_claimed_row_needs_no_phrase_line(tree):
 def test_a_retired_not_claimed_row_cannot_keep_a_phrase_line(tree):
     _, ledger = tree
     text = ledger.read_text(encoding="utf-8")
-    ledger.write_text(text.replace("| N-02 | That requests are attributable. |", "| N-02 | Retired 2026-11-22. |", 1),
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. | Requests stay on HMAC inside the trust boundary by design. |", "| N-02 | Retired 2026-11-22. | Rock, 2026-11-22. |", 1),
                       encoding="utf-8")
     with pytest.raises(ValueError, match="retired"):
         lab_claims.load_ledger(ledger)
@@ -2252,7 +2252,7 @@ def test_the_sign_gate_names_a_retired_claim_row(tree, capsys):
     text = ledger.read_text(encoding="utf-8")
     start = text.index("| C-09 |")
     end = text.index("\n", start)
-    ledger.write_text(text[:start] + "| C-09 | Retired 2026-11-22. | Rock, 2026-11-22. | None. |" + text[end:],
+    ledger.write_text(text[:start] + "| C-09 | Retired 2026-11-22. | Rock, 2026-11-22. | |" + text[end:],
                       encoding="utf-8")
     parsed = lab_claims.load_ledger(ledger)
     assert "C-09" in parsed.retired and "C-09" not in parsed.unconfirmed
@@ -2284,3 +2284,38 @@ def test_c11_cites_the_release_version():
     row = {r[0]: r for r in _rows(_section("Claims"))}["C-11"]
     assert "unconfirmed" not in " ".join(row).lower()
     assert ("C-11", "version.txt") in lab_claims.load_ledger(LEDGER).evidence
+
+
+@pytest.mark.parametrize("cells", [
+    "Retired 2026-11-22. | Unconfirmed: the lab ran in CI. | The lab ran on the build team's machines. |",
+    "Retired 2026-11-22. | Rock, 2026-11-22. | The lab ran on the build team's machines. |",
+    "Retired 2026-11-22. | Rock, 2026-11-22. The lab ran in CI. | |",
+    "Retired 2026-11-22. | Rock, 2026-11-21. | |",
+])
+def test_a_retired_row_carries_no_stale_text(tree, cells):
+    # Re-review minor: a retired row's evidence reads only the ruling, with the same date, and its limits are empty,
+    # so no claim text rides along into a signed ledger.
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    start = text.index("| C-09 |")
+    end = text.index("\n", start)
+    ledger.write_text(text[:start] + f"| C-09 | {cells}" + text[end:], encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
+
+
+def test_a_retired_not_claimed_row_carries_no_stale_text(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-07 | Retired 2026-11-22. | Rock, 2026-11-22. |",
+                                   "| N-07 | Retired 2026-11-22. | Clips are kept takes, not measurements. |", 1),
+                      encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
+
+
+def test_retired_claim_rows_have_empty_limits_and_c11_cites_the_tag():
+    rows = {r[0]: r for r in _rows(_section("Claims"))}
+    for row in ("C-07", "C-12"):
+        assert rows[row][3] == "", row
+    assert "`v0.1.5`" in rows["C-11"][2]

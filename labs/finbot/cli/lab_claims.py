@@ -47,8 +47,9 @@ EVIDENCE_TOKEN = re.compile(r"`([^`]+)`")
 # A line number, a line range or an anchor after a cited path points into the file, so it goes before the check.
 EVIDENCE_POINTER = re.compile(r"(?::\d+(?:-\d+)?|#[^/]*)$")
 # A retired row keeps its id, and its claim cell holds only the date of the ruling that retired it, as
-# "Retired 2026-11-22." (Rock, 2026-11-22). Nothing else may share the cell, so no claim rides on a retired id.
-RETIRED = re.compile(r"Retired \d{4}-\d{2}-\d{2}\.")
+# "Retired 2026-11-22." (Rock, 2026-11-22). Nothing else may share the cell, so no claim rides on a retired id. Its
+# evidence reads "Rock, <the same date>." and a claim row's limits cell is empty.
+RETIRED = re.compile(r"Retired (\d{4}-\d{2}-\d{2})\.")
 # A space may sit inside a part, as in docs/my file.md, but never at either end of one.
 CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?"
                         r"(?:/[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?)*/?")
@@ -113,7 +114,15 @@ def _retired(text: str) -> frozenset[str]:
         if len(cells) < 2 or not re.fullmatch(r"[CN]-\d{2}", cells[0]):
             continue
         shown = _cell_text(cells[1])
-        if RETIRED.fullmatch(shown):
+        match = RETIRED.fullmatch(shown)
+        if match:
+            # The rest of the row names only the ruling, with the same date, and a claim row's limits stay empty, so
+            # no stale claim text rides into a signed ledger (re-review, round 4).
+            ruling = f"Rock, {match.group(1)}."
+            rest = [_cell_text(c) for c in cells[2:]]
+            expected = [ruling, ""] if cells[0].startswith("C-") else [ruling]
+            if rest != expected:
+                raise ValueError(f"{cells[0]} is retired, so the rest of its row must read {expected!r}, got {rest!r}")
             found.add(cells[0])
         elif shown.lower().startswith("retired"):
             raise ValueError(f"{cells[0]} looks retired, so its claim cell must read exactly "
