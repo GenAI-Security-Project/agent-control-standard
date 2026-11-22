@@ -146,6 +146,14 @@ REACH
 else
     fail "the reachability probe did not run: $(printf '%s' "$reach" | tail -n 1)"
 fi
+# The positive control (review round 4, M3). FinBot failing to reach 1.1.1.1 proves isolation only when the gateway,
+# on upstream-net in the same run, does reach it. Otherwise the runner itself can't see out, and the checks above
+# pass for the wrong reason.
+control=$(in_service acs-gateway python -c "$reach_probe" 1.1.1.1 443 2>&1 || true)
+case $control in
+    "reaches 1.1.1.1:443") pass "acs-gateway reaches 1.1.1.1:443, so the runner can see out" ;;
+    *) fail "acs-gateway can't reach 1.1.1.1:443, so the runner can't see out and FinBot's checks above show nothing: $control" ;;
+esac
 
 for service_file in "acs-guardian /run/acs/guardian.key" "acs-guardian /run/acs/hmac.key" \
                     "acs-gateway /run/acs/hmac.key" "acs-gateway /run/acs/admin.token"; do

@@ -32,6 +32,11 @@ case "$*" in
     *"exec -T redis wget"*)
         printf '%s\n' "${FAKE_NO_TOKEN_REPLY:-}"
         exit 1 ;;
+    *"exec -T acs-gateway python -c "*lab-reach-record*)
+        while [ "$#" -gt 0 ] && [ "$1" != -c ]; do shift; done
+        shift 2
+        if [ "${FAKE_CONTROL:-reaches}" = reaches ]; then printf 'reaches %s:%s\\n' "$1" "$2"
+        else printf 'cannot reach %s:%s (OSError)\\n' "$1" "$2"; fi ;;
     *lab-reach-record*)
         while [ "$#" -gt 0 ] && [ "$1" != -c ]; do shift; done
         shift 2
@@ -78,21 +83,21 @@ def bundle(tmp_path: Path) -> Path:
 
 
 def run_smoke(bundle: Path, reachable: str = "acs-gateway", no_token_reply: str = "", lab_fail: str = "",
-              transcript: str = "") -> tuple[subprocess.CompletedProcess, list[str]]:
+              transcript: str = "", control: str = "reaches") -> tuple[subprocess.CompletedProcess, list[str]]:
     log = bundle.parent / "docker.log"
     log.write_text("", encoding="utf-8")
     lab_log = bundle.parent / "lab.log"
     lab_log.write_text("", encoding="utf-8")
     env = {**os.environ, "PATH": f"{bundle.parent / 'bin'}:{os.environ['PATH']}", "FAKE_DOCKER_LOG": str(log),
            "FAKE_REACHABLE": reachable, "FAKE_NO_TOKEN_REPLY": no_token_reply, "FAKE_LAB_LOG": str(lab_log),
-           "FAKE_LAB_FAIL": lab_fail, "FAKE_LAB_TRANSCRIPT": transcript}
+           "FAKE_LAB_FAIL": lab_fail, "FAKE_LAB_TRANSCRIPT": transcript, "FAKE_CONTROL": control}
     result = subprocess.run(["sh", str(bundle / "images" / "smoke.sh")], env=env, capture_output=True, text=True,
                             timeout=60)
     return result, log.read_text(encoding="utf-8").splitlines()
 
 
 def _probe_targets(calls: list[str]) -> list[str]:
-    probe = [c for c in calls if "lab-reach-record" in c]
+    probe = [c for c in calls if "lab-reach-record" in c and "exec -T finbot " in c]
     assert len(probe) == 1, calls
     assert probe[0].startswith("compose -f compose.yaml exec -T finbot python -c ")
     words = probe[0].split()
@@ -136,6 +141,21 @@ def test_smoke_fails_when_finbot_reaches_outside(bundle, host):
     failed = [line for line in result.stdout.splitlines()
               if line.startswith("NOT YET: finbot reached") and line.endswith("outside the compose networks")]
     assert failed and all(host in line for line in failed), result.stdout
+    assert result.returncode == 1
+
+
+def test_smoke_proves_the_runner_can_see_out(bundle):
+    # Review round 4, M3: FinBot failing to reach 1.1.1.1 means isolation only when something on the same runner can.
+    result, calls = run_smoke(bundle)
+    control = [c for c in calls if "lab-reach-record" in c and "exec -T acs-gateway " in c]
+    assert len(control) == 1 and control[0].split()[-2:] == ["1.1.1.1", "443"], calls
+    assert "DONE: acs-gateway reaches 1.1.1.1:443, so the runner can see out" in result.stdout.splitlines()
+
+
+def test_smoke_fails_when_the_runner_cannot_see_out(bundle):
+    result, _ = run_smoke(bundle, control="cannot")
+    lines = [line for line in result.stdout.splitlines() if "runner" in line]
+    assert len(lines) == 1 and lines[0].startswith("NOT YET: acs-gateway can't reach 1.1.1.1:443"), result.stdout
     assert result.returncode == 1
 
 
