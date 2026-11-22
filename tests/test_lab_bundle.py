@@ -370,9 +370,9 @@ def test_acs_services_drop_to_the_attendee_uid():
 def test_viewer_command_matches_lab_13():
     viewer = _services()["acs-viewer"]
     assert viewer["command"] == ["python", "/opt/lab/viewer/server.py", "--host", "0.0.0.0", "--port", "8095"]
+    # LAB-13's viewer is on the lab branch, so a missing server.py is a failure, never a skip.
     server = BUNDLE / "viewer" / "server.py"
-    if not server.exists():
-        pytest.skip("LAB-13's viewer has not merged into this tree yet")
+    assert server.is_file(), server
     text = server.read_text(encoding="utf-8")
     for needle in ('"--host"', '"--port"', "ACS_TRANSCRIPT_DIR", "ACS_AUDIT_FILE", "ACS_GUARDIAN_KEYS"):
         assert needle in text, needle
