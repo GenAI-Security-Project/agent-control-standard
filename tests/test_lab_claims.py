@@ -261,7 +261,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
-    for row in ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12"):
+    for row in ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12", "C-17"):
         assert f"unconfirmed {row}" in out
     assert "unsigned" not in out
     # Without the flag the same ledger is fine, since CI runs before Rock decides.
@@ -1317,9 +1317,8 @@ def test_sign_gate_refuses_a_missing_evidence_path(tree, capsys):
 
 def test_viewer_evidence_is_pending_until_lab_13_lands():
     rows = {r[0]: r for r in _rows(_section("Claims"))}
-    for row in ("C-04", "C-08"):
-        pending = rows[row][2].split("Unconfirmed", 1)
-        assert len(pending) == 2 and "LAB-13" in pending[1] and "viewer" in pending[1], row
+    pending = rows["C-04"][2].split("Unconfirmed", 1)
+    assert len(pending) == 2 and "LAB-13" in pending[1] and "viewer" in pending[1]
     # m-6: the viewer checks each answer's signature and leaves the chain to lab verify.
     assert "keys only" in rows["C-04"][2] and "lab verify" in rows["C-04"][2]
 
@@ -2129,6 +2128,26 @@ def test_c17_claims_the_agent_cannot_bypass_the_guardian(tree):
     assert rows["C-17"][1].startswith("FinBot can't bypass the Guardian.")
     assert "ClientTokenGate" in rows["C-17"][2] and "Unconfirmed:" in rows["C-17"][2]
     assert "hooks in C-06" in rows["C-17"][3]
+
+
+def test_c17_leaves_only_the_network_route_unconfirmed():
+    # The compose networks and the client-token gate are on the lab branch, so they are cited before Unconfirmed.
+    # finbot-net isn't internal, so the network alone doesn't keep FinBot off a model, and that part stays open.
+    evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-17"][2]
+    cited, pending = evidence.split("Unconfirmed:", 1)
+    for path in ("labs/finbot/compose.yaml:65-67", "labs/finbot/compose.yaml:324-325", "labs/finbot/compose.yaml:58",
+                 "adapters/gateway/src/acs_gateway/app.py:1479-1511", "labs/finbot/cli/commands.py:146-147"):
+        assert f"`{path}`" in cited, path
+    assert "finbot-net isn't internal" in pending and "LAB-15" not in evidence
+
+
+def test_c08_cites_the_viewer_and_leaves_capture_open():
+    evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-08"][2]
+    cited, pending = evidence.split("Unconfirmed", 1)
+    assert "`labs/finbot/viewer/model.py:962-965`" in cited and "`labs/finbot/viewer/static/app.js:131-136`" in cited
+    assert "`replay miss: recorded neutral reply`" in cited
+    assert "LAB-16" in pending and "recorded model" in pending and "viewer" not in pending
+    assert ("C-08", "labs/finbot/viewer/model.py") in lab_claims.load_ledger(LEDGER).evidence
 
 
 def test_n01_leads_with_the_bypass_claim_not_hiding():
