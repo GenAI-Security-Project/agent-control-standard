@@ -18,7 +18,7 @@ A claim marker is an HTML comment such as `<!-- claim:C-03 -->`. It goes in the 
 | C-04 | Anyone holding the shared HMAC key, here the gateway, can forge a Guardian allow. Decision signing makes a forgery detectable. | `adapters/src/acs/core/_signing.py` and `adapters/src/acs/client/_signing.py` (HMAC with a shared secret, and keyring verification for ML-DSA-65). Unconfirmed: the decision viewer (LAB-13) isn't on the lab branch yet. On its own branch, labs/finbot/viewer/verify.py and model.py run acs-verify over each session file, keys only, and leave the audit chain to lab verify. A row reads verified only for an ML-DSA-65 answer the viewer checked, so a forged answer in such a session reads failed, and an HMAC session reads not checked. | Detectable means a verifier holding the public key can tell. It doesn't mean anyone looked. |
 | C-05 | A Guardian signing with ML-DSA-65 refuses a session whose ClientHello doesn't offer ML-DSA-65, so a client that can only verify HMAC never gets the fallback. | `adapters/src/acs/guardian/example_guardian.py` (the handshake raises `SESSION_REFUSED`, lab convention, issue #316). | The refusal covers the response algorithm only. Requests stay on HMAC-SHA256. |
 | C-06 | Two of nineteen hook methods are governed live: `steps/toolCallRequest` and `steps/toolCallResult`. `steps/sessionStart` opens the chain, and `steps/sessionEnd` closes a session the gateway drops. | `adapters/gateway/src/acs_gateway/guardian.py` (the four method constants in `METHODS`). `docs/spec/instrument/hooks.md` (nineteen native hooks). | The gateway gates function tools only. Hosted and client-run tool types answer 501 in enforce. |
-| C-07 | Each clip is the take we kept after N attempts, with N stated per clip. The clips are demonstrations, not rates. | Unconfirmed: no clip or attempt count exists on this tree. | A clip says what one take showed. It gives no rate of anything. |
+| C-07 | Retired 2026-11-22: the clips do not state an attempt count. | Rock, 2026-11-22. | None. |
 | C-08 | Replay serves recorded model answers for the branches we recorded. Any other branch gets a fixed neutral reply, and the viewer marks it. | `adapters/gateway/src/acs_gateway/upstream.py` (`miss_response`, with fixed ids and the neutral line, the `replay_miss` audit line and the `acs.lab.replay_miss` event). `labs/finbot/viewer/model.py:57-58` and `labs/finbot/viewer/model.py:962-965` (the decision viewer turns each `replay_miss` audit line into a row of its own with the note `replay miss: recorded neutral reply`). `labs/finbot/viewer/static/app.js:131-136` (the page draws a row's note on its own line under the row). Unconfirmed: until capture, the recordings (LAB-16) and the name of the recorded model. | A miss is a fixed line, never a model's guess. |
 | C-09 | In enforce mode the lab fails closed, per D-036. Shadow mode forwards traffic on gateway faults. The v0.1.0 specification default is still proceed until the change in issue #32 merges. | `adapters/gateway/README.md` (enforce fails closed on anything it can't gate, and shadow records and forwards unchanged). `adapters/src/acs/guardian/example_guardian.py` (`on_decision_failure` is `deny` unless `ACS_ON_DECISION_FAILURE=proceed`). `specification/v0.1.0/handshake.json` (default `proceed`). | The hook adapters (Claude Code, Cursor, NAT) keep their own default and aren't part of the lab. |
 | C-10 | The lab isn't the project's committed outcome. LAB-10 times signatures only. | `adapters/benchmarks/signatures/` (signature timings, no comparison harness). | None beyond the claim itself. |
@@ -54,7 +54,6 @@ Say each of these wherever the lab is shown.
 
 - The neutral deny line is the one artifact the agent sees when a control acts. It is a fixed sentence. Like any enforcement point, a block is visible to the agent it stops, and the agent still can't get around it.
 - Replay serves recorded branches only. Any other branch gets a fixed neutral reply.
-- A clip is the kept take after N attempts, with N stated on the clip.
 
 ## Banned phrasing
 
@@ -175,7 +174,6 @@ Only a reader catches these:
 - Anything outside the repository: the deck, the narration, the run sheets, and the words spoken in a recording.
 - Anything a viewer sees but no file holds, such as video frames and audio.
 - Evidence that stopped being true after a later code change.
-- A clip shown without its attempt count.
 
 ## Sign-off
 

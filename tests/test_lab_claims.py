@@ -61,7 +61,7 @@ def test_ids_unique_and_sequential():
 
 SECTION_12_CAN_SAY = [
     "1450fc4", "FIPS 204", "forged decision", "shared HMAC key", "ClientHello", "Two of nineteen",
-    "N attempts", "fixed neutral reply", "fails closed", "committed outcome", "Release 0.1.5",
+    "fixed neutral reply", "fails closed", "committed outcome", "Release 0.1.5",
     "build team's machines",
 ]
 SECTION_12_CANT_SAY = [
@@ -261,7 +261,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
-    for row in ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12", "C-17"):
+    for row in ("C-01", "C-03", "C-08", "C-11", "C-12", "C-17"):
         assert f"unconfirmed {row}" in out
     assert "unsigned" not in out
     # Without the flag the same ledger is fine, since CI runs before Rock decides.
@@ -270,7 +270,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-07", "C-08", "C-11", "C-12", "C-17")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-08", "C-11", "C-12", "C-17")
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -2148,6 +2148,15 @@ def test_c08_cites_the_viewer_and_leaves_capture_open():
     assert "`replay miss: recorded neutral reply`" in cited
     assert "LAB-16" in pending and "recorded model" in pending and "viewer" not in pending
     assert ("C-08", "labs/finbot/viewer/model.py") in lab_claims.load_ledger(LEDGER).evidence
+
+
+def test_c07_is_retired_and_no_rule_asks_for_an_attempt_count():
+    # Rock, 2026-11-22: the clips state no attempt count. The id stays so nothing renumbers.
+    row = {r[0]: r for r in _rows(_section("Claims"))}["C-07"]
+    assert row[1].startswith("Retired 2026-11-22:") and row[2] == "Rock, 2026-11-22."
+    assert "C-07" not in lab_claims.load_ledger(LEDGER).unconfirmed
+    text = LEDGER.read_text(encoding="utf-8")
+    assert "N attempts" not in text and "attempt count." not in text.replace("state an attempt count.", "")
 
 
 def test_n01_leads_with_the_bypass_claim_not_hiding():
