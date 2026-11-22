@@ -52,7 +52,7 @@ The Observed Agent has been asked by an authenticated employee (`user-12345`, ro
 
 This example claims `acs-core`, `acs-trace`, `acs-inspect`, and `acs-provenance`. Following v0.1 expected practice ([§7.1](../spec/instrument/specification.md#71-optional-trust-enum)), the Provenance objects carry **factual provenance only** (`provenance_id`, `origin`, `source_id`, `derived_from`) and omit the optional `trust` enum. Any Guardian policy that needs trust derives it from `origin` and `source_id` against local policy, as [Trust basis](../concepts/trust.md) explains.
 
-The `signature.value` strings and `chain_hash` digests below are illustrative placeholders computed over the canonical envelopes per [§8.2](../spec/instrument/specification.md#82-chain-hashing-normative) and [§10](../spec/instrument/specification.md#10-cryptographic-signatures).
+The `signature.value` strings and `chain_hash` digests below are uncomputed placeholders, not valid Base64 tags or live digests. On the wire, `signature.value` is the Base64 signature over the UTF-8 RFC 8785 (JCS) canonical envelope with `signature` removed ([§10](../spec/instrument/specification.md#10-cryptographic-signatures)). Separately, `chain_hash` is the lowercase-hex SHA-256 of the UTF-8 JCS-canonical `ContextEntry` (with `entry_hash` and `previous_hash` removed) concatenated with the raw bytes of `previous_hash` ([§8.2](../spec/instrument/specification.md#82-chain-hashing-normative)).
 
 ### Request
 
@@ -122,9 +122,12 @@ import rego.v1
 default allow := false
 
 allow if {
+  input.method == "steps/toolCallRequest"
   input.params.payload.tool.name == "email.send"
   "employee" in input.params.metadata.user_context.roles
-  endswith(input.params.payload.arguments.recipient.value, "@example.com")
+  recipient := input.params.payload.arguments.recipient.value
+  is_string(recipient)
+  endswith(recipient, "@example.com")
 }
 ```
 
@@ -224,9 +227,9 @@ The four architectures below are **optional policy and citation styles** that ri
 
 ### IBAC — Intent-based authorization
 
-**Source:** [ibac.dev](https://ibac.dev/) (Potti, 2026). **Mapping:** wire primitives (`Intent`, immutability in §8.4, `ASK` extension in §9.1) are complete for runtime gating; intent parsing and capability matching stay Guardian-internal. Requires `acs-core` only.
+**Source:** [ibac.dev](https://ibac.dev/) (Potti, 2026). **Mapping:** partial — ACS defines `Intent`, immutability (§8.4), and `ask_details.intent_extension` (§9.1), while `ASK` answer delivery ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and `capability`-to-`Intent.parsed` matching ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)) remain open in v0.1; intent parsing stays Guardian-internal. Requires `acs-core` only.
 
-User's committed Intent: `["summarize.read"]`. The agent attempts `email.send` outside that capability list. An IBAC-style policy denies; the user can extend `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) if deployment policy permits.
+User's committed `Intent.parsed`: `[{"tool": "kb.search", "operation": "read", "resource": "project-x/*"}]` (each entry is a `{tool, operation, resource}` object per [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json)). The agent attempts `email.send` outside that list. An IBAC-style policy denies; the user can extend `Intent.parsed` via the [ASK flow](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) if deployment policy permits.
 
 ```json
 {
@@ -239,7 +242,9 @@ User's committed Intent: `["summarize.read"]`. The agent attempts `email.send` o
   "policy_data": {
     "ibac": {
       "requested_capability": { "tool": "email.send", "resource": "manager@example.com" },
-      "intent_parsed": ["summarize.read"],
+      "intent_parsed": [
+        { "tool": "kb.search", "operation": "read", "resource": "project-x/*" }
+      ],
       "closest_match_in_intent": null
     }
   },
@@ -340,7 +345,10 @@ In multi-paradigm deployments a single decision can cite all firing rules — `p
     { "policy_id": "acme-fides", "policy_version": "v1", "rule_id": "p-t-blocks-untrusted-derivation" }
   ],
   "policy_data": {
-    "ibac": { "requested_capability": { "tool": "email.send" }, "intent_parsed": ["summarize.read"] },
+    "ibac": {
+      "requested_capability": { "tool": "email.send" },
+      "intent_parsed": [{ "tool": "kb.search", "operation": "read", "resource": "project-x/*" }]
+    },
     "fides": { "p_t_passed": false, "violating_argument_path": ["body"] }
   },
   "cited_provenance_ids": ["p1", "p2", "p3"]

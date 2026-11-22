@@ -129,6 +129,10 @@ def test_paradigm_excerpts_fit_acs_result_and_avoid_structured_reasoning_dumps()
             },
         }
         _validate(SCHEMAS["response-envelope.json"], wrapped)
+        ibac = excerpt.get("policy_data", {}).get("ibac")
+        if isinstance(ibac, dict) and "intent_parsed" in ibac:
+            intent_parsed_schema = SCHEMAS["hooks/session-start.json"]["properties"]["intent"]["properties"]["parsed"]
+            _validate(intent_parsed_schema, ibac["intent_parsed"])
 
     for block in blocks:
         result = block.get("result", block)

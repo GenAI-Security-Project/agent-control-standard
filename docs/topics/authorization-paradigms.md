@@ -35,22 +35,40 @@ is_email_send if {
   input.params.payload.tool.name == "email.send"
 }
 
-allow_email_send if {
-  is_email_send
+is_employee if {
   "employee" in input.params.metadata.user_context.roles
+}
+
+has_string_recipient if {
+  is_string(input.params.payload.arguments.recipient.value)
+}
+
+is_internal_recipient if {
+  has_string_recipient
   endswith(input.params.payload.arguments.recipient.value, "@example.com")
 }
 
 decision := {
-  "decision": "allow",
+  "decision": "deny",
+  "reasoning": "Caller role is not authorized to send email.",
+  "reason_codes": ["role_not_authorized"],
   "policy_references": [
-    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "allow-employee-internal-email"}
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-employee-role"}
   ],
 } if {
-  allow_email_send
-}
-
-decision := {
+  is_email_send
+  not is_employee
+} else := {
+  "decision": "deny",
+  "reasoning": "Email recipient must be a string address.",
+  "reason_codes": ["invalid_recipient"],
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "require-string-recipient"}
+  ],
+} if {
+  is_email_send
+  not has_string_recipient
+} else := {
   "decision": "deny",
   "reasoning": "External email recipients are not allowed for this role.",
   "reason_codes": ["external_recipient_denied"],
@@ -59,7 +77,14 @@ decision := {
   ],
 } if {
   is_email_send
-  not allow_email_send
+  not is_internal_recipient
+} else := {
+  "decision": "allow",
+  "policy_references": [
+    {"policy_id": "acme-email-baseline", "policy_version": "v1", "rule_id": "allow-employee-internal-email"}
+  ],
+} if {
+  is_email_send
 }
 ```
 
@@ -69,7 +94,7 @@ Four published agent-security architectures appear across ACS documentation. Non
 
 | Paradigm | Core idea | ACS profiles used | Wire fields cited | v0.1 mapping completeness |
 |---|---|---|---|---|
-| **IBAC** | Bind runtime actions to an immutable task-scoped `Intent` committed before untrusted data enters | `acs-core` (`acs-provenance` not required) | `SessionContext.intent`, `ASK` (`intent_extension`), `policy_data.ibac` | **Wire primitives complete for runtime gating.** Intent parsing and capability matching remain Guardian-internal. |
+| **IBAC** | Bind runtime actions to an immutable task-scoped `Intent` committed before untrusted data enters | `acs-core` (`acs-provenance` not required) | `SessionContext.intent`, `ASK` (`intent_extension`), `policy_data.ibac` | **Partial (wire fields and immutability).** ACS defines `Intent`, immutability (§8.4), and `ask_details.intent_extension` (§9.1), while v0.1 leaves ASK answer delivery ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and capability-to-`Intent.parsed` matching ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)) open; intent parsing stays Guardian-internal. |
 | **FIDES** | Deterministic information-flow control with confidentiality/integrity labels across tool calls and compaction | `acs-core`, `acs-provenance` | Per-field `Provenance` (`origin`, `source_id`, `derived_from`), `preCompact`/`postCompact`, `cited_provenance_ids`, `policy_data.fides` | **Partial (wire-data level).** ACS carries factual lineage; label lattice arithmetic, P-T/P-F rules, and planner hiding/revealing primitives live in the Guardian and framework. |
 | **CaMeL** | Separate trusted control flow from untrusted data via a synthesized program and per-argument capability checks | `acs-core`, `acs-provenance` | Per-argument `ToolArgumentValue.provenance` (`derived_from` graph) on `steps/toolCallRequest`, `cited_provenance_ids`, `policy_data.camel` | **Partial (enforcement-boundary level).** ACS enforces tool-call boundaries and carries argument lineage; the dual-LLM architecture and custom interpreter live inside the Observed Agent framework. |
 | **AARM** | Pre-execution interception of autonomous actions with identity binding, cumulative context tracking, and tamper-evident receipts | `acs-core`, `acs-audit` (plus `acs-crypto` for non-repudiable receipts and `acs-provenance` for cumulative-taint rules) | Dispositions, `chain_hash`, `request_hash`, `turnStart`/`turnEnd`, `provenance_summary`, `cited_provenance_ids`, `policy_data.aarm` | **High-level alignment.** The formal requirement-by-requirement R1–R9 mapping and gap analysis is tracked in [issue #213](https://github.com/GenAI-Security-Project/agent-control-standard/issues/213). |
@@ -87,7 +112,7 @@ Four published agent-security architectures appear across ACS documentation. Non
 - [Specification §9.1](../spec/instrument/specification.md#91-intent-extension-via-ask-normative) lets an approver extend `Intent.parsed` explicitly via `ASK` (`intent_extension`).
 - Decisions cite `policy_references`, `reason_codes`, and an optional `policy_data.ibac` object.
 
-**Completeness:** ACS defines the wire fields, immutability invariant, and approver-extension path. The intent parser, fine-grained authorization store, and capability matcher are implementation-defined inside the Guardian.
+**Completeness:** Partial at the wire layer. ACS defines the `Intent` payload fields, the immutability invariant ([§8.4](../spec/instrument/specification.md#84-intent)), and `ask_details.intent_extension` ([§9.1](../spec/instrument/specification.md#91-intent-extension-via-ask-normative)), while two interoperability gaps remain open in v0.1: how an approver's `ASK` answer is delivered back to the Guardian ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and how `toolCallRequest.payload.capability` compares to `Intent.parsed` ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)). The intent parser, fine-grained authorization store, and capability matcher are implementation-defined inside the Guardian.
 
 ### FIDES (Flow Integrity Deterministic Enforcement System)
 
