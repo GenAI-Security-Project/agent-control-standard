@@ -261,7 +261,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
-    for row in ("C-01", "C-08", "C-11", "C-12"):
+    for row in ("C-08", "C-11", "C-12"):
         assert f"unconfirmed {row}" in out
     assert "unsigned" not in out
     # Without the flag the same ledger is fine, since CI runs before Rock decides.
@@ -270,7 +270,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-08", "C-11", "C-12")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-08", "C-11", "C-12")
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -431,7 +431,8 @@ def test_cells_honor_escaped_pipes(tree):
     text = before.replace("| `labs/finbot/compose.yaml:48-57`", "| ok a\\| b `labs/finbot/compose.yaml:48-57`", 1)
     assert text != before
     ledger.write_text(text, encoding="utf-8")
-    assert "C-01" in lab_claims.load_ledger(ledger).unconfirmed
+    # An escaped pipe keeps the evidence cell whole, so its first path is still read as evidence.
+    assert ("C-01", "labs/finbot/compose.yaml") in lab_claims.load_ledger(ledger).evidence
 
 
 def test_edit_after_signing_reads_as_unsigned(tree, capsys):
@@ -2155,6 +2156,16 @@ def test_c08_cites_the_viewer_and_leaves_capture_open():
     assert "`replay miss: recorded neutral reply`" in cited
     assert "LAB-16" in pending and "recorded model" in pending and "viewer" not in pending
     assert ("C-08", "labs/finbot/viewer/model.py") in lab_claims.load_ledger(LEDGER).evidence
+
+
+def test_c01_names_where_each_finbot_default_lives():
+    # Each changed default is named with its file and line at 1450fc4, and the row is confirmed from that.
+    row = {r[0]: r for r in _rows(_section("Claims"))}["C-01"]
+    assert "unconfirmed" not in " ".join(row).lower()
+    for needle in ("finbot/config.py line 102", "Dockerfile line 35", "docker-compose.yml lines 11-12",
+                   "finbot/core/llm/openai_client.py line 29"):
+        assert needle in row[2], needle
+    assert "60, the default in finbot/config.py" in row[1] and "3, the default in the app stage" in row[1]
 
 
 def test_c07_is_retired_and_no_rule_asks_for_an_attempt_count():
