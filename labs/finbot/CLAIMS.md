@@ -40,20 +40,13 @@ A claim marker is an HTML comment such as `<!-- claim:C-03 -->`. It goes in the 
 | N-04 | That signing proves the record is complete, or that the gateway honored a deny. | A signature covers one decision. It doesn't cover decisions that never reached the Guardian. |
 | N-05 | That downgrade is fully prevented. | Full detection needs transcript binding (issue #13). |
 | N-06 | That the stack is ACS-Core conformant. | It sends 4 of the 7 minimum hooks (`sessionStart`, `toolCallRequest`, `toolCallResult`, `sessionEnd`), and wrapped MCP has no wire definition yet (issue #383). |
-| N-07 | That ACS stops a given attack at any rate. | Clips are kept takes, not measurements. |
+| N-07 | Retired 2026-11-22: the ledger no longer lists this non-claim. | Rock, 2026-11-22. |
 | N-08 | That replay reproduces a live model. | Replay serves what was recorded and a fixed line for anything else. |
 | N-09 | That 0.2.0 is released, or that the demo branch is a release. | The demo branch is a lab branch. |
 | N-10 | That ACS is benchmarked against, or interoperates with, Microsoft's Agent Governance Toolkit. | LAB-10 times ACS signatures only. |
 | N-11 | That 0.1.5 makes an ACS-Crypto or ACS-Core claim. | Signing is experimental and off by default. |
-| N-12 | That the lab was tested by anyone outside the build team. | The outside tester slot (LAB-17) was cut. |
+| N-12 | Retired 2026-11-22: the ledger no longer lists this non-claim. | Rock, 2026-11-22. |
 | N-13 | That the signing library is a FIPS 140-3 validated module. | ML-DSA-65 follows FIPS 204, and the library has no FIPS 140 validation. |
-
-## Disclosures
-
-Say each of these wherever the lab is shown.
-
-- The neutral deny line is the one artifact the agent sees when a control acts. It is a fixed sentence. Like any enforcement point, a block is visible to the agent it stops, and the agent still can't get around it.
-- Replay serves recorded branches only. Any other branch gets a fixed neutral reply.
 
 ## Banned phrasing
 
@@ -93,7 +86,7 @@ runs on Windows
 runs under Windows
 ```
 
-Each Not claimed row names the banned phrases it excuses, as `N-NN: phrase | phrase`. Every Not claimed row needs a line here, and every phrase must be on the banned list above.
+Each Not claimed row names the banned phrases it excuses, as `N-NN: phrase | phrase`. Every Not claimed row needs a line here unless it's retired, and every phrase must be on the banned list above. A retired row keeps its id, opens with `Retired` and the date of the ruling, and has no line, so it excuses nothing and its old phrases stay banned.
 
 ```claims-not-claimed
 N-01: can't tell a control exists | invisible to the agent | hidden from the agent
@@ -102,12 +95,10 @@ N-03: revocation is solved
 N-04: proves the record is complete | prove the record is complete
 N-05: prevents downgrade
 N-06: ACS-Core conformant
-N-07: stops attacks | blocks every
 N-08: reproduces a live model
 N-09: 0.2.0 is released
 N-10: Agent Governance Toolkit | AGT | interoperates with | interoperability with | benchmarked against
 N-11: ACS-Crypto
-N-12: tested by attendees | independently tested
 N-13: FIPS 140 | FIPS validated | FIPS-validated
 ```
 

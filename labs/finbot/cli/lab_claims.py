@@ -46,6 +46,8 @@ PLACEHOLDER_WORDS = frozenset({"n a", "na", "none"})
 EVIDENCE_TOKEN = re.compile(r"`([^`]+)`")
 # A line number, a line range or an anchor after a cited path points into the file, so it goes before the check.
 EVIDENCE_POINTER = re.compile(r"(?::\d+(?:-\d+)?|#[^/]*)$")
+# A retired row keeps its id and opens with the date of the ruling that retired it (Rock, 2026-11-22).
+RETIRED = re.compile(r"Retired \d{4}-\d{2}-\d{2}:")
 # A space may sit inside a part, as in docs/my file.md, but never at either end of one.
 CLEAN_PATH = re.compile(r"[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?"
                         r"(?:/[A-Za-z0-9_.@+~-](?:[A-Za-z0-9_.@+~ -]*[A-Za-z0-9_.@+~-])?)*/?")
@@ -98,23 +100,38 @@ def _block(text: str, tag: str) -> tuple[str, ...]:
     return lines
 
 
+def _retired(text: str) -> frozenset[str]:
+    """Not claimed rows whose text opens with Retired and an ISO date. The id stays so nothing renumbers."""
+    found = set()
+    for line in text.splitlines():
+        cells = _cells(line) if ROW_LINE.match(line) else []
+        if len(cells) >= 2 and re.fullmatch(r"N-\d{2}", cells[0]) and RETIRED.match(cells[1]):
+            found.add(cells[0])
+    return frozenset(found)
+
+
 def _excuses(text: str, ids: frozenset[str], banned: tuple[str, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """Parse the claims-not-claimed block. Every Not claimed row needs a line, and each phrase must be banned.
+    """Parse the claims-not-claimed block. Every Not claimed row but a retired one needs a line, and each phrase must
+    be banned.
 
     A marker excuses only the phrases its own row names, so one N marker can't carry a different banned phrase.
     """
     known = {_key(b) for b in banned}
+    retired = _retired(text)
     rows: dict[str, tuple[str, ...]] = {}
     for line in _block(text, "claims-not-claimed"):
         row, _, rest = line.partition(":")
         phrases = tuple(p.strip() for p in rest.split("|") if p.strip())
+        if row in retired:
+            # A retired row says nothing, so it can't excuse a phrase. Its phrases stay banned with no excuse left.
+            raise ValueError(f"claims-not-claimed line {line!r} names {row}, which is retired")
         if row not in ids or not row.startswith("N-") or row in rows or not phrases:
             raise ValueError(f"claims-not-claimed line {line!r} doesn't name a Not claimed row and its phrases")
         for phrase in phrases:
             if _key(phrase) not in known:
                 raise ValueError(f"{row} excuses {phrase!r}, which isn't on the banned list")
         rows[row] = phrases
-    missing = sorted(i for i in ids if i.startswith("N-") and i not in rows)
+    missing = sorted(i for i in ids if i.startswith("N-") and i not in rows and i not in retired)
     if missing:
         raise ValueError(f"Not claimed rows with no phrase line: {missing}")
     return tuple(sorted(rows.items()))

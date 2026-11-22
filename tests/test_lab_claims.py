@@ -66,8 +66,8 @@ SECTION_12_CAN_SAY = [
 ]
 SECTION_12_CANT_SAY = [
     "hidden from the agent", "attributable", "revocation is solved", "record is complete",
-    "downgrade is fully prevented", "ACS-Core conformant", "stops a given attack", "reproduces a live model",
-    "0.2.0 is released", "Agent Governance Toolkit", "ACS-Crypto", "outside the build team",
+    "downgrade is fully prevented", "ACS-Core conformant", "reproduces a live model",
+    "0.2.0 is released", "Agent Governance Toolkit", "ACS-Crypto",
 ]
 
 
@@ -489,7 +489,8 @@ def test_every_not_claimed_row_names_banned_phrases(tree):
     root, ledger = tree
     loaded = lab_claims.load_ledger(ledger)
     named = dict(loaded.excuses)
-    not_claimed = [i for i in loaded.ids if i.startswith("N-")]
+    # A retired row keeps its id and names no phrase (Rock, 2026-11-22).
+    not_claimed = [i for i in loaded.ids if i.startswith("N-") and i not in ("N-07", "N-12")]
     assert sorted(named) == sorted(not_claimed)
     assert all(phrases for phrases in named.values())
     banned = {p.lower() for p in loaded.banned}
@@ -2175,7 +2176,39 @@ def test_hidden_from_the_agent_is_banned_and_excused_only_by_n01(tree):
     assert [f for f in _scan(tree, {"d.md": kept}) if f.path == "d.md"] == []
 
 
-def test_disclosure_says_a_block_is_visible_and_not_a_bypass():
-    text = _section("Disclosures")
-    assert "Like any enforcement point, a block is visible to the agent it stops" in text
-    assert "can infer a control" not in text
+def test_ledger_holds_no_disclosures_section():
+    # Rock, 2026-11-22: the disclaimers are cut. The neutral deny line stays as demo content in the guides.
+    assert "## Disclosures" not in LEDGER.read_text(encoding="utf-8")
+
+
+def test_n07_and_n12_are_retired_and_excuse_nothing():
+    # Rock, 2026-11-22: both non-claims are cut. The ids stay so nothing renumbers, and their phrases stay banned with
+    # no row left to excuse them.
+    rows = {r[0]: r for r in _rows(_section("Not claimed"))}
+    for row in ("N-07", "N-12"):
+        assert rows[row][1].startswith("Retired 2026-11-22:") and rows[row][2] == "Rock, 2026-11-22.", row
+    ledger = lab_claims.load_ledger(LEDGER)
+    assert "N-07" not in dict(ledger.excuses) and "N-12" not in dict(ledger.excuses)
+    for phrase in ("stops attacks", "blocks every", "tested by attendees", "independently tested"):
+        assert phrase in ledger.banned, phrase
+
+
+def test_a_retired_not_claimed_row_needs_no_phrase_line(tree):
+    root, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. |", "| N-02 | Retired 2026-11-22: cut. |", 1)
+                      .replace("N-02: attributable\n", "", 1), encoding="utf-8")
+    parsed = lab_claims.load_ledger(ledger)
+    assert "N-02" in parsed.ids and "N-02" not in dict(parsed.excuses)
+    # A retired row excuses nothing, so its old phrase now fails wherever it appears.
+    (root / "x.md").write_text("Requests are attributable. <!-- claim:N-02 -->\n", encoding="utf-8")
+    assert [f.kind for f in lab_claims.scan(root, parsed)] == ["banned"]
+
+
+def test_a_retired_not_claimed_row_cannot_keep_a_phrase_line(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. |", "| N-02 | Retired 2026-11-22: cut. |", 1),
+                      encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
