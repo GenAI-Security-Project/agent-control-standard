@@ -127,9 +127,14 @@ allow if {
   "employee" in input.params.metadata.user_context.roles
   recipient := input.params.payload.arguments.recipient.value
   is_string(recipient)
-  endswith(lower(recipient), "@example.com")
+  parts := split(lower(recipient), "@")
+  count(parts) == 2
+  parts[0] != ""
+  parts[1] == "example.com"
 }
 ```
+
+The Guardian wraps this boolean verdict into the ACS decision envelope below (see [Authorization Paradigms](./authorization-paradigms.md#policy-engines-vs-authorization-paradigms) for a fuller Rego rule that emits structured `decision`, `reason_codes`, and `policy_references` directly).
 
 ### Decision: `allow` (internal recipient)
 
@@ -247,8 +252,7 @@ User's committed `Intent.parsed`: `[{"tool": "kb.search", "operation": "read", "
       ],
       "closest_match_in_intent": null
     }
-  },
-  "cited_provenance_ids": ["p1"]
+  }
 }
 ```
 
@@ -256,7 +260,7 @@ User's committed `Intent.parsed`: `[{"tool": "kb.search", "operation": "read", "
 
 **Source:** Costa et al., *Securing AI Agents with Information-Flow Control* ([arXiv:2505.23643](https://arxiv.org/abs/2505.23643), 2025). **Mapping:** partial (wire-data level) — ACS carries factual `Provenance` under `acs-provenance`; label lattice arithmetic and planner hiding/revealing primitives stay in the Guardian and framework.
 
-Later in the session, `email.send` is called with both `recipient` and `body` derived from untrusted retrieved content (`p2`) with no trusted re-grounding, failing a FIDES-style planner-taint (`P-T`) check.
+Later in the session, `email.send` is called with both `recipient` and `body` derived from untrusted retrieved content (`p2`) with no trusted re-grounding, failing a FIDES-style Trusted action (`P-T`) check.
 
 ```json
 {

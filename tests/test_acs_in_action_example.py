@@ -110,6 +110,11 @@ def test_full_wire_messages_validate_against_v01_schemas_and_carry_core_fields()
     assert "reasoning" not in allow_resp["result"], (
         "allow example should demonstrate omitting optional reasoning per §6.1"
     )
+    deny_resp = decisions["deny"]
+    assert deny_resp["id"] != req["id"], "deny response must not reuse the internal-recipient request id"
+    assert deny_resp["result"]["request_id"] != req["params"]["request_id"], (
+        "deny response must not reuse the internal-recipient request_id"
+    )
 
 
 def test_paradigm_excerpts_fit_acs_result_and_avoid_structured_reasoning_dumps():

@@ -45,7 +45,10 @@ has_string_recipient if {
 
 is_internal_recipient if {
   has_string_recipient
-  endswith(lower(input.params.payload.arguments.recipient.value), "@example.com")
+  parts := split(lower(input.params.payload.arguments.recipient.value), "@")
+  count(parts) == 2
+  parts[0] != ""
+  parts[1] == "example.com"
 }
 
 decision := {
@@ -114,11 +117,11 @@ Four published agent-security architectures appear across ACS documentation. Non
 
 **Completeness:** Partial at the wire layer. ACS defines the `Intent` payload fields, the immutability invariant ([§8.4](../spec/instrument/specification.md#84-intent)), and `ask_details.intent_extension` ([§9.1](../spec/instrument/specification.md#91-intent-extension-via-ask-normative)), while two interoperability gaps remain open in v0.1: how an approver's `ASK` answer is delivered back to the Guardian ([issue #175](https://github.com/GenAI-Security-Project/agent-control-standard/issues/175)) and how `toolCallRequest.payload.capability` compares to `Intent.parsed` ([issue #385](https://github.com/GenAI-Security-Project/agent-control-standard/issues/385)). The intent parser, fine-grained authorization store, and capability matcher are implementation-defined inside the Guardian.
 
-### FIDES (Flow Integrity Deterministic Enforcement System)
+### FIDES (Information-Flow Control for AI Agents)
 
-**Source:** Manuel Costa et al. (Microsoft Research), *Securing AI Agents with Information-Flow Control* ([arXiv:2505.23643](https://arxiv.org/abs/2505.23643), 2025).
+**Source:** Manuel Costa et al. (Microsoft Research), *Securing AI Agents with Information-Flow Control* ([arXiv:2505.23643](https://arxiv.org/abs/2505.23643), 2025). The system is named *Fides* after the Roman goddess of good faith (not an acronym); ACS documentation commonly styles it in all caps.
 
-**What it is:** An information-flow control (IFC) model for AI agents that attaches integrity and confidentiality labels to inputs and tool outputs and enforces deterministic flow rules (such as planner-taint `P-T` and flow `P-F` checks) before consequential tool calls run.
+**What it is:** An information-flow control (IFC) model for AI agents that attaches integrity and confidentiality labels to inputs and tool outputs and enforces deterministic flow rules — including Trusted action (`P-T`) and Permitted flow (`P-F`) checks — before consequential tool calls run.
 
 **How it maps to ACS:**
 
