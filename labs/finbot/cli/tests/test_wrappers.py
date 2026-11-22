@@ -132,10 +132,12 @@ def test_unknown_verb_goes_to_the_container(bundle):
 
 
 def test_doctor_names_the_variable(bundle):
-    result, _ = run(bundle, "doctor", env={"FAKE_DOCKER_FAIL_PORTS": "8000"})
+    result, _ = run(bundle, "doctor", env={"FAKE_DOCKER_FAIL_PORTS": "8090"})
     assert result.returncode == 1
-    assert "NOT YET: port 8000 is in use. Set LAB_PORT_FINBOT in labs/finbot/.env" in result.stdout
-    assert "DONE: port 8090 is free" in result.stdout
+    assert "NOT YET: port 8090 is in use. Set LAB_PORT_APPROVER in labs/finbot/.env" in result.stdout
+    assert "DONE: port 8095 is free" in result.stdout
+    # FinBot joins only internal networks and publishes no port, so doctor doesn't check one for it (C-17).
+    assert "8000" not in result.stdout and "LAB_PORT_FINBOT" not in result.stdout
 
 
 def test_doctor_reads_port_overrides_from_env_file(bundle):

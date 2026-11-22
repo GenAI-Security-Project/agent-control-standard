@@ -55,8 +55,9 @@ SECRET_FILES = ("hmac.key", "guardian.key", "admin.token", "approver.token", "cl
 # FinBot's bearer for the gateway's model port (final review R8). init writes it to state/secrets for the gateway and
 # to .env, where compose passes it to FinBot as OPENAI_API_KEY.
 CLIENT_TOKEN = "LAB_CLIENT_TOKEN"
-# The pin lab verify and lab check 7 pass to acs-verify as --expect-fingerprint (LAB-16). It lives in .env, which no
-# service mounts, because the gateway can write state/ and a forger holding its files could otherwise pick the key.
+# The pin lab verify and lab check 7 pass to acs-verify as --expect-fingerprint (LAB-16). It lives in .env, which the
+# gateway and the Guardian don't mount, because the gateway can write state/ and a forger holding its files could
+# otherwise pick the key. Only the one-shot lab CLI container mounts the bundle, .env included.
 GUARDIAN_FINGERPRINT = "LAB_GUARDIAN_FINGERPRINT"
 FINGERPRINT_FORMAT = re.compile(r"sha256:[0-9a-f]{64}")
 # The attendee's own model key, pasted in by hand for `lab upstream openai`. lab init can't make it again, so lab reset

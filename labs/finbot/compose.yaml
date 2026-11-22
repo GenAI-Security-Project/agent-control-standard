@@ -1,18 +1,23 @@
 # The FinBot guided lab: FinBot, unmodified, behind the ACS gateway, Guardian and OPA (issue #588, LAB-15).
 #
-# Version 1.1.0. Owner: Rock Lambros. Lab branch only. LAB-16 added drive-net. Start it with ./lab.sh, which runs `lab init` first, picks the
+# Version 1.2.0. Owner: Rock Lambros. Lab branch only. LAB-16 added drive-net. C-17 made finbot-net internal and added
+# upstream-net (Rock, 2026-11-22). Start it with ./lab.sh, which runs `lab init` first, picks the
 # pulled or locally built images, and adds compose.openai.yaml when the upstream is openai.
 #
 # Networks (A.2 as amended):
-#   finbot-net  FinBot, redis and the gateway's model port. Not internal, so FinBot's port can be published.
+#   finbot-net  FinBot, redis and the gateway's model port. internal: true, so FinBot has no route out of the stack and
+#               reaches a model only through the gateway. Docker publishes no port from an internal network, so FinBot
+#               publishes none. The lab CLI drives FinBot over drive-net.
+#   upstream-net the gateway alone. Not internal, so the gateway reaches OpenAI for live runs and capture takes, and
+#               publishes the approver port.
 #   drive-net   FinBot and the lab CLI only, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
 #               so the CLI, which mounts state/secrets, still has no path to the internet.
 #   acs-net     gateway, Guardian, OPA, Jaeger and the lab CLI. internal: true, so nothing on it reaches the internet,
 #               and FinBot, which isn't on it, can't reach the Guardian, OPA or the gateway's admin port.
 #   ui-net      the viewer and Jaeger only. Docker publishes no port for a container whose only network is internal.
 #
-# Every published port binds 127.0.0.1 and takes an override in labs/finbot/.env: LAB_PORT_FINBOT,
-# LAB_PORT_APPROVER, LAB_PORT_VIEWER and LAB_PORT_JAEGER (PREMORTEM P9). lab doctor names the variable on a collision.
+# Every published port binds 127.0.0.1 and takes an override in labs/finbot/.env: LAB_PORT_APPROVER, LAB_PORT_VIEWER
+# and LAB_PORT_JAEGER (PREMORTEM P9). lab doctor names the variable on a collision.
 #
 # Lab conventions, each off outside this lab and each waiting on the issue named:
 #   - The Guardian key document (acs-lab-keys/1) and ML-DSA-65 decision signing: issue #460.
@@ -60,8 +65,7 @@ services:
       OPENAI_API_KEY: ${LAB_CLIENT_TOKEN:-}
       LLM_TIMEOUT: "360"
       WEB_CONCURRENCY: "1"
-    ports:
-      - "127.0.0.1:${LAB_PORT_FINBOT:-8000}:8000"
+    # Both networks are internal, so FinBot reaches the gateway and redis but nothing outside the stack (C-17).
     networks:
       - finbot-net
       - drive-net
@@ -163,6 +167,8 @@ services:
       finbot-net: {}
       acs-net:
         ipv4_address: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
+      # The one way out of the stack, for the model upstream and the published approver port. Only the gateway joins it.
+      upstream-net: {}
     extra_hosts:
       # Reaches a model served on the host, such as Ollama, on Linux as on Docker Desktop.
       - "host.docker.internal:host-gateway"
@@ -320,7 +326,9 @@ services:
     security_opt: ["no-new-privileges:true"]
 
 networks:
-  finbot-net: {}
+  finbot-net:
+    internal: true
+  upstream-net: {}
   acs-net:
     internal: true
     ipam:

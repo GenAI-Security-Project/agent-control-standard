@@ -61,13 +61,12 @@ def test_ids_unique_and_sequential():
 
 SECTION_12_CAN_SAY = [
     "1450fc4", "FIPS 204", "forged decision", "shared HMAC key", "ClientHello", "Two of nineteen",
-    "N attempts", "fixed neutral reply", "fails closed", "committed outcome", "Release 0.1.5",
-    "build team's machines",
+    "fixed neutral reply", "fails closed", "committed outcome", "Release 0.1.5",
 ]
 SECTION_12_CANT_SAY = [
     "hidden from the agent", "attributable", "revocation is solved", "record is complete",
-    "downgrade is fully prevented", "ACS-Core conformant", "stops a given attack", "reproduces a live model",
-    "0.2.0 is released", "Agent Governance Toolkit", "ACS-Crypto", "outside the build team",
+    "downgrade is fully prevented", "ACS-Core conformant", "reproduces a live model",
+    "0.2.0 is released", "Agent Governance Toolkit", "ACS-Crypto",
 ]
 
 
@@ -261,7 +260,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
-    for row in ("C-01", "C-03", "C-07", "C-08", "C-11", "C-12"):
+    for row in ("C-08",):
         assert f"unconfirmed {row}" in out
     assert "unsigned" not in out
     # Without the flag the same ledger is fine, since CI runs before Rock decides.
@@ -270,7 +269,7 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
-    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-01", "C-03", "C-04", "C-07", "C-08", "C-11", "C-12", "C-17")
+    assert lab_claims.load_ledger(ledger).unconfirmed == ("C-08",)
 
 
 def test_main_exit_codes(tree, tmp_path):
@@ -427,10 +426,12 @@ def test_sign_gate_refuses_a_ledger_with_no_claim_rows(tree, capsys):
 
 def test_cells_honor_escaped_pipes(tree):
     root, ledger = tree
-    text = ledger.read_text(encoding="utf-8").replace(
-        "| Unconfirmed: the lab compose file (LAB-15)", "| ok a\\| b Unconfirmed: the lab compose file (LAB-15)", 1)
+    before = ledger.read_text(encoding="utf-8")
+    text = before.replace("| `labs/finbot/compose.yaml:48-57`", "| ok a\\| b `labs/finbot/compose.yaml:48-57`", 1)
+    assert text != before
     ledger.write_text(text, encoding="utf-8")
-    assert "C-01" in lab_claims.load_ledger(ledger).unconfirmed
+    # An escaped pipe keeps the evidence cell whole, so its first path is still read as evidence.
+    assert ("C-01", "labs/finbot/compose.yaml") in lab_claims.load_ledger(ledger).evidence
 
 
 def test_edit_after_signing_reads_as_unsigned(tree, capsys):
@@ -464,7 +465,9 @@ def test_ledger_truth_rows():
     assert "4 of the 7" in _section("Not claimed") and "sessionEnd" in rows["C-06"][1] + rows["C-06"][2]
     assert "enforce" in rows["C-09"][1] and "shadow" in (rows["C-09"][1] + rows["C-09"][3]).lower()
     assert "enforce" in rows["C-14"][1]
-    assert "can pin" in rows["C-03"][1] and "unconfirmed" in rows["C-03"][2].lower()
+    # The pin is lab verify's, from .env, and the compose file sets none, so the gateway and the viewer run unpinned.
+    assert "can pin" in rows["C-03"][1] and "unconfirmed" not in rows["C-03"][2].lower()
+    assert "`labs/finbot/modules/checks/evidence.py:231-251`" in rows["C-03"][2] and "check no fingerprint" in rows["C-03"][2]
     assert "_response_signing.py" in rows["C-02"][2]
     assert "digest" in _section("What the tests enforce and what only a reader catches")
     assert "plain-text file" in _section("What the tests enforce and what only a reader catches")
@@ -489,7 +492,8 @@ def test_every_not_claimed_row_names_banned_phrases(tree):
     root, ledger = tree
     loaded = lab_claims.load_ledger(ledger)
     named = dict(loaded.excuses)
-    not_claimed = [i for i in loaded.ids if i.startswith("N-")]
+    # A retired row keeps its id and names no phrase (Rock, 2026-11-22).
+    not_claimed = [i for i in loaded.ids if i.startswith("N-") and i not in ("N-07", "N-12")]
     assert sorted(named) == sorted(not_claimed)
     assert all(phrases for phrases in named.values())
     banned = {p.lower() for p in loaded.banned}
@@ -1303,7 +1307,7 @@ def test_every_cited_evidence_path_exists():
 
 def test_evidence_paths_skip_text_after_unconfirmed():
     ledger = lab_claims.load_ledger(LEDGER)
-    assert ("C-11", "version.txt") not in ledger.evidence
+    assert ("C-11", "version.txt") in ledger.evidence
     assert ("C-02", "adapters/src/acs/core/_mldsa.py") in ledger.evidence
     assert not any(p in ("acs-lab-keys/1", "acs.lab.replay_miss") for _, p in ledger.evidence)
 
@@ -1315,11 +1319,13 @@ def test_sign_gate_refuses_a_missing_evidence_path(tree, capsys):
     assert "missing_evidence C-15 adapters/src/acs/core/_nothing_here.py" in capsys.readouterr().out
 
 
-def test_viewer_evidence_is_pending_until_lab_13_lands():
+def test_viewer_evidence_cites_the_viewer_on_this_tree():
+    # LAB-13's viewer is on the lab branch, so C-04 cites it as evidence, with nothing left pending.
     rows = {r[0]: r for r in _rows(_section("Claims"))}
-    for row in ("C-04", "C-08"):
-        pending = rows[row][2].split("Unconfirmed", 1)
-        assert len(pending) == 2 and "LAB-13" in pending[1] and "viewer" in pending[1], row
+    assert "unconfirmed" not in " ".join(rows["C-04"]).lower()
+    for path in ("labs/finbot/viewer/verify.py:142-147", "labs/finbot/viewer/model.py:885-891",
+                 "labs/finbot/viewer/model.py:920-942"):
+        assert f"`{path}`" in rows["C-04"][2], path
     # m-6: the viewer checks each answer's signature and leaves the chain to lab verify.
     assert "keys only" in rows["C-04"][2] and "lab verify" in rows["C-04"][2]
 
@@ -2124,11 +2130,50 @@ def test_ledger_header_says_test_directories_are_never_scanned():
 def test_c17_claims_the_agent_cannot_bypass_the_guardian(tree):
     _, ledger = tree
     parsed = lab_claims.load_ledger(ledger)
-    assert "C-17" in parsed.ids and "C-17" in parsed.unconfirmed
+    assert "C-17" in parsed.ids and "C-17" not in parsed.unconfirmed
     rows = {r[0]: r for r in _rows(_section("Claims"))}
     assert rows["C-17"][1].startswith("FinBot can't bypass the Guardian.")
-    assert "ClientTokenGate" in rows["C-17"][2] and "Unconfirmed:" in rows["C-17"][2]
+    assert "ClientTokenGate" in rows["C-17"][2]
     assert "hooks in C-06" in rows["C-17"][3]
+
+
+def test_c17_is_confirmed_by_the_network_and_the_token():
+    # Rock, 2026-11-22: finbot-net is internal, so the network itself keeps FinBot off any model but the gateway.
+    evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-17"][2]
+    assert "unconfirmed" not in evidence.lower()
+    for path in ("labs/finbot/compose.yaml:69-71", "labs/finbot/compose.yaml:332-333", "labs/finbot/compose.yaml:329-330",
+                 "labs/finbot/compose.yaml:166-171", "labs/finbot/compose.yaml:63",
+                 "adapters/gateway/src/acs_gateway/app.py:1479-1511", "labs/finbot/cli/commands.py:147-148",
+                 "labs/finbot/images/smoke.sh:126-156"):
+        assert f"`{path}`" in evidence, path
+
+
+def test_c08_cites_the_viewer_and_leaves_capture_open():
+    evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-08"][2]
+    cited, pending = evidence.split("Unconfirmed", 1)
+    assert "`labs/finbot/viewer/model.py:962-965`" in cited and "`labs/finbot/viewer/static/app.js:131-136`" in cited
+    assert "`replay miss: recorded neutral reply`" in cited
+    assert "LAB-16" in pending and "recorded model" in pending and "viewer" not in pending
+    assert ("C-08", "labs/finbot/viewer/model.py") in lab_claims.load_ledger(LEDGER).evidence
+
+
+def test_c01_names_where_each_finbot_default_lives():
+    # Each changed default is named with its file and line at 1450fc4, and the row is confirmed from that.
+    row = {r[0]: r for r in _rows(_section("Claims"))}["C-01"]
+    assert "unconfirmed" not in " ".join(row).lower()
+    for needle in ("finbot/config.py line 102", "Dockerfile line 35", "docker-compose.yml lines 11-13",
+                   "finbot/core/llm/openai_client.py line 29"):
+        assert needle in row[2], needle
+    assert "60, the default in finbot/config.py" in row[1] and "3, the default in the app stage" in row[1]
+
+
+def test_c07_is_retired_and_no_rule_asks_for_an_attempt_count():
+    # Rock, 2026-11-22: the clips state no attempt count. The id stays so nothing renumbers.
+    row = {r[0]: r for r in _rows(_section("Claims"))}["C-07"]
+    assert row[1] == "Retired 2026-11-22." and row[2] == "Rock, 2026-11-22."
+    assert "C-07" not in lab_claims.load_ledger(LEDGER).unconfirmed
+    text = LEDGER.read_text(encoding="utf-8")
+    assert "N attempts" not in text and "attempt count." not in text.replace("state an attempt count.", "")
 
 
 def test_n01_leads_with_the_bypass_claim_not_hiding():
@@ -2147,7 +2192,130 @@ def test_hidden_from_the_agent_is_banned_and_excused_only_by_n01(tree):
     assert [f for f in _scan(tree, {"d.md": kept}) if f.path == "d.md"] == []
 
 
-def test_disclosure_says_a_block_is_visible_and_not_a_bypass():
-    text = _section("Disclosures")
-    assert "Like any enforcement point, a block is visible to the agent it stops" in text
-    assert "can infer a control" not in text
+def test_ledger_holds_no_disclosures_section():
+    # Rock, 2026-11-22: the disclaimers are cut. The neutral deny line stays as demo content in the guides.
+    assert "## Disclosures" not in LEDGER.read_text(encoding="utf-8")
+
+
+def test_n07_and_n12_are_retired_and_excuse_nothing():
+    # Rock, 2026-11-22: both non-claims are cut. The ids stay so nothing renumbers, and their phrases stay banned with
+    # no row left to excuse them.
+    rows = {r[0]: r for r in _rows(_section("Not claimed"))}
+    for row in ("N-07", "N-12"):
+        assert rows[row][1] == "Retired 2026-11-22." and rows[row][2] == "Rock, 2026-11-22.", row
+    ledger = lab_claims.load_ledger(LEDGER)
+    assert "N-07" not in dict(ledger.excuses) and "N-12" not in dict(ledger.excuses)
+    for phrase in ("stops attacks", "blocks every", "tested by attendees", "independently tested"):
+        assert phrase in ledger.banned, phrase
+
+
+def test_a_retired_not_claimed_row_needs_no_phrase_line(tree):
+    root, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. | Requests stay on HMAC inside the trust boundary by design. |", "| N-02 | Retired 2026-11-22. | Rock, 2026-11-22. |", 1)
+                      .replace("N-02: attributable\n", "", 1), encoding="utf-8")
+    parsed = lab_claims.load_ledger(ledger)
+    assert "N-02" in parsed.ids and "N-02" not in dict(parsed.excuses)
+    # A retired row excuses nothing, so its old phrase now fails wherever it appears, and so does its marker.
+    (root / "x.md").write_text("Requests are attributable. <!-- claim:N-02 -->\n", encoding="utf-8")
+    assert sorted(f.kind for f in lab_claims.scan(root, parsed)) == ["banned", "retired_id"]
+
+
+def test_a_retired_not_claimed_row_cannot_keep_a_phrase_line(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-02 | That requests are attributable. | Requests stay on HMAC inside the trust boundary by design. |", "| N-02 | Retired 2026-11-22. | Rock, 2026-11-22. |", 1),
+                      encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
+
+
+# ---------------------------------------------------------------- Retired rows, review round 4
+
+
+@pytest.mark.parametrize("row", ["N-07", "C-07"])
+def test_a_marker_for_a_retired_row_ledgers_nothing(tree, row):
+    # I2: a retired id stays in the ledger so nothing renumbers, but a marker naming it backs no claim.
+    findings = _scan(tree, {"a.md": f"ACS guarantees the agent cannot get around the gateway. <!-- claim:{row} -->\n"})
+    kinds = _kinds(findings)
+    assert "retired_id" in kinds and "unledgered" in kinds, findings
+
+
+def test_a_marker_for_a_retired_row_fails_even_on_plain_text(tree):
+    findings = _scan(tree, {"a.md": "The lab has seven modules. <!-- claim:N-12 -->\n"})
+    assert _kinds(findings) == ["retired_id"], findings
+
+
+def test_the_sign_gate_names_a_retired_claim_row(tree, capsys):
+    # I3: a live row rewritten into retired form never reads as confirmed. The gate names it as retired.
+    root, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    start = text.index("| C-09 |")
+    end = text.index("\n", start)
+    ledger.write_text(text[:start] + "| C-09 | Retired 2026-11-22. | Rock, 2026-11-22. | |" + text[end:],
+                      encoding="utf-8")
+    parsed = lab_claims.load_ledger(ledger)
+    assert "C-09" in parsed.retired and "C-09" not in parsed.unconfirmed
+    lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"])
+    assert "retired C-09" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("cell", ["Retired 2026-11-22: Release 0.1.5 adds signing.", "Retired 2026-11-22",
+                                  "Retired on 2026-11-22.", "retired 2026-11-22."])
+def test_a_retired_row_holds_only_the_retirement_line(tree, cell):
+    # A retired row can't carry a claim beside the retirement, so anything but the exact form is refused.
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    start = text.index("| C-09 |")
+    end = text.index("\n", start)
+    ledger.write_text(text[:start] + f"| C-09 | {cell} | Rock, 2026-11-22. | None. |" + text[end:], encoding="utf-8")
+    with pytest.raises(ValueError, match="Retired YYYY-MM-DD"):
+        lab_claims.load_ledger(ledger)
+
+
+def test_the_ledger_retires_c07_c12_n07_and_n12_in_the_exact_form():
+    rows = {r[0]: r for name in ("Claims", "Not claimed") for r in _rows(_section(name))}
+    for row in ("C-07", "C-12", "N-07", "N-12"):
+        assert rows[row][1] == "Retired 2026-11-22." and rows[row][2] == "Rock, 2026-11-22.", row
+    assert set(lab_claims.load_ledger(LEDGER).retired) == {"C-07", "C-12", "N-07", "N-12"}
+
+
+def test_c11_cites_the_release_version():
+    row = {r[0]: r for r in _rows(_section("Claims"))}["C-11"]
+    assert "unconfirmed" not in " ".join(row).lower()
+    assert ("C-11", "version.txt") in lab_claims.load_ledger(LEDGER).evidence
+
+
+@pytest.mark.parametrize("cells", [
+    "Retired 2026-11-22. | Unconfirmed: the lab ran in CI. | The lab ran on the build team's machines. |",
+    "Retired 2026-11-22. | Rock, 2026-11-22. | The lab ran on the build team's machines. |",
+    "Retired 2026-11-22. | Rock, 2026-11-22. The lab ran in CI. | |",
+    "Retired 2026-11-22. | Rock, 2026-11-21. | |",
+])
+def test_a_retired_row_carries_no_stale_text(tree, cells):
+    # Re-review minor: a retired row's evidence reads only the ruling, with the same date, and its limits are empty,
+    # so no claim text rides along into a signed ledger.
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    start = text.index("| C-09 |")
+    end = text.index("\n", start)
+    ledger.write_text(text[:start] + f"| C-09 | {cells}" + text[end:], encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
+
+
+def test_a_retired_not_claimed_row_carries_no_stale_text(tree):
+    _, ledger = tree
+    text = ledger.read_text(encoding="utf-8")
+    ledger.write_text(text.replace("| N-07 | Retired 2026-11-22. | Rock, 2026-11-22. |",
+                                   "| N-07 | Retired 2026-11-22. | Clips are kept takes, not measurements. |", 1),
+                      encoding="utf-8")
+    with pytest.raises(ValueError, match="retired"):
+        lab_claims.load_ledger(ledger)
+
+
+def test_retired_claim_rows_have_empty_limits_and_c11_cites_the_tag():
+    rows = {r[0]: r for r in _rows(_section("Claims"))}
+    for row in ("C-07", "C-12"):
+        assert rows[row][3] == "", row
+    assert "`v0.1.5`" in rows["C-11"][2]

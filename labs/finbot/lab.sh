@@ -1,7 +1,7 @@
 #!/bin/sh
 # lab.sh: the FinBot lab's only host command (issue #588, LAB-15). macOS and Linux. Windows is untested.
 #
-# Version 1.3.0. Owner: Rock Lambros. LAB-16 (issue #589) added the run and record verbs.
+# Version 1.3.1. Owner: Rock Lambros. LAB-16 (issue #589) added the run and record verbs. C-17 dropped FinBot's port.
 #
 # The host needs only Docker. This script runs the Docker lifecycle verbs itself and hands every other verb to the lab
 # CLI inside a container, `docker compose run --rm lab <verb>`, so no container ever gets the Docker socket.
@@ -43,7 +43,7 @@ BUNDLE_DIR=$(pwd)
 LOCAL_RUNTIME_IMAGE=acs-lab-runtime:local
 LOCAL_FINBOT_IMAGE=acs-lab-finbot:local
 # Published ports and the .env variable that moves each one (PREMORTEM P9).
-PORTS="LAB_PORT_FINBOT:8000 LAB_PORT_APPROVER:8090 LAB_PORT_VIEWER:8095 LAB_PORT_JAEGER:16686"
+PORTS="LAB_PORT_APPROVER:8090 LAB_PORT_VIEWER:8095 LAB_PORT_JAEGER:16686"
 MIN_MEMORY_BYTES=6442450944
 # FinBot's named volumes. compose.yaml fixes the project name, acs-finbot-lab, so these names are fixed too.
 FINBOT_VOLUMES="acs-finbot-lab_finbot-data acs-finbot-lab_finbot-uploads acs-finbot-lab_finbot-cache acs-finbot-lab_redis-data"
@@ -180,7 +180,6 @@ doctor() {
         port=$(env_value "$name")
         port=${port:-$default}
         case $name in
-            LAB_PORT_FINBOT) service=finbot ;;
             LAB_PORT_APPROVER) service=acs-gateway ;;
             LAB_PORT_VIEWER) service=acs-viewer ;;
             *) service=jaeger ;;
