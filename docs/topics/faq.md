@@ -313,7 +313,7 @@ How each paradigm composes with ACS:
 - **IBAC** — uses SessionContext + Intent for authority binding, the ASK disposition for approver-driven extensions, and the authorize-before-action flow for enforcement. ACS carries the wire fields and enforces `Intent.parsed` immutability; the IBAC Guardian provides the intent parser, capability-matching logic, and approver UX.
 - **AARM** — maps to ACS-Core almost directly. AARM-style deployments declare ACS-Audit for the hash-chained receipt log, add ACS-Crypto when a third party must be able to verify which Guardian issued a receipt, and adopt AARM's receipt conventions on top.
 
-The pattern across all four: ACS contributes the wire format and runtime behavior; the paradigm contributes the policy substance. Together they make the paradigm portable across any conformant framework.
+The pattern across all four: ACS contributes the wire format and runtime behavior; the paradigm contributes the policy substance. Together they make the paradigm portable across any conformant framework. None of the four is required or negotiated by name; see [Authorization Paradigms](./authorization-paradigms.md) for definitions, source papers, OPA/Cedar engines, and v0.1 mapping completeness.
 
 ### How is ACS different from those research artifacts?
 

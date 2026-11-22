@@ -85,7 +85,7 @@ The decision envelope shape is documented in [Specification §6](./specification
 
 Schema: [`hooks/session-start.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-start.json).
 
-Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and the initial `Intent` (when IBAC is the enforcement paradigm).
+Fires once per session, after the `handshake/hello` exchange completes and before any other `steps/*` hook for the same `session_id`. Establishes the audit chain root (`previous_hash: null`), session-level identity and policy bindings, and an optional initial `Intent` (when the deployment uses Intent or an IBAC-style policy).
 
 **Payload:** session-level identity descriptors, declared policy mode, `intent` (optional, with `parser_provenance`), platform context.
 
@@ -101,7 +101,7 @@ Schema: [`hooks/agent-trigger.json`](https://genai-security-project.github.io/ag
 
 Fires when the agent is activated by an external triggering condition (event arrival, scheduled tick, A2A inbound message, user-initiated session, or system-issued activation). For A2A-mediated delegation, `trigger_type: "a2a_inbound"` carries the originating peer identity; for in-process subagent spawns, see [`subagentStart`](#subagentstart).
 
-**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (IBAC adopters populate; the Intent registered at sessionStart, carried here for activation-time policy checks).
+**Payload:** `trigger_type` (`user_message`, `scheduled`, `external_event`, `a2a_inbound`, `system`), `trigger_source` (shape depends on `trigger_type`), optional `intent` (populated when the deployment uses Intent or an IBAC-style policy; carries the Intent registered at `sessionStart` for activation-time policy checks).
 
 **Decision:** ALLOW / DENY / MODIFY. Guardian MAY rewrite the trigger payload (e.g. redact PII) before activation.
 
@@ -185,7 +185,7 @@ Memory write. The standard sink for cross-session influence; mediating it preven
 
 Schema: [`hooks/tool-call-request.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/tool-call-request.json).
 
-Fires after the framework has parsed a tool call from the LLM's output, but before the tool is dispatched to its handler. The central enforcement point for IBAC, FIDES, CaMeL, and AARM. Argument-level provenance attached to each `ToolArgumentValue` lets Guardians reason about the lineage of individual arguments, so policy can target specific data flows rather than the call as a whole.
+Fires after the framework has parsed a tool call from the LLM's output, but before the tool is dispatched to its handler. The central enforcement point for tool authorization — from conventional identity, role, and resource checks to optional paradigm styles such as IBAC, FIDES, CaMeL, and AARM. Argument-level provenance attached to each `ToolArgumentValue` lets Guardians reason about the lineage of individual arguments, so policy can target specific data flows rather than the call as a whole.
 
 Frameworks MUST fire `toolCallRequest` for every action that escapes the agent's reasoning context, regardless of whether the framework's tool registry models it as a tool. This includes built-in operations such as filesystem reads/writes, network fetches, process execution, and shell commands. The Guardian relies on a complete view of all outward actions; primitives that bypass `toolCallRequest` are invisible to policy.
 

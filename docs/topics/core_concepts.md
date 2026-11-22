@@ -80,6 +80,7 @@ Specification v0.1.0 defines MCP wrapping through `protocols/MCP/*`, for example
 
 - [Concepts](../concepts/README.md)
 - [Identity for Agents](../identity/overview.md)
+- [Authorization Paradigms](./authorization-paradigms.md)
 - [ACS in Action](./ACS_in_action_example.md)
 - [Conformance Profiles](../spec/conformance.md)
 - [Specification](../spec/instrument/specification.md)
