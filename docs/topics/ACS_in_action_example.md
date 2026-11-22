@@ -127,7 +127,7 @@ allow if {
   "employee" in input.params.metadata.user_context.roles
   recipient := input.params.payload.arguments.recipient.value
   is_string(recipient)
-  endswith(recipient, "@example.com")
+  endswith(lower(recipient), "@example.com")
 }
 ```
 

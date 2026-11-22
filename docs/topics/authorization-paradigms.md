@@ -45,7 +45,7 @@ has_string_recipient if {
 
 is_internal_recipient if {
   has_string_recipient
-  endswith(input.params.payload.arguments.recipient.value, "@example.com")
+  endswith(lower(input.params.payload.arguments.recipient.value), "@example.com")
 }
 
 decision := {
