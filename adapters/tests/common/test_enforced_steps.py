@@ -45,7 +45,12 @@ def _unsignable(*args, **kwargs):
     raise ValueError("no RFC 8785 form")
 
 
-class AnUnsignableResultIsWithheld(unittest.TestCase):
+def _codex_tool_call() -> dict:
+    return {"session_id": str(uuid.uuid4()), "turn_id": "turn_1", "tool_use_id": "call_1",
+            "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo"}}
+
+
+class AnUnsignableStepIsWithheld(unittest.TestCase):
     def test_claude_code_withholds_a_tool_result_it_cannot_sign_under_fail_open(self) -> None:
         from acs.integrations.claude_code import adapter
         event = {"session_id": str(uuid.uuid4()), "cwd": "/tmp", "hook_event_name": "PostToolUse",
@@ -69,6 +74,14 @@ class AnUnsignableResultIsWithheld(unittest.TestCase):
         self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"),
                       [(a["acs_audit_event"], a.get("cause")) for a in audits])
 
+
+    def test_codex_denies_a_tool_call_it_cannot_sign_under_fail_open(self) -> None:
+        from acs.integrations.codex import adapter
+        with mock.patch.object(_exchange, "sign_envelope", _unsignable):
+            out, audits = run_in_process(adapter, ["acs-codex-hook"], _codex_tool_call())
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn(("decision_failure_fail_closed", "envelope_not_signable"),
+                      [(a["acs_audit_event"], a.get("cause")) for a in audits])
 
     def test_every_cursor_gate_event_denies_a_step_it_cannot_sign_under_fail_open(self) -> None:
         from acs.integrations.cursor import adapter
@@ -97,6 +110,15 @@ class AStepErrorKeepsTheNegotiatedDeny(unittest.TestCase):
                  "tool_name": "Bash", "tool_input": {"command": "echo"}}
         with mock.patch.object(adapter, "build_request", self._raises):
             out, audits = run_in_process(adapter, ["acs-claude-code-hook"], event, server_hello=self.HELLO)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn(("decision_failure_fail_closed", "adapter_exception"),
+                      [(a["acs_audit_event"], a.get("cause")) for a in audits])
+
+    def test_codex(self) -> None:
+        from acs.integrations.codex import adapter
+        with mock.patch.object(adapter, "build_request", self._raises):
+            out, audits = run_in_process(adapter, ["acs-codex-hook"], _codex_tool_call(),
+                                         server_hello=self.HELLO)
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn(("decision_failure_fail_closed", "adapter_exception"),
                       [(a["acs_audit_event"], a.get("cause")) for a in audits])

@@ -21,6 +21,7 @@ flowchart LR
     CC -->|"hook command"| AD["acs-adapters"]
     CU -->|"hook command"| AD
     NAT -->|"middleware"| AD
+    CX -->|"hook command"| AD
     CC -->|"AGT shim"| TS["TypeScript AGT Guardian<br/>unsigned"]
     OC -->|"AGT shim"| TS
     OC -->|"Go example"| G
@@ -66,10 +67,10 @@ Each integration uses the agent's own extension point, so you change configurati
 | Cursor | A hook command in `hooks.json`, run once per event | `acs-adapters` | [Cursor adapter](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/cursor/README.md) |
 | NVIDIA NAT 1.7.0 | Middleware declared in `workflow.yml`, running inside the agent process | `acs-adapters` with its `nat` extra | [NAT adapter](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/nat/README.md) |
 | OpenCode | An in-process plugin | The AGT host shim, or the Go Guardian's example | [AGT shim](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt/hosts/opencode/README.md), [Go example](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt-go/examples/opencode/README.md) |
-| Codex | A `PreToolUse` hook for `Bash` | The Go Guardian's example | [Go example](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt-go/examples/codex/README.md) |
+| Codex | A `PreToolUse` hook for shell commands, file patches and subagent spawns. The Go example covers `Bash` | `acs-adapters` from the source tree, or the Go Guardian's example | [Codex adapter](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/docs/codex/README.md), [Go example](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/reference-implementations/agt-go/examples/codex/README.md) |
 | Any OpenAI Responses API client | Set `OPENAI_BASE_URL` to the gateway, running in shadow or enforce mode | `acs-gateway` | [Govern an unmodified agent](./gateway.md) |
 
-Coverage differs by integration. The Claude Code, Cursor and NAT adapters send the hooks each host exposes. The gateway, the AGT shims and the Go examples send the two tool hooks. Each adapter README ends with a conformance status section that names what its host can and cannot express. The [adapters README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/README.md#how-adapters-work) explains the pattern all three adapters share.
+Coverage differs by integration. The Claude Code, Cursor and NAT adapters map host events across the agent lifecycle. The Codex adapter maps `PreToolUse` to `steps/toolCallRequest`. The gateway, the AGT shims and the Go examples send the two tool hooks. Each adapter guide describes its coverage. The [adapters README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/README.md#how-adapters-work) explains the pattern the four adapters share.
 
 The AGT Claude Code shim blocks a tool call when the hook itself fails to run, and that needs Claude Code v2.1.295 or later. On an older client a failed hook lets the tool run with no decision.
 
@@ -91,13 +92,13 @@ The specification text still makes `proceed` the default ([§6.4](../spec/instru
 
 | Component | When no usable decision arrives |
 |---|---|
-| Claude Code, Cursor and NAT adapters | The step is denied, and a session whose handshake fails is refused. Only the adapter's own configuration (the hook environment, or `default_deny` in NAT's `workflow.yml`) can opt into `proceed`, and a Guardian that declares `deny` overrides that opt-in |
+| Claude Code, Codex, Cursor and NAT adapters | The step is denied, and a session whose handshake fails is refused. Only the adapter's own configuration (the hook environment, or `default_deny` in NAT's `workflow.yml`) can opt into `proceed`, and a Guardian that declares `deny` overrides that opt-in |
 | Gateway | The call is removed or the result replaced, always. No ServerHello can loosen it |
 | Python example Guardian | Declares `deny` in its ServerHello. `ACS_ON_DECISION_FAILURE=proceed` makes it declare `proceed` |
 | Go Guardian | Declares `deny` in the reference `guardian.yaml` |
 | TypeScript AGT Guardian | Declares `proceed` unless `ACS_ON_DECISION_FAILURE=deny`, and its shims follow that declaration. The shims write every fail-open proceed to their audit log |
 
-A refusal is different from silence. A bad signature or a mismatched id blocks the step whatever the posture says ([D-040](../decisions/index.md#d-040-split-decision-failures-from-refusals)). The project also decided that an HTTP 429 from the Guardian counts as a refusal ([D-046](../decisions/index.md#d-046-treat-http-429-as-a-refusal)). The gateway follows that decision and removes the call. The Claude Code, Cursor and NAT adapters do not yet: a 429 with no JSON-RPC body is a decision failure to them, so it follows the posture, which is `deny` unless the adapter's own configuration (the hook environment, or `default_deny` in NAT's `workflow.yml`) opts into `proceed`.
+A refusal is different from silence. A bad signature or a mismatched id blocks the step whatever the posture says ([D-040](../decisions/index.md#d-040-split-decision-failures-from-refusals)). The project also decided that an HTTP 429 from the Guardian counts as a refusal ([D-046](../decisions/index.md#d-046-treat-http-429-as-a-refusal)). The gateway removes the call. The adapters treat a 429 with no JSON-RPC body as a decision failure and apply the failure posture.
 
 ## Check what the test suites prove
 

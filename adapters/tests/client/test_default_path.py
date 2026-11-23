@@ -17,7 +17,7 @@ PROBE = """
 import json, os, sys
 os.environ.update({"ACS_HMAC_SECRET": "default-path-secret-0123456789abcdef", "ACS_HMAC_KEY_ID": "lab"})
 import acs.core, acs.client
-import acs.integrations.claude_code.hook, acs.integrations.cursor.hook
+import acs.integrations.claude_code.hook, acs.integrations.codex.hook, acs.integrations.cursor.hook
 import acs.guardian.example_guardian
 from acs.client import sign_envelope, verify_signature
 from acs.core import *

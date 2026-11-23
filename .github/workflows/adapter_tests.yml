@@ -75,7 +75,7 @@ jobs:
         run: uv run python run_conformance.py claude codex cursor nat
 
   tests-without-nat:
-    # The documented setup for Claude Code and Cursor users, who never install NAT.
+    # The documented setup for Claude Code, Codex and Cursor without the NAT extra.
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:

@@ -62,7 +62,7 @@ def _strict_json(raw: str) -> Any:
         return json.loads(raw, parse_constant=constant, object_pairs_hook=unique)
     except InvalidEvent:
         raise
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         raise InvalidEvent("invalid_json") from e
 
 
@@ -135,7 +135,8 @@ def build_request(event: dict[str, Any]) -> dict[str, Any]:
     session_id = _session_id(event)
     # tool_use_id is the model's own call id, which can repeat across sessions and turns, and a
     # subagent runs under the parent's session in a turn of its own.
-    name = f"codex:tool_use:{event['turn_id']}:{event['tool_use_id']}"
+    ids = json.dumps([event["turn_id"], event["tool_use_id"]], separators=(",", ":"))
+    name = f"codex:tool_use:{ids}"
     request_id = str(uuid.uuid5(uuid.UUID(session_id), name))
     payload = {
         "tool": {"name": event["tool_name"]},

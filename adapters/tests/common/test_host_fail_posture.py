@@ -1,4 +1,4 @@
-"""Claude Code and Cursor run the tool when a hook crashes, so every unusable answer or file settles in the hook's shape with an audit line."""
+"""Unusable answers and files settle in each host's hook format and leave an audit line."""
 from __future__ import annotations
 
 import http.server
@@ -12,9 +12,12 @@ import unittest
 import uuid
 from pathlib import Path
 
+from acs.client._handshake import _handshake_cache_path
+from acs.core import coerce_uuid
 from acs.testing.harness import seed_negotiated_session, signing_env
 
 BIN = Path(sys.executable).parent
+HOSTS = ("claude-code", "codex", "cursor")
 
 # What a stub Guardian at the configured address answers to every request, hello included.
 ANSWERS = {
@@ -61,7 +64,8 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}/acs"
 
-    def _run(self, host: str, deny: str, *, seeded: bool, env_overrides: dict | None = None):
+    def _run(self, host: str, deny: str, *, seeded: bool, env_overrides: dict | None = None,
+             unusable_record: bool = False):
         session = str(uuid.uuid4())
         records = self.root / f"records-{uuid.uuid4().hex}"
         env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
@@ -69,13 +73,14 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
                    ACS_HANDSHAKE_CACHE=str(records), ACS_SESSION_STATE_DIR=str(self.root / "state"),
                    ACS_HANDSHAKE_TIMEOUT_SECONDS="2")
         env.update(env_overrides or {})
-        if host == "claude-code":
-            argv = [str(BIN / "acs-claude-code-hook")]
+        if host in ("claude-code", "codex"):
+            argv = [str(BIN / f"acs-{host}-hook")]
             event = {"session_id": session, "cwd": "/tmp", "hook_event_name": "PreToolUse",
                      "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
+            if host == "codex":
+                event.update(turn_id="turn_1", tool_use_id="call_1")
             hook_session = session
         else:
-            from acs.core import coerce_uuid
             argv = [str(BIN / "acs-cursor-hook"), "preToolUse"]
             event = {"conversation_id": session, "workspace_roots": ["/tmp"],
                      "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
@@ -83,10 +88,14 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
         if seeded:
             seed_negotiated_session(records, session_id=hook_session, guardian_url=self.url,
                                     hmac_secret=signing_env()["ACS_HMAC_SECRET"])
+        elif unusable_record:
+            records.mkdir()
+            _handshake_cache_path(hook_session, self.url, records).write_text(
+                json.dumps({"result": {"signature": 1}}))
         p = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True, env=env, timeout=30)
         out = json.loads(p.stdout) if p.stdout.strip() else {}
-        denied = (out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny" if host == "claude-code"
-                  else out.get("permission") == "deny")
+        denied = (out.get("permission") == "deny" if host == "cursor"
+                  else out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny")
         return p, denied
 
     def _assert_settled(self, p, denied: bool, deny: str, label: str, audit: str | None = None) -> None:
@@ -102,7 +111,7 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
     def test_every_unusable_guardian_answer_settles_in_the_hooks_shape(self) -> None:
         for name, answer in ANSWERS.items():
             _Stub.answer = answer
-            for host in ("claude-code", "cursor"):
+            for host in HOSTS:
                 for deny in ("0", "1"):
                     for seeded in (False, True):
                         label = f"{host} deny={deny} {'step' if seeded else 'handshake'}: {name}"
@@ -121,7 +130,7 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
                                         "session_refused_fail_closed"),
                  "an unparseable handshake timeout": ({"ACS_HANDSHAKE_TIMEOUT_SECONDS": "1h"}, "invalid_setting")}
         for name, (overrides, audit) in cases.items():
-            for host in ("claude-code", "cursor"):
+            for host in HOSTS:
                 for deny in ("0", "1"):
                     label = f"{host} deny={deny}: {name}"
                     with self.subTest(label):
@@ -145,35 +154,10 @@ class AnUnusableAnswerNeverCrashesAHook(unittest.TestCase):
 
     def test_a_session_record_the_agent_wrote_settles_in_the_hooks_shape(self) -> None:
         _Stub.answer = (200, None)
-        from acs.client._handshake import _handshake_cache_path
-        for host in ("claude-code", "cursor"):
+        for host in HOSTS:
             for deny in ("0", "1"):
                 with self.subTest(host, deny=deny):
-                    session = str(uuid.uuid4())
-                    records = self.root / f"records-{uuid.uuid4().hex}"
-                    records.mkdir()
-                    if host == "cursor":
-                        from acs.core import coerce_uuid
-                        hook_session = coerce_uuid(session, namespace_prefix="cursor")
-                    else:
-                        hook_session = session
-                    _handshake_cache_path(hook_session, self.url, records).write_text(
-                        json.dumps({"result": {"signature": 1}}))
-                    env = {k: v for k, v in os.environ.items() if not k.startswith("ACS_")}
-                    env.update(signing_env(), ACS_GUARDIAN_URL=self.url, ACS_DEFAULT_DENY=deny,
-                               ACS_HANDSHAKE_CACHE=str(records), ACS_SESSION_STATE_DIR=str(self.root / "state"))
-                    if host == "claude-code":
-                        argv = [str(BIN / "acs-claude-code-hook")]
-                        event = {"session_id": session, "cwd": "/tmp", "hook_event_name": "PreToolUse",
-                                 "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-                    else:
-                        argv = [str(BIN / "acs-cursor-hook"), "preToolUse"]
-                        event = {"conversation_id": session, "workspace_roots": ["/tmp"],
-                                 "tool_name": "Bash", "tool_input": {"command": "echo hi"}}
-                    p = subprocess.run(argv, input=json.dumps(event), capture_output=True, text=True, env=env, timeout=30)
-                    out = json.loads(p.stdout) if p.stdout.strip() else {}
-                    denied = (out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-                              if host == "claude-code" else out.get("permission") == "deny")
+                    p, denied = self._run(host, deny, seeded=False, unusable_record=True)
                     self._assert_settled(p, denied, "1", f"{host} deny={deny}: a record the agent wrote")
 
 

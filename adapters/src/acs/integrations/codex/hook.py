@@ -11,7 +11,7 @@ def _event_name(raw: str) -> str:
     """The event's hook_event_name; an event that does not parse counts as PreToolUse, the one event this command is registered on."""
     try:
         event = json.loads(raw or "{}")
-    except ValueError:
+    except Exception:  # noqa: BLE001
         return "PreToolUse"
     name = event.get("hook_event_name") if isinstance(event, dict) else None
     return name if isinstance(name, str) and name else "PreToolUse"

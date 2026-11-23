@@ -27,8 +27,8 @@ Installing the package puts `acs-codex-hook` and `acs-example-guardian` on your 
 The adapter and the Guardian read the same file. §10 requires at least 32 bytes, and the adapter refuses a file that is a symlink or readable by anyone but its owner.
 
 ```bash
-mkdir -p ~/.acs
-openssl rand -hex 32 > ~/.acs/hmac.key
+mkdir -p -m 700 ~/.acs
+(umask 077 && openssl rand -hex 32 > ~/.acs/hmac.key)
 chmod 600 ~/.acs/hmac.key
 ```
 
@@ -45,7 +45,7 @@ The example Guardian's policy is a teaching policy, not a complete shell policy.
 
 ### 3. Add the hook
 
-Merge the `PreToolUse` entry from [hooks.json.example](hooks.json.example) into your project's `.codex/hooks.json`, keeping any hooks already there. Replace each path with an absolute one, and quote any path that contains spaces. `command -v acs-codex-hook` prints the installed command's path.
+Merge the `PreToolUse` entry from [hooks.json.example](hooks.json.example) into your project's `.codex/hooks.json`, keeping any hooks already there. Replace each path with an absolute one. If a path contains spaces, surround it with JSON-escaped double quotes inside the single-quoted `sh -c` script, as in `\"/path with spaces/acs-codex-hook\"`. `command -v acs-codex-hook` prints the installed command's path.
 
 The example sets `ACS_DEFAULT_DENY=1` and matches three tools. `Bash` covers Codex's `exec_command` path, `apply_patch` covers its file edits, and `spawn_agent` covers subagent spawns. Leave out `apply_patch` and a file write the Guardian denies as a shell command can go through as a patch. It runs synchronously, so do not add `async: true`.
 

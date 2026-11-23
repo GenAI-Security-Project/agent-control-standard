@@ -33,7 +33,7 @@ If a valid ServerHello leaves `steps/toolCallRequest` out of `methods_evaluated`
 | ASK or DEFER | Audited DENY, since Codex cannot hold a tool call for approval |
 | A decision outside the five | DENY under either posture |
 
-For `Bash` and `apply_patch`, only a `command` override is accepted, and the merged `command` must stay a string. Other tools get the merged argument object, and Codex owns each tool's argument schema. The adapter supports no redaction and no wholesale content rewrite.
+For `Bash` and `apply_patch`, only a `command` override is accepted, and the merged `command` must stay a string. Other tools get the merged argument object, and Codex owns each tool's argument schema. An empty override object returns the original arguments as `updatedInput`. The adapter supports no redaction and no wholesale content rewrite.
 
 Codex applies `updatedInput` only together with `permissionDecision: "allow"`, so a MODIFY is the one decision that prints an allow. That allow does not skip Codex's own approval: on Codex CLI 0.142.5 under `-a untrusted`, Codex still asked before a rewritten command ran, and the prompt showed the rewritten command.
 

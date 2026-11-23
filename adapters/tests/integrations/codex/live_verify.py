@@ -277,6 +277,10 @@ def verify_patch(codex: str, decision: str, evidence_dir: Path) -> dict:
         check.assertEqual(payload["arguments"]["command"]["value"], patch)
         check.assertEqual(original.exists(), decision == "allow")
         check.assertEqual(replacement.exists(), decision == "modify")
+        if decision == "allow":
+            check.assertEqual(original.read_text(encoding="utf-8"), "original\n")
+        if decision == "modify":
+            check.assertEqual(replacement.read_text(encoding="utf-8"), "replacement\n")
         if decision == "deny":
             check.assertIn("ACS live fixture decision", json.dumps(model.tool_outputs))
         save_wire(guardian, name, evidence_dir)

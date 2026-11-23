@@ -1,6 +1,7 @@
-"""Run the Codex adapter as a subprocess and check its output and the bytes it sends."""
+"""Check how the Codex hook settles calls and what the adapter sends to the Guardian."""
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -10,9 +11,12 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from acs import client, core
+from acs.integrations.codex import adapter, hook
 from acs.testing.capture_guardian import CaptureGuardian
 from acs.testing.harness import TEST_KEY_ID, launch_guardian, signing_env
 
@@ -26,6 +30,50 @@ def event(**changes) -> dict:
               "tool_name": "Bash", "tool_input": {"command": "printf harmless", "timeout_ms": 1000}}
     result.update(changes)
     return result
+
+
+class HookUnitTests(unittest.TestCase):
+    def test_parser_recursion_denies_without_contacting_the_guardian(self) -> None:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        raw = io.StringIO(json.dumps(event()))
+        with mock.patch.dict(os.environ, {"ACS_DEFAULT_DENY": "0", "ACS_STARTUP_POSTURE": "proceed"}, clear=True), \
+                mock.patch.object(sys, "stdin", raw), mock.patch.object(sys, "argv", ["acs-codex-hook"]), \
+                mock.patch.object(adapter, "open_session") as open_session, \
+                mock.patch.object(adapter, "json", wraps=json) as parser, \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            parser.loads.side_effect = RecursionError
+            self.assertEqual(hook.main(), 0)
+        open_session.assert_not_called()
+        self.assertEqual(json.loads(stdout.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+        audit = json.loads(stderr.getvalue().removeprefix("ACS_AUDIT "))
+        self.assertEqual((audit["acs_audit_event"], audit["cause"]), ("codex_call_refused", "invalid_json"))
+
+    def test_bootstrap_denies_when_event_name_parsing_fails(self) -> None:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        raw = io.StringIO(json.dumps(event()))
+        with mock.patch.dict(os.environ, {"ACS_DEFAULT_DENY": "0", "ACS_STARTUP_POSTURE": "proceed"}, clear=True), \
+                mock.patch.object(sys, "stdin", raw), mock.patch.object(sys, "argv", ["acs-codex-hook"]), \
+                mock.patch.object(adapter, "main", side_effect=RuntimeError("fixture adapter error")), \
+                mock.patch.object(hook, "json", wraps=json) as parser, \
+                redirect_stdout(stdout), redirect_stderr(stderr):
+            parser.loads.side_effect = RecursionError
+            self.assertEqual(hook.main(), 0)
+        self.assertEqual(json.loads(stdout.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+        audit = json.loads(stderr.getvalue().removeprefix("ACS_AUDIT "))
+        self.assertEqual((audit["acs_audit_event"], audit["hook"], audit["posture"]),
+                         ("adapter_crashed", "PreToolUse", "deny"))
+
+    def test_request_ids_distinguish_turn_and_tool_use_id_boundaries(self) -> None:
+        first = adapter.build_request(event(turn_id="a:b", tool_use_id="c"))
+        second = adapter.build_request(event(turn_id="a", tool_use_id="b:c"))
+        self.assertNotEqual(first["id"], second["id"])
+
+    def test_translate_denies_an_unknown_disposition(self) -> None:
+        with mock.patch.dict(os.environ, {"ACS_AUDIT_FILE": ""}), redirect_stderr(io.StringIO()) as stderr:
+            out = adapter.translate(core.Decision("future"), event())
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        audit = json.loads(stderr.getvalue().removeprefix("ACS_AUDIT "))
+        self.assertEqual((audit["acs_audit_event"], audit["disposition"]), ("unusable_disposition", "future"))
 
 
 class WireGuardian(CaptureGuardian):
@@ -132,6 +180,15 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(out["permissionDecision"], "allow")
         self.assertEqual(out["updatedInput"], {"command": "printf replacement", "timeout_ms": 1000})
 
+    def test_empty_parameter_overrides_keep_the_command_input(self) -> None:
+        self.verdict("modify", modifications={"parameter_overrides": {}})
+        for tool in ("Bash", "apply_patch"):
+            with self.subTest(tool=tool):
+                original = event(tool_name=tool, tool_use_id=tool)
+                out, _ = self.invoke(original)
+                self.assertEqual(out["permissionDecision"], "allow")
+                self.assertEqual(out["updatedInput"], original["tool_input"])
+
     def test_patch_and_mcp_arguments_are_wrapped(self) -> None:
         for tool, value in (("apply_patch", {"command": "*** Begin Patch\n*** End Patch"}),
                             ("mcp__local__read", {"path": "sample", "options": {"limit": 2}})):
@@ -161,12 +218,13 @@ class AdapterTests(unittest.TestCase):
                 self.assertIn("needs a person", out["permissionDecisionReason"])
                 self.assertIn("unenforceable_decision", audit)
 
-    def test_unusable_decisions_deny(self) -> None:
+    def test_decisions_that_fail_wire_schema_validation_deny(self) -> None:
         for decision in ("future", " DENY ", None, [], 1):
             with self.subTest(decision=decision):
                 self.verdict(decision)
-                out, _ = self.invoke()
+                out, audit = self.invoke()
                 self.assertEqual(out["permissionDecision"], "deny")
+                self.assertIn("malformed_response", audit)
 
     def test_a_modify_codex_cannot_apply_in_full_denies(self) -> None:
         for modifications in (None, [], {}, {"modified_content": "text"},
@@ -282,7 +340,6 @@ class AdapterTests(unittest.TestCase):
                 self.assertIn(audit_event, audit)
 
     def test_a_server_hello_that_does_not_answer_the_client_hello_sends_no_step(self) -> None:
-        self.env["ACS_DEFAULT_DENY"] = "1"
         for change in ({"timeout_config": {"default_ms": True}}, {"selected_transport": "stdio"},
                        {"methods_evaluated": "steps/toolCallRequest"}, {"methods_evaluated": [None]},
                        {"on_decision_failure": "unknown"}, {"negotiated_version": "9.0.0"}):
