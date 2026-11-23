@@ -104,8 +104,10 @@
       drawerQuery.addEventListener("change", function () {
         if (!drawerQuery.matches && checkbox.checked) {
           checkbox.checked = false;
+          checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+        } else {
+          syncState();
         }
-        syncState();
       });
     }
 

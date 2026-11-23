@@ -250,6 +250,7 @@ a.md-header__ellipsis { display: block; }
 /* Respect reduced-motion preferences for drawer and search spatial transitions. */
 @media (prefers-reduced-motion: reduce) {
   .md-sidebar--primary,
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary,
   .md-search__inner,
   .md-overlay,
   .md-nav__icon::after {
