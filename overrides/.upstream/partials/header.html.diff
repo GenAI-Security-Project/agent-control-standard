@@ -34,13 +34,12 @@
 -    <label class="md-header__button md-icon" for="__drawer">
 -      {% set icon = config.theme.icon.menu or "material/menu" %}
 -      {% include ".icons/" ~ icon ~ ".svg" %}
--    </label>
-+    <button type="button" class="md-header__button md-icon acs-drawer-toggle" aria-label="Menu" aria-expanded="false">
++    <label class="md-header__button md-icon acs-drawer-toggle" for="__drawer" aria-label="Menu">
 +      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
 +        <rect class="menu-line menu-line--top" x="3" y="7.5" width="18" height="2" rx="1"/>
 +        <rect class="menu-line menu-line--bottom" x="3" y="14.5" width="18" height="2" rx="1"/>
 +      </svg>
-+    </button>
+     </label>
      <div class="md-header__title" data-md-component="header-title">
 -      <div class="md-header__ellipsis">
 +      <a href="{{ landing_root | e }}" class="md-header__ellipsis">

@@ -372,6 +372,7 @@
     var diagram = document.querySelector(".acs-starburst");
     var toggle = document.getElementById("diagram-motion-toggle");
     if (!diagram || !toggle) return;
+    document.documentElement.classList.add("has-motion-control");
     var reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     function setPaused(paused) {
@@ -388,6 +389,91 @@
         if (event.matches) setPaused(true);
       });
     }
+  })();
+
+  // Arrow-key, Home/End navigation for the left navigation pane.
+  (function () {
+    var nav = document.getElementById("site-nav");
+    if (!nav) return;
+
+    function isVisible(el) {
+      var parent = el.parentNode;
+      while (parent && parent !== nav) {
+        if (parent.tagName === "DETAILS" && !parent.open) {
+          if (el.tagName !== "SUMMARY" || el.parentNode !== parent) return false;
+        }
+        parent = parent.parentNode;
+      }
+      return el.getClientRects().length > 0;
+    }
+
+    function visibleItems(root) {
+      var all = root.querySelectorAll("a[href], summary");
+      var out = [];
+      for (var i = 0; i < all.length; i++) {
+        if (isVisible(all[i])) out.push(all[i]);
+      }
+      return out;
+    }
+
+    function focusItem(el) {
+      if (!el) return;
+      el.focus();
+      if (el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+    }
+
+    nav.addEventListener("keydown", function (event) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      var target = event.target.closest("a[href], summary");
+      if (!target || !nav.contains(target)) return;
+
+      var key = event.key;
+      if (key === "ArrowDown" || key === "ArrowUp" || key === "Home" || key === "End") {
+        var items = visibleItems(nav);
+        var idx = items.indexOf(target);
+        if (idx === -1) return;
+        event.preventDefault();
+        if (key === "ArrowDown") focusItem(items[Math.min(idx + 1, items.length - 1)]);
+        else if (key === "ArrowUp") focusItem(items[Math.max(idx - 1, 0)]);
+        else if (key === "Home") focusItem(items[0]);
+        else if (key === "End") focusItem(items[items.length - 1]);
+        return;
+      }
+
+      if (key === "ArrowRight") {
+        var details = target.tagName === "SUMMARY"
+          ? target.parentNode
+          : (target.closest(".nav-home") ? target.closest(".nav-home").querySelector("details") : null);
+        if (!details || details.tagName !== "DETAILS") return;
+        event.preventDefault();
+        if (!details.open) {
+          details.open = true;
+        } else {
+          var children = visibleItems(details).filter(function (el) { return el !== details.firstElementChild; });
+          if (children.length > 0) focusItem(children[0]);
+        }
+        return;
+      }
+
+      if (key === "ArrowLeft") {
+        if (target.tagName === "SUMMARY" && target.parentNode.tagName === "DETAILS" && target.parentNode.open) {
+          event.preventDefault();
+          target.parentNode.open = false;
+          return;
+        }
+        var enclosing = target.parentNode && target.parentNode.closest ? target.parentNode.closest("details") : null;
+        if (enclosing && enclosing.contains(target) && target.parentNode === enclosing && target.tagName === "SUMMARY") {
+          enclosing = enclosing.parentNode ? enclosing.parentNode.closest("details") : null;
+        }
+        if (enclosing) {
+          var summary = enclosing.querySelector(":scope > summary");
+          if (summary && summary !== target) {
+            event.preventDefault();
+            focusItem(summary);
+          }
+        }
+      }
+    });
   })();
 </script>
 </body>

@@ -450,6 +450,12 @@ def test_starburst_uses_css_motion_not_smil_and_has_pause_control(page):
         assert smil not in svg, f"SMIL element {smil!r} remains in starburst.svg"
     assert "prefers-reduced-motion: no-preference" in svg
     assert "prefers-reduced-motion: reduce" in svg
+    assert "vector-effect: non-scaling-stroke;" in svg
+    assert "animation: acs-particle-travel 5s linear infinite backwards;" in svg
+
+    css = (LANDING / "assets" / "acs.css").read_text(encoding="utf-8")
+    assert ".has-motion-control .diagram-motion-toggle" in css
+    assert ".has-drawer .diagram-motion-toggle" not in css
 
     buttons = [attrs for tag, attrs, _ in _Tags(page).tags if tag == "button" and attrs.get("id") == "diagram-motion-toggle"]
     assert len(buttons) == 1

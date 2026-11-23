@@ -9,6 +9,9 @@
       transform-box: view-box;
       transform-origin: 340px 340px;
     }
+    .acs-ring {
+      vector-effect: non-scaling-stroke;
+    }
     .acs-particle {
       offset-distance: 50%;
     }
@@ -43,7 +46,7 @@
         animation-delay: 4s;
       }
       .acs-starburst .acs-particle {
-        animation: acs-particle-travel 5s linear infinite;
+        animation: acs-particle-travel 5s linear infinite backwards;
       }
       .acs-starburst .acs-particle--1 { animation-duration: 5s; animation-delay: 0s; }
       .acs-starburst .acs-particle--2 { animation-duration: 5.3s; animation-delay: 1.5s; }
@@ -71,7 +74,7 @@
       animation-delay: 4s;
     }
     .acs-starburst[data-motion="playing"] .acs-particle {
-      animation: acs-particle-travel 5s linear infinite;
+      animation: acs-particle-travel 5s linear infinite backwards;
     }
     .acs-starburst[data-motion="playing"] .acs-particle--1 { animation-duration: 5s; animation-delay: 0s; }
     .acs-starburst[data-motion="playing"] .acs-particle--2 { animation-duration: 5.3s; animation-delay: 1.5s; }

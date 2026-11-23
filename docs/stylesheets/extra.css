@@ -148,8 +148,9 @@
   max-width: none;
 }
 
-/* Native drawer button mirrors Material's media-query hiding for [for=__drawer],
-   and morphs its two horizontal bars into an X while the drawer is open. */
+/* Drawer toggle morphs its two horizontal bars into an X while the drawer is open,
+   both via [aria-expanded="true"] (JS-upgraded button) and via the #__drawer checkbox
+   (pure-CSS <label> fallback when JS is disabled). */
 @media screen and (min-width: 76.25em) {
   .md-header__button.acs-drawer-toggle {
     display: none;
@@ -164,15 +165,17 @@
     transition: transform 0.25s ease;
   }
 }
-.acs-drawer-toggle[aria-expanded="true"] .menu-line--top {
+.acs-drawer-toggle[aria-expanded="true"] .menu-line--top,
+[data-md-toggle="drawer"]:checked ~ .md-header .acs-drawer-toggle .menu-line--top {
   transform: translateY(3.5px) rotate(45deg);
 }
-.acs-drawer-toggle[aria-expanded="true"] .menu-line--bottom {
+.acs-drawer-toggle[aria-expanded="true"] .menu-line--bottom,
+[data-md-toggle="drawer"]:checked ~ .md-header .acs-drawer-toggle .menu-line--bottom {
   transform: translateY(-3.5px) rotate(-45deg);
 }
 
 /* Keep the closed mobile drawer out of the keyboard tab order even before JS runs
-   (WCAG 2.4.7). Start the drawer below the header so the X close button stays
+   (WCAG 2.4.3). Start the drawer below the header so the X close button stays
    visible and clickable to recall the menu, matching the landing page. */
 @media screen and (max-width: 76.234375em) {
   .md-header {
@@ -200,10 +203,25 @@
   }
 }
 
-/* High-contrast focus indicators for header controls and keyboard-scrollable regions. */
-.md-header :focus-visible {
+/* High-contrast focus indicators for dark header-bar controls, search controls,
+   and keyboard-scrollable regions. Limiting the light header ring to bar controls
+   keeps it off the light-mode search input and results inside .md-header. */
+.md-header__button:focus-visible,
+.md-header__ellipsis:focus-visible,
+.md-header__option:focus-visible,
+.md-header__source .md-source:focus-visible {
   outline: 3px solid var(--md-primary-bg-color);
   outline-offset: -2px;
+}
+.md-search__input:focus-visible,
+.md-search-result__link:focus-visible {
+  outline: 3px solid var(--md-accent-fg-color);
+  outline-offset: -2px;
+}
+.md-sidebar .md-nav__link:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .md-typeset pre > code[tabindex="0"]:focus-visible,
 .md-typeset__scrollwrap[tabindex="0"]:focus-visible,
@@ -240,10 +258,17 @@ a.md-header__ellipsis { display: block; }
 }
 
 @media (forced-colors: active) {
-  .md-header :focus-visible,
+  .md-header__button:focus-visible,
+  .md-header__ellipsis:focus-visible,
+  .md-header__option:focus-visible,
+  .md-header__source .md-source:focus-visible,
+  .md-search__input:focus-visible,
+  .md-search-result__link:focus-visible,
+  .md-sidebar .md-nav__link:focus-visible,
   .md-typeset a:focus-visible,
   .md-typeset pre > code[tabindex="0"]:focus-visible,
-  .md-typeset__scrollwrap[tabindex="0"]:focus-visible {
+  .md-typeset__scrollwrap[tabindex="0"]:focus-visible,
+  .md-typeset .tabbed-labels[tabindex="0"]:focus-visible {
     outline: 3px solid Highlight;
   }
 }

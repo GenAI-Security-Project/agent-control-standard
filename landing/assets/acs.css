@@ -421,7 +421,7 @@ section:first-of-type { border-top: 0; }
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
-.has-drawer .diagram-motion-toggle { display: inline-flex; }
+.has-motion-control .diagram-motion-toggle { display: inline-flex; }
 .diagram-motion-toggle:hover { background-color: var(--acs-surface-2); }
 
 .film { margin: 0 0 3.5rem; }
