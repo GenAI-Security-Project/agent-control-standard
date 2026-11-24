@@ -83,9 +83,11 @@ class Settings:
     # answers at once. A live or capture call can take far longer, so those runs wait 30 s. quiet_s, when set,
     # overrides both, for tests.
     quiet_s: float | None = None
-    # 8 s, not 5: paced replay holds an answer up to 4 s (gateway REPLAY_PACE_MAX_S), so the log can go silent that long
-    # inside one call plus the Guardian's decision (2026-11-24 live recording run).
-    quiet_replay_s: float = 8.0
+    # 15 s, not 5: paced replay holds an answer up to 4 s (gateway REPLAY_PACE_MAX_S), and FinBot's agents spend
+    # seconds between model calls connecting their MCP servers. At 8 s setup read as quiet while the fraud agent was
+    # still connecting, the driver's calls met FinBot's agents in its SQLite database, and FinBot answered nothing for
+    # 40 s (2026-11-24 m3 take). Live runs wait 30 s for the same reason.
+    quiet_replay_s: float = 15.0
     quiet_live_s: float = 30.0
     # A capture take also waits while a model call it sent has no recording line yet, up to this long past the last
     # model input line. A slow live call (a judge, say) can outlast quiet_live_s, and a take ended then is cut short
