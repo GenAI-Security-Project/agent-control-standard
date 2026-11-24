@@ -97,7 +97,7 @@ def on_run(lab: LabState, key: fixtures.DecisionKey, *, run_id: str = ON_RUN, st
            session_start: bool = True, unlogged_call: str | None = None, session_id: str = SESSION_A,
            calls: tuple[tuple[str, str], ...] = CALLS, opening: bool = True, signed: bool = True,
            result: str = "completed", model_input: bool = True, extra_inputs: tuple[Any, ...] = (),
-           record: bool = True, **extra: Any) -> tuple[int, int]:
+           record: bool = True, deny_reasons: tuple[str, ...] = (), **extra: Any) -> tuple[int, int]:
     """An enforce run of s1 as the gateway records it: a session opened with a handshake and sessionStart, then each
     call gated on request and on result, audited with its call_id, and fed back to the model in the next request.
     Returns the audit and model input offsets it started from, so a test can write one record over several sessions.
@@ -128,7 +128,8 @@ def on_run(lab: LabState, key: fixtures.DecisionKey, *, run_id: str = ON_RUN, st
         lab.pair(req, sign(answer(req, decision), req))
         lab.audit("decision_applied", session_id=session_id, epoch=1, method="steps/toolCallRequest", tool=name,
                   call_id=call_id, request_id=req["params"]["request_id"], decision=decision,
-                  guardian_decision=decision, reason_codes=[], cause=None, failure_class=None)
+                  guardian_decision=decision, reason_codes=list(deny_reasons) if decision == "deny" else [],
+                  cause=None, failure_class=None)
         if decision != "allow":
             continue
         done = request("steps/toolCallResult", {"tool": {"name": name}, "exit_status": "success",
@@ -446,3 +447,26 @@ def test_check_names_no_trace_view():
     source = Path(m1.__file__).read_text(encoding="utf-8")
     for banned in ("import socket", "import http", "import urllib", "import requests", "import httpx"):
         assert banned not in source
+
+
+
+# Rock's ruling 2026-11-24: real FinBot ends onboarding by emailing the vendor, and module 3's starter rule denies it.
+
+def _starter_mail_deny_run(lab, key, reason_codes):
+    """An enforce run whose last call, the onboarding email, the starter rule denies with these reason codes."""
+    on_run(lab, key, calls=(*CALLS, ("finmail__send_email", "call_mail")), deny="finmail__send_email",
+           deny_reasons=tuple(reason_codes))
+
+
+def test_the_starter_rule_s_block_on_the_onboarding_email_passes(lab, key, capsys):
+    off_run(lab)
+    _starter_mail_deny_run(lab, key, ["external_recipient"])
+    code, lines = run_check(lab, capsys)
+    assert code == 0, lines
+
+
+@pytest.mark.parametrize("reason_codes", [[], ["payment_threshold"], ["external_recipient", "payment_threshold"]])
+def test_a_mail_deny_for_any_other_reason_is_still_not_yet(lab, key, capsys, reason_codes):
+    off_run(lab)
+    _starter_mail_deny_run(lab, key, reason_codes)
+    assert_one_line(*run_check(lab, capsys), 1, "deny", "finmail__send_email", "./lab.sh run s1")

@@ -1,6 +1,6 @@
 """Module 1's check, Wire it in (issue #589, LAB-16 Task 6). lab check 1 runs it.
 
-Version 1.0.0. Owner: Rock Lambros. Standard library only, like evidence.py, which it reads every source through.
+Version 1.1.0. Owner: Rock Lambros. Standard library only, like evidence.py, which it reads every source through.
 
 Module 1 passes on two runs of s1, judged as the newest of each mode. Each counts only when the driver wrote
 result completed with no error and no replay miss, since any other run shows nothing about the wiring.
@@ -8,8 +8,10 @@ result completed with no error and no replay miss, since any other run shows not
 - The newest off run leaves no ACS record. Its audit window opens no session, no transcript changed while it ran, and
   its model input window holds at least one line, which shows FinBot reached the model through the gateway. "No
   transcript changed" compares the driver's transcripts_before and transcripts_after size maps, never file times.
-- The newest enforce run reached the model, nothing in it was denied or modified, and FinBot made at least one tool
-  call. One of its sessions holds the whole record on its own: a ServerHello that agreed to sign decisions with
+- The newest enforce run reached the model, nothing in it was denied or modified but the one block module 3 owns, and
+  FinBot made at least one tool call. That block is module 3's starter rule denying FinBot's onboarding email to the
+  vendor, external_recipient on finmail__send_email: real FinBot always sends it after onboarding, and the starter
+  allows company mailboxes only (Rock's ruling, 2026-11-24). One of its sessions holds the whole record on its own: a ServerHello that agreed to sign decisions with
   ML-DSA-65, requests signed with HMAC-SHA256, an answered steps/sessionStart, an allow for every function_call in the
   run's model input window, and a transcript acs-verify passes with the key document, the fingerprint lab init wrote
   to .env, and the audit chain. Each allow is an applied allow in the audit log for that session, that call_id and
@@ -34,6 +36,9 @@ import report
 from evidence import Evidence, EvidenceError, Run
 
 SCENARIO = "s1"
+# The deny module 1 expects: module 3's starter rule on FinBot's onboarding email to the vendor.
+STARTER_MAIL_TOOL = "finmail__send_email"
+STARTER_MAIL_REASON = "external_recipient"
 ML_DSA_65 = "ML-DSA-65"
 HMAC_SHA256 = "HMAC-SHA256"
 RESPONSE_ALGORITHM = "x_acs_lab_response_algorithm"
@@ -192,16 +197,29 @@ def _tool_name(request: dict[str, Any]) -> str:
     return str(tool.get("name")) if isinstance(tool, dict) else "a tool"
 
 
+def _starter_mail_deny(event: dict[str, Any]) -> bool:
+    """Module 3's starter rule denying an email to an outside address, the one deny module 1 expects."""
+    return (event.get("decision") == "deny" and event.get("tool") == STARTER_MAIL_TOOL
+            and event.get("reason_codes") == [STARTER_MAIL_REASON])
+
+
 def _judge_decisions(run: Run, audit: list[dict[str, Any]],
                      transcripts: dict[str, list[dict[str, Any]]]) -> None:
-    """Module 1 shows the wiring on calls the starter policies allow, so any other decision is not yet."""
-    found = [(str(e.get("decision")), str(e.get("tool"))) for e in audit
-             if e.get("acs_audit_event") == APPLIED and e.get("method") in GOVERNED and e.get("decision") != "allow"]
+    """Module 1 shows the wiring on calls the starter policies allow, so any other decision is not yet. The one
+    exception is module 3's starter block on the onboarding email, taken from the audit log, which records each
+    applied decision's reason codes. A transcript deny on that tool passes only when the audit log shows such a block."""
+    applied = [e for e in audit if e.get("acs_audit_event") == APPLIED and e.get("method") in GOVERNED]
+    found = [(str(e.get("decision")), str(e.get("tool"))) for e in applied
+             if e.get("decision") != "allow" and not _starter_mail_deny(e)]
+    starter_blocks = any(_starter_mail_deny(e) for e in applied)
     for lines in transcripts.values():
         for request, answer in _pairs(lines):
             decision = _result(answer).get("decision")
-            if request.get("method") in GOVERNED and decision not in (None, "allow"):
-                found.append((str(decision), _tool_name(request)))
+            if request.get("method") not in GOVERNED or decision in (None, "allow"):
+                continue
+            if decision == "deny" and _tool_name(request) == STARTER_MAIL_TOOL and starter_blocks:
+                continue
+            found.append((str(decision), _tool_name(request)))
     if found:
         decision, tool = found[0]
         raise _NotYet(f"enforce run {run.run_id} has a {decision} on {tool}, and module 1 expects every call allowed. "
