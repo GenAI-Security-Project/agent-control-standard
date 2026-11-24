@@ -831,14 +831,14 @@ def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
 
     import finbot_client
     cue_path = harness.bundle / "state" / "ui" / driver.CHAT_CUE
-    done = 0
+    done: tuple = ()
     while not stop.is_set():
         try:
             cue = json.loads(cue_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             cue = None
-        if cue and cue["seq"] > done:
-            done = cue["seq"]
+        if cue and (cue["run"], cue["seq"]) != done:
+            done = (cue["run"], cue["seq"])
             sent.append(cue)
             path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
             headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
@@ -880,3 +880,20 @@ def test_browser_chat_mode_with_no_typist_runs_short(harness, capsys, monkeypatc
     code, lines = harness.run(capsys, "s3", done_timeout_s=1.0)
     assert code != 0, lines
     assert not any(s.method == "POST" and s.path == "/vendor/api/v1/chat" for s in harness.lab.seen)
+
+
+def test_each_run_names_its_cues(harness, capsys, monkeypatch):
+    """Two runs both cue seq 1. The run id tells them apart, so a typist types the second run's chat too."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        first, _ = harness.run(capsys, "s3")
+        second, _ = harness.run(capsys, "s3")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert (first, second) == (0, 0)
+    assert [c["seq"] for c in sent] == [1, 1] and len({c["run"] for c in sent}) == 2

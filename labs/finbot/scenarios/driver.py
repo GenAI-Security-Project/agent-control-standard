@@ -44,6 +44,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -529,6 +530,9 @@ class Run:
         self.errors: dict[str, str] = {}
         self.chat_in_browser = os.environ.get("LAB_CHAT_IN_BROWSER", "").strip() == "1"
         self.cue_seq = 0
+        # Each run numbers its cues from 1, so the cue also names its run, and a typist tells two runs' first cues
+        # apart (2026-11-24 m3 take, where s3's first cue read as s2's).
+        self.cue_run = uuid.uuid4().hex
 
     # -- waits ---------------------------------------------------------------------------------------------------
 
@@ -605,7 +609,7 @@ class Run:
         if cookie is None:
             raise finbot_client.FinBotError("no FinBot session cookie to hand to the browser")
         port = self.env.get("LAB_PORT_FINBOT", "").strip() or "8097"
-        cue = {"seq": self.cue_seq, "surface": surface, "page": CHAT_PAGES[surface], "message": message,
+        cue = {"run": self.cue_run, "seq": self.cue_seq, "surface": surface, "page": CHAT_PAGES[surface], "message": message,
                "url": f"http://localhost:{port}",
                # The session, then FinBot's CTF agreement, which its pages ask a fresh browser to accept first
                # (finbot/static/pages/agreement.html sets this cookie). The lab's operator accepts it by running the lab.
