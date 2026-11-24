@@ -24,7 +24,12 @@
 # The specification is the highest-blast-radius surface in the repository.
 # A schema change propagates to every downstream implementer.
 /specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+# AgBOM workstream (D-044): the AgBOM lead joins the owners of the inspect docs and schemas.
+/specification/v0.1.0/agbom/   @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
+/specification/v0.1.0/inspect/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
 /docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+# AgBOM workstream (D-044): the AgBOM lead joins the owners of the inspect docs and schemas.
+/docs/spec/inspect/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036 @e2hln
 
 # These generate and publish the public site, or feed the build that does. A change
 # here alters what the front door says, which is the same class of privilege the
