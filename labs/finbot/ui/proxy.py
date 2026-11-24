@@ -26,6 +26,12 @@ LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "[::1]"})
 # Hop-by-hop headers (RFC 9110 7.6.1) belong to one connection, so they are not forwarded either way.
 HOP_BY_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
                         "transfer-encoding", "upgrade", "proxy-connection"})
+# FinBot pins a session to a hash of Accept-Language and Accept-Encoding (finbot/core/auth/session.py, strict
+# fingerprint). The scenario driver sends these fixed values (scenarios/finbot_client.py FINGERPRINT_HEADERS), so the
+# browser sends them too and the two share the driver's session, the one the videos type into. identity also keeps the
+# chat stream uncompressed, so it streams as FinBot writes it.
+FINGERPRINT = {"Accept-Language": "en-US", "Accept-Encoding": "identity"}
+FINGERPRINT_NAMES = frozenset(k.lower() for k in FINGERPRINT)
 MAX_BODY = 10 * 1024 * 1024
 # A chat can think for minutes on a live model (FinBot's LLM_TIMEOUT is 360 s in compose.yaml).
 UPSTREAM_TIMEOUT_S = 400.0
@@ -71,14 +77,17 @@ class Handler(BaseHTTPRequestHandler):
             self._refuse(413 if length > MAX_BODY else 400, "the request body must have a length of at most 10 MiB")
             return
         body = self.rfile.read(length) if length else None
-        headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP}
+        headers = {k: v for k, v in self.headers.items()
+                   if k.lower() not in HOP_BY_HOP and k.lower() not in FINGERPRINT_NAMES}
+        headers.update(FINGERPRINT)
         conn = http.client.HTTPConnection(*self.upstream, timeout=UPSTREAM_TIMEOUT_S)
         try:
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
             self.send_response(response.status, response.reason)
             for name, value in response.getheaders():
-                if name.lower() not in HOP_BY_HOP and name.lower() != "content-length":
+                # send_response wrote this proxy's own Server and Date, so FinBot's would repeat them.
+                if name.lower() not in HOP_BY_HOP and name.lower() not in ("content-length", "server", "date"):
                     self.send_header(name, value)
             self.send_header("Connection", "close")
             self.end_headers()

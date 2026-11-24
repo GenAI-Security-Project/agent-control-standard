@@ -9,15 +9,18 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scenarios"))
 
 import proxy  # noqa: E402
 
 
 class Upstream(BaseHTTPRequestHandler):
     seen: list = []
+    fingerprints: list = []
 
     def do_GET(self):
         Upstream.seen.append((self.command, self.path, self.headers.get("Host"), None))
+        Upstream.fingerprints.append((self.headers.get("Accept-Language"), self.headers.get("Accept-Encoding")))
         if self.path == "/stream":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -47,6 +50,7 @@ class Upstream(BaseHTTPRequestHandler):
 @pytest.fixture
 def stack():
     Upstream.seen = []
+    Upstream.fingerprints = []
     up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=up.serve_forever, daemon=True).start()
     proxy.Handler.upstream = ("127.0.0.1", up.server_address[1])
@@ -101,3 +105,13 @@ def test_an_absolute_target_is_refused_and_never_followed(stack):
                                           ("LOCALHOST", "localhost"), ("127.0.0.1", "127.0.0.1")])
 def test_host_name_drops_the_port(header, name):
     assert proxy.host_name(header) == name
+
+
+def test_the_browser_carries_the_drivers_fingerprint(stack):
+    conn = http.client.HTTPConnection("127.0.0.1", stack, timeout=5)
+    conn.request("GET", "/vendor/assistant", headers={"Host": "localhost:8097", "Accept-Language": "fr-CA,fr;q=0.9",
+                                                      "Accept-Encoding": "gzip, br"})
+    conn.getresponse().read()
+    assert Upstream.fingerprints == [("en-US", "identity")]
+    import finbot_client
+    assert {k: finbot_client.FINGERPRINT_HEADERS[k] for k in proxy.FINGERPRINT} == proxy.FINGERPRINT

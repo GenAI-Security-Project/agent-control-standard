@@ -344,6 +344,8 @@ services:
     entrypoint: ["/usr/local/bin/lab-entrypoint", "python", "/opt/lab/cli/lab.py"]
     environment:
       LAB_BUNDLE: /lab
+      # 1 makes `lab run` cue each chat for FinBot's own page instead of posting it (scenarios/driver.py CHAT_PAGES).
+      LAB_CHAT_IN_BROWSER: ${LAB_CHAT_IN_BROWSER:-0}
       ACS_GATEWAY_ADMIN_HOST: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
       ACS_GATEWAY_ADMIN_PORT: "8091"
       ACS_GATEWAY_ADMIN_TOKEN_FILE: /lab/state/secrets/admin.token

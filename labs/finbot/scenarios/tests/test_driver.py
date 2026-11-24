@@ -822,3 +822,60 @@ def test_a_gateway_with_no_replay_route_still_runs_every_recording(harness, caps
     monkeypatch.setattr(driver.Admin, "select_replay", no_route)
     code, lines = harness.run(capsys, "s1")
     assert code == 0, lines
+
+
+def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
+    """Stands in for the recording toolkit: reads each chat cue and posts it as FinBot's page would, with the cue's
+    cookie and the driver's fingerprint headers, which ui/proxy.py adds for a browser."""
+    import urllib.request
+
+    import finbot_client
+    cue_path = harness.bundle / "state" / "ui" / driver.CHAT_CUE
+    done = 0
+    while not stop.is_set():
+        try:
+            cue = json.loads(cue_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cue = None
+        if cue and cue["seq"] > done:
+            done = cue["seq"]
+            sent.append(cue)
+            path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
+            headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
+                       "X-CSRF-Token": harness.lab.csrf, "Cookie": f"{cue['cookie']['name']}={cue['cookie']['value']}"}
+            request = urllib.request.Request(harness.settings.finbot_url + path, method="POST", headers=headers,
+                                             data=json.dumps({"message": cue["message"]}).encode())
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read()
+        stop.wait(0.05)
+
+
+def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, monkeypatch):
+    """2026-11-24 lab videos: with LAB_CHAT_IN_BROWSER=1 the message is typed into FinBot's page, so the driver cues it
+    and never posts the chat itself. The run still completes on the reply FinBot's history holds."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        code, lines = harness.run(capsys, "s3")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert code == 0, lines
+    assert [c["page"] for c in sent] == ["/vendor/assistant"]
+    assert sent[0]["cookie"]["name"] == "finbot_session" and sent[0]["url"] == "http://localhost:8097"
+    assert any("Type the message into FinBot's chat at http://localhost:8097/vendor/assistant" in line for line in lines)
+    # One chat, the typist's, and the session never moved (a fingerprint mismatch would start a new namespace).
+    assert sum(1 for s in harness.lab.seen if s.method == "POST" and s.path == "/vendor/api/v1/chat") == 1
+    assert harness.lab.hijacks == 0
+    cue_file = harness.bundle / "state" / "ui" / driver.CHAT_CUE
+    assert cue_file.stat().st_mode & 0o077 == 0
+
+
+def test_browser_chat_mode_with_no_typist_runs_short(harness, capsys, monkeypatch):
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    code, lines = harness.run(capsys, "s3", done_timeout_s=1.0)
+    assert code != 0, lines
+    assert not any(s.method == "POST" and s.path == "/vendor/api/v1/chat" for s in harness.lab.seen)

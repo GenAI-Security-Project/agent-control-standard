@@ -83,7 +83,9 @@ class Settings:
     # answers at once. A live or capture call can take far longer, so those runs wait 30 s. quiet_s, when set,
     # overrides both, for tests.
     quiet_s: float | None = None
-    quiet_replay_s: float = 5.0
+    # 8 s, not 5: paced replay holds an answer up to 4 s (gateway REPLAY_PACE_MAX_S), so the log can go silent that long
+    # inside one call plus the Guardian's decision (2026-11-24 live recording run).
+    quiet_replay_s: float = 8.0
     quiet_live_s: float = 30.0
     # A capture take also waits while a model call it sent has no recording line yet, up to this long past the last
     # model input line. A slow live call (a judge, say) can outlast quiet_live_s, and a take ended then is cut short
@@ -97,6 +99,14 @@ class Settings:
     end_wait_s: float = 20.0
     approver_wait_s: float = approver_client.WAIT_S
     scenarios_dir: Path = HERE
+
+
+# Browser chat mode (LAB_CHAT_IN_BROWSER=1, 2026-11-24 lab videos): the driver writes each chat step as a cue for a
+# person or the recording toolkit to type into FinBot's own chat page, and reads the reply from FinBot's history,
+# instead of posting the message itself. Every other step runs as before. The page each surface chats on, under the
+# finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
+CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
+CHAT_CUE = "chat-cue.json"
 
 
 class DriverError(Exception):
@@ -514,6 +524,8 @@ class Run:
         self.ids: dict[str, Any] = {}
         self.chats: list[dict[str, Any]] = []
         self.errors: dict[str, str] = {}
+        self.chat_in_browser = os.environ.get("LAB_CHAT_IN_BROWSER", "").strip() == "1"
+        self.cue_seq = 0
 
     # -- waits ---------------------------------------------------------------------------------------------------
 
@@ -566,7 +578,10 @@ class Run:
             if isinstance(invoice, dict) and isinstance(invoice.get("id"), int):
                 self.ids["invoice_id"] = invoice["id"]
         elif kind == "chat":
-            result = self.finbot.chat(step["surface"], step["message"], timeout=self.settings.done_timeout_s)
+            if self.chat_in_browser:
+                result = self.chat_in_page(step["surface"], step["message"])
+            else:
+                result = self.finbot.chat(step["surface"], step["message"], timeout=self.settings.done_timeout_s)
             self.chats.append({"surface": step["surface"], "done": result.done})
         else:
             # A fresh namespace has no server row until this GET creates it, and the PUT and reset return 404
@@ -577,6 +592,38 @@ class Run:
                                  body={"tool_overrides": {step["tool"]: {"description": step["description"]}}})
             else:
                 self.finbot.call(routes.RESET_TOOLS, server=step["server"])
+
+    def chat_in_page(self, surface: str, message: str) -> finbot_client.ChatResult:
+        """Cues one chat step for FinBot's page and waits, up to the done bound, for FinBot's history to hold the message
+        and a reply after it. The cue names the page, the message and the driver's session cookie, so the typist's
+        browser joins this run's session. It is written owner-only under state/, like the lab's other secrets."""
+        self.cue_seq += 1
+        cookie = next((c for c in self.finbot.jar if c.name == finbot_client.SESSION_COOKIE), None)
+        if cookie is None:
+            raise finbot_client.FinBotError("no FinBot session cookie to hand to the browser")
+        port = self.env.get("LAB_PORT_FINBOT", "").strip() or "8097"
+        cue = {"seq": self.cue_seq, "surface": surface, "page": CHAT_PAGES[surface], "message": message,
+               "url": f"http://localhost:{port}", "cookie": {"name": cookie.name, "value": cookie.value, "path": "/"}}
+        folder = self.state / "ui"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".cue-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(cue, f)
+        os.replace(tmp, folder / CHAT_CUE)
+        report.info(f"Type the message into FinBot's chat at http://localhost:{port}{CHAT_PAGES[surface]}")
+        route = routes.probe_route({"kind": "chat_reply", "surface": surface})
+        deadline = time.monotonic() + self.settings.done_timeout_s
+        while time.monotonic() < deadline:
+            messages = self._list(self.finbot.call(route), "messages")
+            asked = [n for n, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"
+                     and isinstance(m.get("content"), str) and m["content"].strip() == message.strip()]
+            if asked:
+                replies = [m["content"] for m in messages[asked[-1] + 1:] if isinstance(m, dict)
+                           and m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"]]
+                if replies:
+                    return finbot_client.ChatResult(True, replies[-1])
+            time.sleep(self.settings.poll_s)
+        return finbot_client.ChatResult(False, "")
 
     def _id(self, name: str) -> Any:
         value = self.ids.get(name, self.scenario["facts"].get(name))
