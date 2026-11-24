@@ -842,7 +842,7 @@ def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
             sent.append(cue)
             path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
             headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
-                       "X-CSRF-Token": harness.lab.csrf, "Cookie": f"{cue['cookie']['name']}={cue['cookie']['value']}"}
+                       "X-CSRF-Token": harness.lab.csrf, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
             request = urllib.request.Request(harness.settings.finbot_url + path, method="POST", headers=headers,
                                              data=json.dumps({"message": cue["message"]}).encode())
             with urllib.request.urlopen(request, timeout=10) as response:
@@ -865,7 +865,8 @@ def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, mo
         typist.join(5)
     assert code == 0, lines
     assert [c["page"] for c in sent] == ["/vendor/assistant"]
-    assert sent[0]["cookie"]["name"] == "finbot_session" and sent[0]["url"] == "http://localhost:8097"
+    assert [c["name"] for c in sent[0]["cookies"]] == ["finbot_session", "agreedToRules"]
+    assert sent[0]["url"] == "http://localhost:8097"
     assert any("Type the message into FinBot's chat at http://localhost:8097/vendor/assistant" in line for line in lines)
     # One chat, the typist's, and the session never moved (a fingerprint mismatch would start a new namespace).
     assert sum(1 for s in harness.lab.seen if s.method == "POST" and s.path == "/vendor/api/v1/chat") == 1

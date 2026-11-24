@@ -107,6 +107,7 @@ class Settings:
 # finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
 CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
 CHAT_CUE = "chat-cue.json"
+AGREEMENT_COOKIE = "agreedToRules"
 
 
 class DriverError(Exception):
@@ -603,7 +604,11 @@ class Run:
             raise finbot_client.FinBotError("no FinBot session cookie to hand to the browser")
         port = self.env.get("LAB_PORT_FINBOT", "").strip() or "8097"
         cue = {"seq": self.cue_seq, "surface": surface, "page": CHAT_PAGES[surface], "message": message,
-               "url": f"http://localhost:{port}", "cookie": {"name": cookie.name, "value": cookie.value, "path": "/"}}
+               "url": f"http://localhost:{port}",
+               # The session, then FinBot's CTF agreement, which its pages ask a fresh browser to accept first
+               # (finbot/static/pages/agreement.html sets this cookie). The lab's operator accepts it by running the lab.
+               "cookies": [{"name": cookie.name, "value": cookie.value, "path": "/", "httpOnly": True},
+                           {"name": AGREEMENT_COOKIE, "value": "yes", "path": "/", "httpOnly": False}]}
         folder = self.state / "ui"
         folder.mkdir(mode=0o700, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=".cue-")
