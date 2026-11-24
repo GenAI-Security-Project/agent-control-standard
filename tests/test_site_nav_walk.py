@@ -238,7 +238,7 @@ EXTERNAL_SECTION_ROW = """<li class="md-nav__item md-nav__item--section md-nav__
 
 # The landing pane in the shape the renderer emits.
 LANDING_PANE = """<nav id="site-nav" aria-label="Navigation"><ul>
-<li><details open><summary><a href="./" aria-current="page">Home</a></summary><ul>
+<li class="nav-home"><a href="./" aria-current="page">Home</a><details open><summary aria-label="Home sections"></summary><ul>
 <li><a href="#problem">The problem</a></li>
 <li><a href="#roadmap">Roadmap</a></li>
 </ul></details></li>
@@ -317,6 +317,15 @@ def test_landing_walk_home_summary_link_is_one_group_row():
         (2, "Roadmap", LANDING_ROOT + "#roadmap", False, False),
     ]
     assert [row for row in rows if row[1] == "Home"] == [rows[0]]
+
+
+def test_landing_walk_accepts_legacy_nested_home_summary_link():
+    """Keep verify_site_nav compatible with cached CDN copies during rollout."""
+    legacy = LANDING_PANE.replace(
+        '<li class="nav-home"><a href="./" aria-current="page">Home</a><details open><summary aria-label="Home sections"></summary>',
+        '<li><details open><summary><a href="./" aria-current="page">Home</a></summary>',
+    )
+    assert walk_landing(legacy, LANDING_ROOT) == walk_landing(LANDING_PANE, LANDING_ROOT)
 
 
 def test_landing_walk_section_row_from_heading():

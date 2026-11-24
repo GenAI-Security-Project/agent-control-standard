@@ -48,13 +48,27 @@
     var blocks = document.querySelectorAll("pre.acs-diagram, div." + RENDERED_CLASS);
     if (!blocks.length) return;
 
-    window.mermaid.initialize({
+    var theme = currentTheme();
+    var config = {
       startOnLoad: false,
       // Diagram text comes from this repository's own documentation, never from a
       // reader. `strict` is kept anyway so a future page cannot inject markup.
       securityLevel: "strict",
-      theme: currentTheme()
-    });
+      theme: theme
+    };
+    if (theme === "dark") {
+      // Mermaid's default dark theme computes #cccccc on #585858 (4.44:1) for edge
+      // labels. Override with ACS dark surface and foreground tokens (>16:1).
+      config.themeVariables = {
+        edgeLabelBackground: "#161616",
+        labelBackground: "#161616",
+        textColor: "#f7f7f7",
+        primaryTextColor: "#f7f7f7",
+        secondaryTextColor: "#f7f7f7",
+        tertiaryTextColor: "#f7f7f7"
+      };
+    }
+    window.mermaid.initialize(config);
 
     Array.prototype.forEach.call(blocks, function (block, index) {
       var source = sourceOf(block);

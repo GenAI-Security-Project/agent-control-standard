@@ -23,7 +23,7 @@
  {% set class = "md-header" %}
  {% if "navigation.tabs.sticky" in features %}
    {% set class = class ~ " md-header--shadow md-header--lifted" %}
-@@ -9,7 +24,7 @@
+@@ -9,15 +24,17 @@
  {% endif %}
  <header class="{{ class }}" data-md-component="header">
    <nav class="md-header__inner md-grid" aria-label="{{ lang.t('header') }}">
@@ -31,17 +31,22 @@
 +    <a href="{{ landing_root | e }}" title="{{ config.site_name | e }}" class="md-header__button md-logo" aria-label="{{ config.site_name }}" data-md-component="logo">
        {% include "partials/logo.html" %}
      </a>
-     <label class="md-header__button md-icon" for="__drawer">
-@@ -17,7 +32,7 @@
-       {% include ".icons/" ~ icon ~ ".svg" %}
+-    <label class="md-header__button md-icon" for="__drawer">
+-      {% set icon = config.theme.icon.menu or "material/menu" %}
+-      {% include ".icons/" ~ icon ~ ".svg" %}
++    <label class="md-header__button md-icon acs-drawer-toggle" for="__drawer" aria-label="Menu">
++      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
++        <rect class="menu-line menu-line--top" x="3" y="7.5" width="18" height="2" rx="1"/>
++        <rect class="menu-line menu-line--bottom" x="3" y="14.5" width="18" height="2" rx="1"/>
++      </svg>
      </label>
      <div class="md-header__title" data-md-component="header-title">
 -      <div class="md-header__ellipsis">
-+      <a href="{{ landing_root | e }}" class="md-header__ellipsis" aria-label="{{ config.site_name | e }}">
++      <a href="{{ landing_root | e }}" class="md-header__ellipsis">
          <div class="md-header__topic">
            <span class="md-ellipsis">
              {{ config.site_name }}
-@@ -32,7 +47,7 @@
+@@ -32,7 +49,7 @@
              {% endif %}
            </span>
          </div>
@@ -50,3 +55,12 @@
      </div>
      {% if config.theme.palette %}
        {% if not config.theme.palette is mapping %}
+@@ -48,7 +65,7 @@
+     {% if "material/search" in config.plugins %}
+       {% set search = config.plugins["material/search"] | attr("config") %}
+       {% if search.enabled %}
+-        <label class="md-header__button md-icon" for="__search">
++        <label class="md-header__button md-icon" for="__search" role="button" tabindex="0" aria-label="Search">
+           {% set icon = config.theme.icon.search or "material/magnify" %}
+           {% include ".icons/" ~ icon ~ ".svg" %}
+         </label>
