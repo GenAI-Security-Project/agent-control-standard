@@ -52,6 +52,8 @@ _ID = re.compile(
     r")(?![A-Za-z0-9_-])")
 _PLACEHOLDER = re.compile(r"\{\{acs:(?:user|wf|tr|uuid|time):\d+\}\}")
 _USER_VALUE = re.compile(_USER)
+# A recording's file name, as config's ACS_REPLAY_SCENARIO and ACS_CAPTURE_SCENARIO take it.
+SCENARIO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SKELETON_ENTRY = re.compile(r"(?:user|wf|tr|uuid|time):[1-9][0-9]*")
 
 
@@ -885,9 +887,25 @@ class UpstreamSource:
                 # this run's (fix round 2, CR5).
                 raise ValueError(f"ACS_CAPTURE_SCENARIO file {self._capture_path} already exists. Move it away or "
                                  "choose another scenario")
+        self._recordings_dir = config.recordings_dir
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir, config.replay_scenario)
+
+    def select(self, scenario: str | None) -> None:
+        """Serve replay from <scenario>.jsonl alone, or from every file when scenario is None.
+
+        Two recordings of one scenario share their first keys, s1__off and s1__enforce among them, and the store searches
+        files in name order, so an off run took the enforce take's first answer and went off its own path (2026-11-23
+        owner sitting). The lab picks the run's recording before each run. The store's file list is swapped in place,
+        so the lifespan's transport serves the new list from its next request. A bad name or a missing file raises
+        ValueError and leaves the store as it was."""
+        if self.mode != "replay" or self._store is None:
+            raise ValueError("the gateway does not run on replay")
+        if scenario is not None and not SCENARIO_NAME.fullmatch(scenario):
+            raise ValueError("a replay scenario is a plain name of letters, digits, _ and -")
+        assert self._recordings_dir is not None
+        self._store.files = RecordingStore.load(self._recordings_dir, scenario).files
 
     @property
     def records_branch(self) -> bool:

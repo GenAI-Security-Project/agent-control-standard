@@ -107,6 +107,8 @@ class FakeLab:
     # The capture stem, as compose.capture.yaml hands it to the real gateway, which appends one recording line per
     # exchange it records. Set by a test that runs a capture, so the driver sees each call recorded.
     capture: str | None = None
+    # Every recording the driver asked the gateway to replay from, None for all of them, in order.
+    replay_selected: list[str | None] = field(default_factory=list)
     move_namespace_after_chat: bool = False
     approver_fails: bool = False
     no_assistant_reply: bool = False
@@ -371,13 +373,19 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
         # -- the gateway's admin port ---------------------------------------------------------------------------
 
         def _admin(self, seen: Seen) -> None:
-            if (seen.method, seen.path) != ("POST", "/epoch"):
+            if seen.method != "POST" or seen.path not in ("/epoch", "/replay"):
                 seen.status = 404
                 _json(self, 404, {"error": "not found"})
                 return
             if seen.headers.get("authorization") != f"Bearer {lab.admin_token}":
                 seen.status = 401
                 _json(self, 401, {"error": "unauthorized"})
+                return
+            if seen.path == "/replay":
+                scenario = json.loads(seen.body)["scenario"]
+                lab.replay_selected.append(scenario)
+                seen.status = 200
+                _json(self, 200, {"scenario": scenario})
                 return
             lab.epoch_calls += 1
             if lab.epoch_calls == lab.fail_epoch_on:

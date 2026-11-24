@@ -729,3 +729,49 @@ def test_calls_in_flight_counts_input_lines_since_the_take_less_recording_lines(
     assert driver.Run.calls_in_flight(run) == 0                 # a retried key never goes negative
     run.capture_path = None
     assert driver.Run.calls_in_flight(run) == 0                 # outside a capture nothing is in flight
+
+
+# 2026-11-24 owner sitting: s1__off and s1__enforce share their first keys, so an off run replayed the enforce take's
+# first answer. The driver now picks each replay run's recording from the manifest and the live policies.
+
+def _policy_pack(harness: Harness, **variants: str) -> None:
+    """The real policy pack in the harness bundle, with each named module's live file set to that variant."""
+    import shutil
+    policy = harness.bundle / "policy"
+    shutil.copytree(SCENARIOS.parent / "policy", policy, dirs_exist_ok=True)
+    modules = {m["id"]: m for m in json.loads((policy / "tools" / "modules.json").read_text())["modules"]}
+    for module, variant in {"m3": "starter", "m4": "starter", "m5": "starter", "m6": "starter", **variants}.items():
+        entry = modules[module]
+        source = entry["variants"].get(variant, {}).get("file")
+        if source:
+            shutil.copyfile(policy / source, policy / entry["live"])
+
+
+@pytest.mark.parametrize("argv, mode, policies, want", [
+    (["s1"], "off", {}, "s1__off"),
+    (["s1"], "enforce", {}, "s1__enforce"),
+    (["s2"], "shadow", {}, "s2__off"),
+    (["s3"], "enforce", {}, "s3__deny"),
+    (["s3"], "enforce", {"m3": "solution"}, "s3__allow"),
+    (["s4a", "--answer", "approve"], "enforce", {"m3": "solution", "m4": "solution"}, "s4a__approve"),
+])
+def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, capsys, argv, mode, policies, want):
+    _policy_pack(harness, **policies)
+    _set_env(harness, "ACS_LAB_MODE=enforce", f"ACS_LAB_MODE={mode}")
+    harness.lab.chat_done = True
+    harness.run(capsys, *argv)
+    assert harness.lab.replay_selected[0] == want and harness.lab.replay_selected[-1] is None
+    assert harness.records()[-1]["replay"] == want
+
+
+def test_a_run_no_row_settles_replays_from_every_recording(harness, capsys):
+    # No policy pack in the bundle: no row with a policy matches, so the gateway keeps every recording.
+    harness.run(capsys, "s1")
+    assert harness.lab.replay_selected == [None]
+    assert harness.records()[-1]["replay"] is None
+
+
+def test_a_capture_selects_no_replay(harness, capsys):
+    harness.lab.capture = "s3__allow"
+    harness.run(capsys, "s3", "--capture", "s3__allow")
+    assert harness.lab.replay_selected == []

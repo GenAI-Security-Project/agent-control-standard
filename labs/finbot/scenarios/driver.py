@@ -1,6 +1,6 @@
 """The scenario driver behind lab run and lab record (issue #589, LAB-16 Task 4, Appendix A.11). Standard library only.
 
-Version 1.3.0. Owner: Rock Lambros.
+Version 1.4.0. Owner: Rock Lambros.
 
     lab _drive <scenario> [--answer approve|reject] [--clean] [--capture STEM]
 
@@ -272,6 +272,23 @@ class Admin:
             raise DriverError("the gateway's epoch answer has no epoch number")
         return epoch
 
+    def select_replay(self, recording: str | None) -> None:
+        """POST /replay: the one recording the gateway replays from, or every one with None (2026-11-24)."""
+        request = urllib.request.Request(self.url.removesuffix("/epoch") + "/replay", method="POST",
+                                         data=json.dumps({"scenario": recording}).encode("utf-8"),
+                                         headers={"Authorization": f"Bearer {self.token}",
+                                                  "Content-Type": "application/json"})
+        try:
+            with self._opener.open(request, timeout=ADMIN_TIMEOUT_S) as response:
+                response.read(64 * 1024)
+        except urllib.error.HTTPError as e:
+            e.close()
+            raise DriverError(f"the gateway refused to replay {recording or 'every recording'} with HTTP {e.code}. "
+                              "Check that replay/recordings holds it") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise DriverError(f"the gateway's admin port didn't answer ({getattr(e, 'reason', e)}). "
+                              "Run ./lab.sh up") from None
+
 
 # How far back the driver reads at a time to find a log's last newline. Model input lines carry FinBot's whole tool
 # list, so one line can be longer than this, and the scan keeps going.
@@ -489,6 +506,7 @@ class Run:
         self.capture_path = (bundle / "replay" / "recordings" / f"{args.capture}.jsonl"
                              if args.capture is not None else None)
         self.capture_inputs_start = 0
+        self.replay: str | None = None
         self.ids: dict[str, Any] = {}
         self.chats: list[dict[str, Any]] = []
         self.errors: dict[str, str] = {}
@@ -653,7 +671,67 @@ class Run:
             return watch
         return ApprovalWatch(approver, self.args.answer, self.settings, url=url, poll_deadline_s=deadline)
 
+    def live_policies(self) -> dict[str, str]:
+        """Each policy module's live variant, read by comparing its live file with each variant's file."""
+        policy = self.bundle / "policy"
+        live: dict[str, str] = {}
+        try:
+            modules = json.loads((policy / "tools" / "modules.json").read_text(encoding="utf-8"))["modules"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return live
+        for module in modules:
+            if not isinstance(module, dict) or not isinstance(module.get("live"), str):
+                continue
+            try:
+                current = (policy / module["live"]).read_bytes()
+            except OSError:
+                continue
+            for name, variant in (module.get("variants") or {}).items():
+                path = variant.get("file") if isinstance(variant, dict) else None
+                try:
+                    if isinstance(path, str) and (policy / path).read_bytes() == current:
+                        live[module["id"]] = name
+                        break
+                except OSError:
+                    continue
+        return live
+
+    def replay_recording(self) -> str | None:
+        """The recording this replay run follows: the one every manifest row with this run's scenario, mode, flags and
+        live policies names. None outside replay, in a capture, or when the rows don't settle on one, and the gateway
+        then replays from every recording as before.
+
+        Two recordings of one scenario share their first keys, and the gateway searched files in name order, so an off
+        run of s1 took s1__enforce's first answer and ran short (2026-11-24 owner sitting)."""
+        if self.env.get("ACS_UPSTREAM") != "replay" or self.args.capture is not None:
+            return None
+        try:
+            rows = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8"))["runs"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        live = self.live_policies()
+        found = {r.get("recording") for r in rows if isinstance(r, dict)
+                 and r.get("scenario") == self.args.scenario and r.get("mode") == self.env.get("ACS_LAB_MODE")
+                 and r.get("answer") == self.args.answer and bool(r.get("clean")) == self.args.clean
+                 and (r.get("policy") is None or r.get("policy") == {k: live.get(k) for k in r["policy"]})}
+        return found.pop() if len(found) == 1 and isinstance(next(iter(found)), str) else None
+
     def execute(self) -> int:
+        replaying = self.env.get("ACS_UPSTREAM") == "replay" and self.args.capture is None
+        if replaying:
+            # Always set, so a selection a crashed run left behind never reaches this one.
+            self.replay = self.replay_recording()
+            self.admin.select_replay(self.replay)
+        try:
+            return self._execute()
+        finally:
+            if replaying and self.replay is not None:
+                try:
+                    self.admin.select_replay(None)
+                except DriverError:
+                    pass
+
+    def _execute(self) -> int:
         a0, setup_inputs = self.logs.offsets()
         self.capture_inputs_start = setup_inputs
         epoch_before = self.admin.bump()
@@ -687,7 +765,8 @@ class Run:
             "format": RUN_FORMAT, "run_id": "", "scenario": self.args.scenario,
             "flags": {"answer": self.args.answer, "clean": self.args.clean},
             "mode": self.env["ACS_LAB_MODE"], "signing": self.env["ACS_RESPONSE_SIGNING"],
-            "upstream": self.env["ACS_UPSTREAM"], "capture": self.args.capture, "policy_sha256": "",
+            "upstream": self.env["ACS_UPSTREAM"], "capture": self.args.capture, "replay": self.replay,
+            "policy_sha256": "",
             "started": _rfc3339(started), "ended": "", "result": "broken",
             "error": "the driver stopped before the run finished",
             "audit": [audit_start, audit_start], "model_inputs": [inputs_start, inputs_start], "sessions": [],

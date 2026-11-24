@@ -132,3 +132,56 @@ def test_the_session_a_request_moves_to_stays_pinned_through_the_upstream_call(g
     gw.sessions.get, gw._upstream = get, upstream_call
     client.post("/v1/responses", json=finbot_request())
     assert seen[1] == [(1, True)]
+
+
+# 2026-11-24 owner sitting: s1__off and s1__enforce share their first keys, and the store searched files in name
+# order, so an off run replayed the enforce take's first answer. The lab now picks each run's recording.
+
+def _line(scenario: str, text: str) -> str:
+    import json
+    from conftest import message_item
+    return json.dumps({"scenario": scenario, "match": "Pay\\ vendor\\ 7", "turn": 1, "step": 0, "branch": "",
+                       "stream": False, "ids": [], "response": response_body(message_item(text))})
+
+
+def test_replay_serves_only_the_selected_recording(gateway, tmp_path, token_file, audit):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    (rec / "s1__enforce.jsonl").write_text(_line("s1__enforce", "from enforce") + "\n")
+    (rec / "s1__off.jsonl").write_text(_line("s1__off", "from off") + "\n")
+    client = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(rec))
+    admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
+    auth = {"Authorization": f"Bearer {'t' * 40}"}
+
+    def answer():
+        return client.post("/v1/responses", json=finbot_request()).json()["output"][0]["content"][0]["text"]
+
+    assert answer() == "from enforce"                      # every file, in name order: the collision
+    assert admin.post("/replay", json={"scenario": "s1__off"}, headers=auth).json() == {"scenario": "s1__off"}
+    assert answer() == "from off"
+    assert admin.post("/replay", json={"scenario": None}, headers=auth).status_code == 200
+    assert answer() == "from enforce"
+    assert [e["scenario"] for e in audit() if e["acs_audit_event"] == "replay_selected"] == ["s1__off", None]
+
+
+def test_replay_selection_refuses_a_wrong_token_a_bad_name_and_a_missing_file(gateway, tmp_path, token_file):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    (rec / "s1__off.jsonl").write_text(_line("s1__off", "from off") + "\n")
+    client = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(rec))
+    admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
+    auth = {"Authorization": f"Bearer {'t' * 40}"}
+    assert admin.post("/replay", json={"scenario": "s1__off"}).status_code == 401
+    assert admin.post("/replay", json={"scenario": "../x"}, headers=auth).status_code == 409
+    missing = admin.post("/replay", json={"scenario": "s9__off"}, headers=auth)
+    assert missing.status_code == 409 and str(rec) not in missing.text
+    assert admin.post("/replay", json={"scenario": 7}, headers=auth).status_code == 400
+    assert admin.post("/replay", content=b"not json", headers=auth).status_code == 400
+    assert client.post("/v1/responses", json=finbot_request()).json()["output"][0]["content"][0]["text"] == "from off"
+
+
+def test_replay_selection_refuses_a_gateway_not_on_replay(gateway, guardian, token_file):
+    client = gateway(ACS_LAB_MODE="enforce", ACS_GUARDIAN_URL=guardian)
+    admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
+    refused = admin.post("/replay", json={"scenario": "s1__off"}, headers={"Authorization": f"Bearer {'t' * 40}"})
+    assert refused.status_code == 409
