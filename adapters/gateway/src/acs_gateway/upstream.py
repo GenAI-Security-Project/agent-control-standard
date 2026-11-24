@@ -578,6 +578,46 @@ class LiveTransport(httpx.AsyncBaseTransport):
         await self._client.aclose()
 
 
+def _delta_part(event: Any) -> tuple[Any, ...] | None:
+    """The streamed part a delta event adds to, or None when the event carries no text delta."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("delta"), str):
+        return None
+    return (data.get("type"), data.get("item_id"), data.get("output_index"), data.get("content_index"))
+
+
+def _rejoin_deltas(raw: list[dict[str, Any]], normalized: list[dict[str, Any]],
+                   mapping: dict[str, str]) -> list[dict[str, Any]]:
+    """normalized with each streamed part whose deltas, joined, still hold a user id remapped as one text.
+
+    The part's text is joined from the raw deltas, mapped with to_placeholders and kept in the part's first delta
+    event; its other delta events are dropped. Replay sends the part as one delta, which a streaming client reads
+    as it reads several. Parts that hold no user id keep their deltas as they came."""
+    parts: dict[tuple[Any, ...], list[int]] = {}
+    for i, event in enumerate(raw):
+        part = _delta_part(event)
+        if part is not None:
+            parts.setdefault(part, []).append(i)
+    first: dict[int, str] = {}
+    dropped: set[int] = set()
+    for indexes in parts.values():
+        mapped = "".join(normalized[i]["data"]["delta"] for i in indexes)
+        if not (unmapped_user_id(mapped) or holds_mapped_user(mapped, mapping)):
+            continue
+        first[indexes[0]] = to_placeholders("".join(raw[i]["data"]["delta"] for i in indexes), mapping)
+        dropped.update(indexes[1:])
+    if not first:
+        return normalized
+    out = []
+    for i, event in enumerate(normalized):
+        if i in dropped:
+            continue
+        if i in first:
+            event = {**event, "data": {**event["data"], "delta": first[i]}}
+        out.append(event)
+    return out
+
+
 def parse_events(text: str) -> list[dict[str, Any]] | None:
     """Server-sent events as [{"event", "data"}], or None when any event's data isn't a JSON object."""
     events = []
@@ -775,8 +815,12 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
             return
         if stream:
-            # An id split across deltas escapes both checks piece by piece and rejoins on replay, so the deltas are
-            # checked again joined with no separator (fix round 4, I-2).
+            # An id split across deltas escapes both checks piece by piece and rejoins on replay (fix round 4, I-2).
+            # Each streamed part's deltas are mapped again as one text and kept as one delta, so a mapped id the model
+            # spelled across deltas becomes its placeholder: FinBot's answers name the vendor's namespace, and every
+            # s5 take of the 2026-11-23 owner sitting was skipped for it. What still holds an id after that is
+            # skipped as before.
+            normalized = _rejoin_deltas(response, normalized, mapping)
             joined = "".join(e["data"]["delta"] for e in normalized
                              if isinstance(e.get("data"), dict) and isinstance(e["data"].get("delta"), str))
             if unmapped_user_id(joined) or holds_mapped_user(joined, mapping):

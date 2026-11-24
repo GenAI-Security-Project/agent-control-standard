@@ -198,18 +198,41 @@ def split_stream(*pieces):
     return SSE([f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events])
 
 
+NS_B = "ns_user_ZyXwVuTs_-987654"
+
+
 @pytest.mark.parametrize("pieces", [
-    (f"Mail admin@{NS_A[:10]}", f"{NS_A[10:]}.finbot"),
-    (f"Mail admin@{NS_A[:6]}", NS_A[6:15], f"{NS_A[15:]}.finbot"),
+    (f"Mail admin@{NS_B[:10]}", f"{NS_B[10:]}.finbot"),
+    (f"Mail admin@{NS_B[:6]}", NS_B[6:15], f"{NS_B[15:]}.finbot"),
 ])
 def test_capture_refuses_an_id_split_across_streamed_deltas(gateway, upstream, tmp_path, audit, pieces):
-    """Fix round 4, I-2: no single delta holds the namespace, but the deltas rejoin into it on replay."""
+    """Fix round 4, I-2: no single delta holds the namespace, but the deltas rejoin into it on replay. A namespace the
+    request never named stays refused once the part is remapped whole (2026-11-23)."""
     upstream.reply(split_stream(*pieces))
     response = capture(gateway, tmp_path).post("/v1/responses", json={
         **finbot_request(system=f"User ID: {USER_A}"), "stream": True})
     assert response.status_code == 200
     assert recorded(tmp_path) == []
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
+@pytest.mark.parametrize("pieces", [
+    (f"Mail admin@{NS_A[:10]}", f"{NS_A[10:]}.finbot"),
+    (f"Mail admin@{NS_A[:6]}", NS_A[6:15], f"{NS_A[15:]}.finbot"),
+])
+def test_a_mapped_namespace_split_across_deltas_is_captured_as_its_placeholder(gateway, upstream, tmp_path, pieces):
+    """2026-11-23 owner sitting: FinBot's streamed answer named the vendor's namespace, which the request carries, and
+    every s5 take was skipped. The part's deltas are remapped as one text and kept as one delta."""
+    upstream.reply(split_stream(*pieces))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
+    [line] = recorded(tmp_path)
+    deltas = [e["data"]["delta"] for e in line["response"] if "delta" in e["data"]]
+    assert deltas == ["Mail admin@ns_{{acs:user:1}}.finbot"]
+    assert NS_A not in (tmp_path / "rec" / "s1.jsonl").read_text()
+    other = "ns_user_ZyXwVuTs_-987654"
+    replayed = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec")).post(
+        "/v1/responses", json={**finbot_request(system=system(other)), "stream": True})
+    assert f"Mail admin@{other}.finbot" in replayed.text and NS_A not in replayed.text
 
 
 def test_split_deltas_without_an_id_are_captured(gateway, upstream, tmp_path):
