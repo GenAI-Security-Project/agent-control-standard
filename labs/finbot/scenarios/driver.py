@@ -891,7 +891,7 @@ class Run:
         else:
             report.not_yet(f"{name} {label}: {record['error']}. {where}")
         port = self.env.get("LAB_PORT_VIEWER", "").strip() or "8095"
-        report.info(f"The decision viewer is at http://127.0.0.1:{port}/")
+        report.info(f"The decision viewer is at http://localhost:{port}/")
         return code
 
 

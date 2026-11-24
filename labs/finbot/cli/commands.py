@@ -344,13 +344,13 @@ def _port(name: str, default: int) -> str:
 
 def cmd_viewer(args: list[str]) -> int:
     """viewer: where the decision viewer is. The container can't open a browser on the host."""
-    report.done(f"the decision viewer is at http://127.0.0.1:{_port('LAB_PORT_VIEWER', 8095)}/")
+    report.done(f"the decision viewer is at http://localhost:{_port('LAB_PORT_VIEWER', 8095)}/")
     return report.EXIT_PASS
 
 
 def cmd_approver(args: list[str]) -> int:
     """approver: where the approval page is and the token it asks for (LAB-08)."""
-    report.done(f"the approver page is at http://127.0.0.1:{_port('LAB_PORT_APPROVER', 8090)}/")
+    report.done(f"the approver page is at http://localhost:{_port('LAB_PORT_APPROVER', 8090)}/")
     report.info("It asks for the token in labs/finbot/state/secrets/approver.token on your machine.")
     return report.EXIT_PASS
 
