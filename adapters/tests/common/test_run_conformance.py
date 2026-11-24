@@ -23,6 +23,11 @@ class PlatformSelection(unittest.TestCase):
         self.assertEqual(
             labels, ["guardian-conformance", "_common", "core", "client", "package", "benchmarks", "cursor"])
 
+    def test_fastmcp_platform_runs_shared_checks_and_fastmcp(self):
+        labels = [suite[0] for suite in rc._select_suites(["fastmcp"])]
+        self.assertEqual(
+            labels, ["guardian-conformance", "_common", "core", "client", "package", "benchmarks", "fastmcp"])
+
     def test_multiple_platforms_follow_requested_order(self):
         labels = [
             suite[0]
