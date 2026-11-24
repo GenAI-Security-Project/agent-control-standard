@@ -295,6 +295,10 @@ def desired_labels() -> list[Label]:
             description="Owning workstream. Maintainers only",
         ),
         Label(
+            name="workstream:agbom", color="c5def5",
+            description="Owning workstream. Maintainers only",
+        ),
+        Label(
             name="workstream:testing", color="c5def5",
             description="Owning workstream. Maintainers only",
         ),
