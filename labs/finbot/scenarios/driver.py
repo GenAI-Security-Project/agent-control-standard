@@ -1,6 +1,6 @@
 """The scenario driver behind lab run and lab record (issue #589, LAB-16 Task 4, Appendix A.11). Standard library only.
 
-Version 1.2.0. Owner: Rock Lambros.
+Version 1.3.0. Owner: Rock Lambros.
 
     lab _drive <scenario> [--answer approve|reject] [--clean] [--capture STEM]
 
@@ -16,7 +16,8 @@ over the routes finbot_routes pins, and never reads FinBot's database. One run, 
 5. Clear the chat history of each surface the scenario chats on (the driver rule, PREMORTEM P10).
 6. Note where the logs end. That is the start of the run's window. Run the steps, with --clean skipping the step kind
    the scenario's facts name, while a watch on the approver page answers with --answer or points the attendee there.
-7. Wait for quiet: no new model input line for QUIET_S seconds and no call waiting for a person, bounded at
+7. Wait for quiet: no new model input line for QUIET_S seconds, no call waiting for a person and, in a capture, no
+   model call still waiting for its recording line (up to inflight_max_s), bounded at
    DONE_TIMEOUT_S, which covers FinBot's LLM_TIMEOUT of 360 seconds. FinBot's background agents keep working after a
    chat's done marker, so quiet is the only done signal (reports/LAB-16-finbot-facts.md).
 8. Take each evidence probe from FinBot's API.
@@ -84,6 +85,11 @@ class Settings:
     quiet_s: float | None = None
     quiet_replay_s: float = 5.0
     quiet_live_s: float = 30.0
+    # A capture take also waits while a model call it sent has no recording line yet, up to this long past the last
+    # model input line. A slow live call (a judge, say) can outlast quiet_live_s, and a take ended then is cut short
+    # and fails its replay (2026-11-23 live sitting). FinBot gives up on a call at its LLM_TIMEOUT of 360 s, so a call
+    # still unrecorded past that was abandoned: a retried attempt the gateway never records, or a failed exchange.
+    inflight_max_s: float = 360.0
     poll_s: float = 0.5
     done_timeout_s: float = 420.0
     # sessionEnd waits on the decision timeout (5 s in compose.yaml) plus the gateway's grace, per session, in
@@ -324,6 +330,19 @@ class Logs:
     def inputs_size(self) -> int:
         return self._size(self.inputs_path)
 
+    @staticmethod
+    def lines_from(path: Path, start: int = 0) -> int:
+        """Whole lines in path from byte start on, 0 when it is missing."""
+        count = 0
+        try:
+            with path.open("rb") as f:
+                f.seek(start)
+                while chunk := f.read(LINE_SCAN_BYTES):
+                    count += chunk.count(b"\n")
+        except FileNotFoundError:
+            return 0
+        return count
+
     def audit_since(self, start: int) -> list[dict[str, Any]]:
         """ACS_AUDIT lines from start to the last whole line."""
         try:
@@ -466,6 +485,10 @@ class Run:
         live = self.env["ACS_UPSTREAM"] != "replay" or args.capture is not None
         self.quiet_s = settings.quiet_s if settings.quiet_s is not None else (
             settings.quiet_live_s if live else settings.quiet_replay_s)
+        # The take's recording, which the gateway appends one line to per exchange it records (capture only).
+        self.capture_path = (bundle / "replay" / "recordings" / f"{args.capture}.jsonl"
+                             if args.capture is not None else None)
+        self.capture_inputs_start = 0
         self.ids: dict[str, Any] = {}
         self.chats: list[dict[str, Any]] = []
         self.errors: dict[str, str] = {}
@@ -483,11 +506,20 @@ class Run:
             current = self.logs.inputs_size()
             if current != size or (watch is not None and watch.busy()):
                 size, last_change = current, now
-            if now - last_change >= self.quiet_s:
+            quiet_for = now - last_change
+            if quiet_for >= self.quiet_s and (quiet_for >= s.inflight_max_s or self.calls_in_flight() == 0):
                 return True
             if now >= deadline:
                 return False
             time.sleep(s.poll_s)
+
+    def calls_in_flight(self) -> int:
+        """Model calls this capture take sent that have no recording line yet: input lines since the take began
+        minus the recording's lines. Always 0 outside a capture."""
+        if self.capture_path is None:
+            return 0
+        sent = self.logs.lines_from(self.logs.inputs_path, self.capture_inputs_start)
+        return max(0, sent - self.logs.lines_from(self.capture_path))
 
     def wait_ended(self, start: int) -> list[str]:
         """Waits for sessionEnd on every session negotiated since start. Returns the ones still open at the bound."""
@@ -623,6 +655,7 @@ class Run:
 
     def execute(self) -> int:
         a0, setup_inputs = self.logs.offsets()
+        self.capture_inputs_start = setup_inputs
         epoch_before = self.admin.bump()
         try:
             namespace = self.finbot.open_session()

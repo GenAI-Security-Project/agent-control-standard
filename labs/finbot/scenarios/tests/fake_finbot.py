@@ -104,6 +104,9 @@ class FakeLab:
     # slow upstream call or a Guardian decision does on a live run.
     gap_s: float = 0.0
     replay_miss_on_chat: bool = False
+    # The capture stem, as compose.capture.yaml hands it to the real gateway, which appends one recording line per
+    # exchange it records. Set by a test that runs a capture, so the driver sees each call recorded.
+    capture: str | None = None
     move_namespace_after_chat: bool = False
     approver_fails: bool = False
     no_assistant_reply: bool = False
@@ -133,6 +136,11 @@ class FakeLab:
 
     def model_input(self, body: dict[str, Any]) -> None:
         ModelInputLog(self.bundle / "state" / "model-inputs.jsonl").append(body)
+        if self.capture is not None:
+            recordings = self.bundle / "replay" / "recordings"
+            recordings.mkdir(parents=True, exist_ok=True)
+            with (recordings / f"{self.capture}.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"scenario": self.capture}) + "\n")
         self.last_model_input = time.monotonic()
 
     def open_session(self) -> str:

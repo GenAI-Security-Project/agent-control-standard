@@ -295,6 +295,7 @@ def test_untrusted_text_escaped_and_bounded(harness, capsys):
 
 
 def test_capture_stem_recorded(harness, capsys):
+    harness.lab.capture = "s3__allow"
     code, lines = harness.run(capsys, "s3", "--capture", "s3__allow")
     assert code == 0, lines
     (record,) = harness.records()
@@ -479,6 +480,7 @@ def test_quiet_window_follows_the_upstream(harness, capsys):
 
     _set_env(harness, "ACS_UPSTREAM=openai", "ACS_UPSTREAM=replay")
     harness.run(capsys, "s1", **settings)
+    harness.lab.capture = "s1__off"
     harness.run(capsys, "s1", "--capture", "s1__off", **settings)
     by_capture = {r["capture"]: r["quiet_s"] for r in harness.records() if r["scenario"] == "s1"}
     assert by_capture == {None: 0.3, "s1__off": 1.5}
@@ -675,3 +677,55 @@ def test_judge_flags_an_unposted_answer_without_an_error_string():
               "approval": {"answer": "approve", "answered": False, "error": None, "status": None}}
     code, _ = driver.judge(record)
     assert code == 1 and record["result"] == "not_yet" and "--answer" in record["error"]
+
+
+# 2026-11-23 live sitting: a capture take ended while a slow live call had no recording line yet, so its replay ran
+# short. A capture now stays open while a call it sent is unrecorded, up to inflight_max_s.
+
+def _quiet_run(tmp_path, capture: bool, inflight, **settings):
+    import types
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "model-inputs.jsonl").write_text("", encoding="utf-8")
+    run = types.SimpleNamespace(
+        settings=driver.Settings(finbot_url="http://127.0.0.1:1", approver_port=1, quiet_s=0.2, poll_s=0.02,
+                                 done_timeout_s=3.0, **settings),
+        logs=driver.Logs(state), quiet_s=0.2)
+    run.calls_in_flight = inflight
+    return run
+
+
+def test_a_capture_with_a_call_in_flight_is_not_quiet_until_it_is_recorded(tmp_path):
+    import time
+    started = time.monotonic()
+    run = _quiet_run(tmp_path, True, lambda: 1 if time.monotonic() - started < 0.8 else 0, inflight_max_s=5.0)
+    assert driver.Run.wait_quiet(run) is True
+    assert time.monotonic() - started >= 0.8
+
+
+def test_an_unrecorded_call_holds_a_capture_only_up_to_the_bound(tmp_path):
+    import time
+    started = time.monotonic()
+    run = _quiet_run(tmp_path, True, lambda: 1, inflight_max_s=0.6)
+    assert driver.Run.wait_quiet(run) is True
+    assert 0.6 <= time.monotonic() - started < 2.0
+
+
+def test_calls_in_flight_counts_input_lines_since_the_take_less_recording_lines(tmp_path):
+    import types
+    state = tmp_path / "state"
+    state.mkdir()
+    inputs = state / "model-inputs.jsonl"
+    inputs.write_text('{"before": 1}\n', encoding="utf-8")
+    start = inputs.stat().st_size
+    with inputs.open("a", encoding="utf-8") as f:
+        f.write('{"a": 1}\n{"b": 2}\n{"c": 3}\n')
+    recording = tmp_path / "s1__off.jsonl"
+    run = types.SimpleNamespace(logs=driver.Logs(state), capture_path=recording, capture_inputs_start=start)
+    assert driver.Run.calls_in_flight(run) == 3                 # no recording file yet
+    recording.write_text('{"x": 1}\n{"y": 2}\n', encoding="utf-8")
+    assert driver.Run.calls_in_flight(run) == 1
+    recording.write_text('{"x": 1}\n{"y": 2}\n{"z": 3}\n{"w": 4}\n', encoding="utf-8")
+    assert driver.Run.calls_in_flight(run) == 0                 # a retried key never goes negative
+    run.capture_path = None
+    assert driver.Run.calls_in_flight(run) == 0                 # outside a capture nothing is in flight
