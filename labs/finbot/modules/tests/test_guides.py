@@ -51,7 +51,9 @@ TRUST_BOUNDARY = "Checks read `state/`, so anything that can write `state/` can 
 
 MANIFEST_KEYS = {"run", "module", "scenario", "mode", "signing", "policy", "answer", "clean", "command", "recording"}
 RECORDING_NAME = re.compile(r"[A-Za-z0-9_-]{1,64}")  # the gateway's rule for a recording name
-RECORDING_COUNT = 15  # the plan's guide-run table: fifteen recordings
+# The plan's guide-run table held fifteen. The 2026-11-24 owner sitting split s2 three ways, since module 3's solution
+# and module 7's full set change decisions FinBot sees, so a take recorded under the starter can't replay them.
+RECORDING_COUNT = 17
 
 
 def guide(n: int) -> Path:

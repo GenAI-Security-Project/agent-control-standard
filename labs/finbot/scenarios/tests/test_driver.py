@@ -753,6 +753,9 @@ def _policy_pack(harness: Harness, **variants: str) -> None:
     (["s2"], "shadow", {}, "s2__off"),
     (["s3"], "enforce", {}, "s3__deny"),
     (["s3"], "enforce", {"m3": "solution"}, "s3__allow"),
+    (["s2"], "enforce", {}, "s2__enforce"),
+    (["s2"], "enforce", {"m3": "solution"}, "s2__fixed"),
+    (["s2"], "enforce", {"m3": "solution", "m4": "solution", "m5": "solution", "m6": "solution"}, "s2__solutions"),
     (["s4a", "--answer", "approve"], "enforce", {"m3": "solution", "m4": "solution"}, "s4a__approve"),
 ])
 def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, capsys, argv, mode, policies, want):
@@ -782,8 +785,17 @@ def test_a_learners_own_policy_still_settles_a_run_whose_recording_does_not_turn
     _policy_pack(harness, m3="solution")
     live = harness.bundle / "policy" / "outbound_email.rego"
     live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s1")
+    assert harness.lab.replay_selected[0] == "s1__enforce"
+
+
+def test_s2_under_an_unknown_module_3_policy_replays_from_every_recording(harness, capsys):
+    # s2 has a take per policy set (starter, module 3 fixed, every solution), so an unknown policy can't pick one.
+    _policy_pack(harness, m3="solution")
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
     harness.run(capsys, "s2")
-    assert harness.lab.replay_selected[0] == "s2__enforce"
+    assert harness.lab.replay_selected == [None]
 
 
 def test_s3_with_an_unknown_policy_replays_from_every_recording(harness, capsys):
