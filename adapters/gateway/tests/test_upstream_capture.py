@@ -235,6 +235,37 @@ def test_a_mapped_namespace_split_across_deltas_is_captured_as_its_placeholder(g
     assert f"Mail admin@{other}.finbot" in replayed.text and NS_A not in replayed.text
 
 
+def two_part_stream(first: str, *second: str):
+    """Two streamed text parts with no done events, the second split where the caller says."""
+    events = [("response.created", {"type": "response.created", "sequence_number": 0,
+                                    "response": {**response_body(), "status": "in_progress", "output": []}})]
+    pieces = [(0, first), *((1, p) for p in second)]
+    events += [("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": i + 1,
+                                               "item_id": "msg_1", "output_index": 0, "content_index": c,
+                                               "delta": p, "logprobs": []}) for i, (c, p) in enumerate(pieces)]
+    events.append(("response.completed", {"type": "response.completed", "sequence_number": len(pieces) + 1,
+                                          "response": {**response_body(), "output": []}}))
+    return SSE([f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events])
+
+
+def test_an_unnamed_id_beside_another_part_is_still_refused(gateway, upstream, tmp_path, audit):
+    """Review of the 2026-11-23 change: a part ending in a letter, joined with the next, hid the next part's id from
+    the id pattern's edges. Each part is checked on its own."""
+    upstream.reply(two_part_stream("abc", NS_B[:12], NS_B[12:]))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
+@pytest.mark.parametrize("form", [NS_A.upper(), USER_A.removeprefix("user_")])
+def test_a_mapped_id_in_a_form_the_pattern_misses_is_refused_after_the_merge(gateway, upstream, tmp_path, audit, form):
+    """Review of the 2026-11-23 change: holds_mapped_user still refuses once a part's deltas are merged."""
+    upstream.reply(split_stream(f"Mail admin@{form[:7]}", f"{form[7:]}.finbot"))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
 def test_split_deltas_without_an_id_are_captured(gateway, upstream, tmp_path):
     upstream.reply(split_stream("Hello ", "there"))
     capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(), "stream": True})

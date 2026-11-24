@@ -583,7 +583,18 @@ def _delta_part(event: Any) -> tuple[Any, ...] | None:
     data = event.get("data") if isinstance(event, dict) else None
     if not isinstance(data, dict) or not isinstance(data.get("delta"), str):
         return None
-    return (data.get("type"), data.get("item_id"), data.get("output_index"), data.get("content_index"))
+    return (data.get("type"), data.get("item_id"), data.get("output_index"), data.get("content_index"),
+            data.get("summary_index"))
+
+
+def _part_texts(events: list[dict[str, Any]]) -> list[str]:
+    """Each streamed part's deltas joined, one text per part, in the order the parts first appear."""
+    parts: dict[tuple[Any, ...], list[str]] = {}
+    for event in events:
+        part = _delta_part(event)
+        if part is not None:
+            parts.setdefault(part, []).append(event["data"]["delta"])
+    return ["".join(pieces) for pieces in parts.values()]
 
 
 def _rejoin_deltas(raw: list[dict[str, Any]], normalized: list[dict[str, Any]],
@@ -821,9 +832,9 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             # s5 take of the 2026-11-23 owner sitting was skipped for it. What still holds an id after that is
             # skipped as before.
             normalized = _rejoin_deltas(response, normalized, mapping)
-            joined = "".join(e["data"]["delta"] for e in normalized
-                             if isinstance(e.get("data"), dict) and isinstance(e["data"].get("delta"), str))
-            if unmapped_user_id(joined) or holds_mapped_user(joined, mapping):
+            # Each part is checked on its own: joined with the next part's text, a letter or digit beside an id hides
+            # it from the id pattern's edges (review of the 2026-11-23 change).
+            if any(unmapped_user_id(text) or holds_mapped_user(text, mapping) for text in _part_texts(normalized)):
                 _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario, where="stream_deltas")
                 return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
