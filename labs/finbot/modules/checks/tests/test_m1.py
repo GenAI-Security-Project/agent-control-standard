@@ -470,3 +470,24 @@ def test_a_mail_deny_for_any_other_reason_is_still_not_yet(lab, key, capsys, rea
     off_run(lab)
     _starter_mail_deny_run(lab, key, reason_codes)
     assert_one_line(*run_check(lab, capsys), 1, "deny", "finmail__send_email", "./lab.sh run s1")
+
+
+def test_calls_spread_over_several_verified_sessions_pass(lab, key, capsys):
+    """2026-11-24 owner sitting: real FinBot runs one ACS session per agent, so an enforce run of s1 spreads its calls
+    over several sessions. Each call has its allow in one of them, and each such session verifies."""
+    off_run(lab)
+    second = str(uuid.uuid4())
+    a0, m0 = on_run(lab, key, calls=(CALLS[0],), record=False)
+    on_run(lab, key, session_id=second, calls=(CALLS[1],), record=False)
+    lab.run_record(ON_RUN, mode="enforce", started=ON_STARTED, ended=ON_ENDED, audit=(a0, lab.size(lab.audit_file)),
+                   model_inputs=(m0, lab.size(lab.model_input_file)), sessions=[SESSION_A, second],
+                   finbot=finbot({}, transcript_sizes(lab)))
+    code, out = run_check(lab, capsys)
+    assert code == 0, out
+    assert "all 2 sessions" in out[-1]
+
+
+def test_a_call_no_session_allowed_is_not_yet(lab, key, capsys):
+    off_run(lab)
+    on_run(lab, key, unlogged_call="get_vendor_invoices")
+    assert_one_line(*run_check(lab, capsys), 1, "get_vendor_invoices", "./lab.sh run s1")
