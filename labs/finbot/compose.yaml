@@ -119,9 +119,9 @@ services:
       # Replay answers from recordings with no network and no key. compose.openai.yaml switches to OpenAI.
       ACS_UPSTREAM: replay
       ACS_RECORDINGS_DIR: /lab/replay/recordings
-      # Each replayed answer waits a quarter of its recorded duration, at most 4 s, so the run keeps its live shape and
+      # Each replayed answer waits a tenth of its recorded duration, at most 4 s, so the run keeps its live shape and
       # the viewer can tell decisions apart. LAB_REPLAY_PACE=0 answers at once.
-      ACS_REPLAY_PACE: ${LAB_REPLAY_PACE:-0.25}
+      ACS_REPLAY_PACE: ${LAB_REPLAY_PACE:-0.1}
       ACS_GUARDIAN_URL: http://acs-guardian:8787/
       ACS_GUARDIAN_HOST_ALLOWLIST: acs-guardian
       ACS_HMAC_SECRET_FILE: /run/acs/hmac.key
