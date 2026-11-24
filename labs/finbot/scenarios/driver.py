@@ -283,8 +283,12 @@ class Admin:
                 response.read(64 * 1024)
         except urllib.error.HTTPError as e:
             e.close()
-            raise DriverError(f"the gateway refused to replay {recording or 'every recording'} with HTTP {e.code}. "
-                              "Check that replay/recordings holds it") from None
+            if recording is None:
+                # Every recording is how a gateway with no /replay already serves, so a refusal changes nothing
+                # (review M2).
+                return
+            raise DriverError(f"the gateway refused to replay {recording} with HTTP {e.code}. Check that "
+                              "replay/recordings holds it, then run ./lab.sh up") from None
         except (urllib.error.URLError, OSError) as e:
             raise DriverError(f"the gateway's admin port didn't answer ({getattr(e, 'reason', e)}). "
                               "Run ./lab.sh up") from None
@@ -710,11 +714,17 @@ class Run:
         except (OSError, ValueError, KeyError, TypeError):
             return None
         live = self.live_policies()
-        found = {r.get("recording") for r in rows if isinstance(r, dict)
-                 and r.get("scenario") == self.args.scenario and r.get("mode") == self.env.get("ACS_LAB_MODE")
-                 and r.get("answer") == self.args.answer and bool(r.get("clean")) == self.args.clean
-                 and (r.get("policy") is None or r.get("policy") == {k: live.get(k) for k in r["policy"]})}
-        return found.pop() if len(found) == 1 and isinstance(next(iter(found)), str) else None
+        same_run = [r for r in rows if isinstance(r, dict)
+                    and r.get("scenario") == self.args.scenario and r.get("mode") == self.env.get("ACS_LAB_MODE")
+                    and r.get("answer") == self.args.answer and bool(r.get("clean")) == self.args.clean]
+        exact = {r.get("recording") for r in same_run
+                 if r.get("policy") is None or r.get("policy") == {k: live.get(k) for k in r["policy"]}}
+        # A learner's own policy is not byte for byte a shipped variant, so no row matches on policy. The rows for the
+        # same run still settle it unless the recording turns on the policy, as s3's deny and allow do (review M1).
+        for found in (exact, {r.get("recording") for r in same_run}):
+            if len(found) == 1 and isinstance(next(iter(found)), str):
+                return next(iter(found))
+        return None
 
     def execute(self) -> int:
         replaying = self.env.get("ACS_UPSTREAM") == "replay" and self.args.capture is None

@@ -765,8 +765,8 @@ def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, caps
 
 
 def test_a_run_no_row_settles_replays_from_every_recording(harness, capsys):
-    # No policy pack in the bundle: no row with a policy matches, so the gateway keeps every recording.
-    harness.run(capsys, "s1")
+    # No guide row runs s1 with an answer, so the gateway keeps every recording.
+    harness.run(capsys, "s1", "--answer", "approve")
     assert harness.lab.replay_selected == [None]
     assert harness.records()[-1]["replay"] is None
 
@@ -775,3 +775,38 @@ def test_a_capture_selects_no_replay(harness, capsys):
     harness.lab.capture = "s3__allow"
     harness.run(capsys, "s3", "--capture", "s3__allow")
     assert harness.lab.replay_selected == []
+
+
+def test_a_learners_own_policy_still_settles_a_run_whose_recording_does_not_turn_on_policy(harness, capsys):
+    # Review M1: a correct module 3 policy that is not the shipped solution byte for byte.
+    _policy_pack(harness, m3="solution")
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s2")
+    assert harness.lab.replay_selected[0] == "s2__enforce"
+
+
+def test_s3_with_an_unknown_policy_replays_from_every_recording(harness, capsys):
+    # s3's deny and allow takes turn on module 3's policy, so an unknown policy can't pick one.
+    _policy_pack(harness)
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s3")
+    assert harness.lab.replay_selected == [None]
+
+
+def test_a_gateway_with_no_replay_route_still_runs_every_recording(harness, capsys, monkeypatch):
+    # Review M2: an older gateway answers 404 to /replay. A null selection changes nothing there.
+    monkeypatch.setattr(harness.lab, "admin_token", harness.lab.admin_token)
+    original = driver.Admin.select_replay
+
+    def no_route(self, recording):
+        if recording is None:
+            import io
+            import urllib.error
+            raise_404 = urllib.error.HTTPError(self.url, 404, "not found", {}, io.BytesIO(b""))
+            monkeypatch.setattr(self._opener, "open", lambda *a, **k: (_ for _ in ()).throw(raise_404))
+        return original(self, recording)
+    monkeypatch.setattr(driver.Admin, "select_replay", no_route)
+    code, lines = harness.run(capsys, "s1")
+    assert code == 0, lines
