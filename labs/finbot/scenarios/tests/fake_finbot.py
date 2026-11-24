@@ -79,6 +79,8 @@ class FakeLab:
     # When set, the dead drop answers with more than the driver's 1 MiB read limit once a chat has run, so the
     # baseline before the steps reads normally and the evidence probe after them meets the oversized answer.
     huge_dead_drop: bool = False
+    # Seconds the first dead drop read stalls before answering, as FinBot did with its database locked (2026-11-24).
+    stall_first_dead_drop_s: float = 0.0
     seen: list[Seen] = field(default_factory=list)
     epoch: int = 0
     namespaces: dict[str, str] = field(default_factory=dict)
@@ -315,6 +317,9 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
             elif route == ("GET", "/vendor/api/v1/messages"):
                 _json(self, 200, {"messages": lab.inbox}, set_cookie)
             elif route == ("GET", "/darklab/api/v1/toolkit/dead-drop"):
+                if lab.stall_first_dead_drop_s:
+                    stall, lab.stall_first_dead_drop_s = lab.stall_first_dead_drop_s, 0.0
+                    time.sleep(stall)
                 if lab.huge_dead_drop and lab.chat_sessions:
                     _json(self, 200, {"messages": [{"body": "x" * (2 * 1024 * 1024)}]}, set_cookie)
                 else:

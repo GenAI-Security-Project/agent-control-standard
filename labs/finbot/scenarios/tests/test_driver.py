@@ -897,3 +897,16 @@ def test_each_run_names_its_cues(harness, capsys, monkeypatch):
         typist.join(5)
     assert (first, second) == (0, 0)
     assert [c["seq"] for c in sent] == [1, 1] and len({c["run"] for c in sent}) == 2
+
+
+def test_a_finbot_stall_after_setup_is_waited_out_once(harness, capsys, monkeypatch):
+    """2026-11-24 intro take: FinBot's database locked after setup and a baseline read timed out. The driver waits
+    for quiet again and retries once, and the run completes. Setup's vendor registration is not repeated."""
+    import functools
+    import finbot_client
+    monkeypatch.setattr(driver.finbot_client, "FinBot", functools.partial(finbot_client.FinBot, timeout=0.5))
+    harness.lab.stall_first_dead_drop_s = 1.5
+    code, lines = harness.run(capsys, "s3")
+    assert code == 0, lines
+    assert any("waits for quiet again" in line for line in lines)
+    assert sum(1 for s in harness.lab.seen if s.path == "/vendor/api/v1/vendors/register") == 1

@@ -533,6 +533,7 @@ class Run:
         # Each run numbers its cues from 1, so the cue also names its run, and a typist tells two runs' first cues
         # apart (2026-11-24 m3 take, where s3's first cue read as s2's).
         self.cue_run = uuid.uuid4().hex
+        self.setup_timed_out = False
 
     # -- waits ---------------------------------------------------------------------------------------------------
 
@@ -784,6 +785,21 @@ class Run:
                 return next(iter(found))
         return None
 
+    def _after_setup(self, a0: int, epoch_before: Any) -> tuple[Any, dict[str, Any]]:
+        """Setup's quiet, its epoch closed and its sessions ended, then the baseline and a clear chat history."""
+        if self.scenario["setup"]:
+            if not self.wait_quiet():
+                self.setup_timed_out = True
+            epoch_before = self.admin.bump()
+        self.wait_ended(a0)
+        # The audit boundary checks count decisions from: setup is quiet, its epoch is closed and its sessions
+        # have ended, so every decision setup made sits before this offset (module 3 review).
+        setup_audit_end, _ = self.logs.offsets()
+        baseline = {**self.baseline(), "epoch": epoch_before, "audit_offset": setup_audit_end}
+        for surface in dict.fromkeys(s["surface"] for s in self.scenario["steps"] if s["kind"] == "chat"):
+            self.finbot.call(routes.CLEAR_VENDOR_HISTORY if surface == "vendor" else routes.CLEAR_COPILOT_HISTORY)
+        return epoch_before, baseline
+
     def execute(self) -> int:
         replaying = self.env.get("ACS_UPSTREAM") == "replay" and self.args.capture is None
         if replaying:
@@ -811,19 +827,22 @@ class Run:
         try:
             for step in self.scenario["setup"]:
                 self.step(step)
-            if self.scenario["setup"]:
-                if not self.wait_quiet():
-                    result, error = "timed_out", "the scenario's setup didn't go quiet"
-                epoch_before = self.admin.bump()
-            self.wait_ended(a0)
-            # The audit boundary checks count decisions from: setup is quiet, its epoch is closed and its sessions
-            # have ended, so every decision setup made sits before this offset (module 3 review).
-            setup_audit_end, _ = self.logs.offsets()
-            baseline = {**self.baseline(), "epoch": epoch_before, "audit_offset": setup_audit_end}
-            for surface in dict.fromkeys(s["surface"] for s in self.scenario["steps"] if s["kind"] == "chat"):
-                self.finbot.call(routes.CLEAR_VENDOR_HISTORY if surface == "vendor" else routes.CLEAR_COPILOT_HISTORY)
+            # One retry of the quiet wait and everything after it. FinBot's agents and the driver's calls can meet in
+            # FinBot's SQLite database, which then locks and leaves FinBot answering nothing for about 40 s, past the
+            # driver's request timeout (2026-11-24 intro and m3 takes). Setup's own steps are never repeated: a second
+            # vendor registration would be a second vendor.
+            for attempt in (1, 2):
+                try:
+                    epoch_before, baseline = self._after_setup(a0, epoch_before)
+                    break
+                except finbot_client.FinBotError as e:
+                    if attempt == 2 or "timed out" not in str(e):
+                        raise
+                    report.info("FinBot was slow to answer after setup, so the driver waits for quiet again")
         except finbot_client.FinBotError as e:
             raise DriverError(f"FinBot failed before the scenario's steps: {_fold(e)}") from None
+        if self.setup_timed_out:
+            result, error = "timed_out", "the scenario's setup didn't go quiet"
 
         # The run's window starts here: setup's sessions are closed and the history is clear. From here on every exit
         # writes a record, a crash or a signal included, so a check never reads the run before as the newest (M4).
