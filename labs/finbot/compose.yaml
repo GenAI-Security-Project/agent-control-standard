@@ -80,11 +80,15 @@ services:
       acs-gateway:
         condition: service_healthy
     healthcheck:
+      # Every check is a request with no cookie, and FinBot writes a new session for each one to its SQLite database.
+      # Every 5 s those writes met FinBot's agents and locked the database, which left FinBot answering nothing for
+      # about 40 s (2026-11-24 lab video takes). So it checks every 2 s while it starts, then once a minute.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
-      interval: 5s
+      interval: 60s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
@@ -310,7 +314,8 @@ services:
       finbot:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8097/healthz', headers={'Host': 'localhost'}), timeout=3)"]
+      # A TCP connect to its own port, never a request to FinBot, which would write a FinBot session per check.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8097), timeout=3).close()"]
       interval: 5s
       timeout: 5s
       retries: 30
