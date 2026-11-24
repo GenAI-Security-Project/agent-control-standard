@@ -5,6 +5,7 @@ Live with no key file passes no transport at all, which is the gateway's behavio
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -497,6 +498,27 @@ class _Answer:
     content: bytes
     content_type: str
     miss: dict[str, Any] | None
+    wait_s: float = 0.0
+
+
+# The longest one paced answer waits, so a slow recorded call can't stall a take (2026-11-24 live recording run).
+REPLAY_PACE_MAX_S = 4.0
+
+
+def recorded_seconds(response: Any) -> float:
+    """How long the recorded model call took, from its created_at and completed_at, or 0 when either is missing.
+
+    A streamed recording carries them on its response.completed event. Both are whole seconds (Responses API)."""
+    if isinstance(response, list):
+        response = next((e["data"].get("response") for e in response
+                         if isinstance(e, dict) and isinstance(e.get("data"), dict)
+                         and e["data"].get("type") == "response.completed"), None)
+    if not isinstance(response, dict):
+        return 0.0
+    start, end = response.get("created_at"), response.get("completed_at")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (start, end)) or end < start:
+        return 0.0
+    return float(end - start)
 
 
 def _response(status: int, content: bytes, content_type: str) -> httpx.Response:
@@ -512,8 +534,10 @@ class ReplayTransport(httpx.AsyncBaseTransport):
     retry, so a retry gets exactly the first answer, a miss included, with no cache (PREMORTEM P11).
     """
 
-    def __init__(self, store: RecordingStore) -> None:
+    def __init__(self, store: RecordingStore, pace: float = 0.0, pace_max_s: float = REPLAY_PACE_MAX_S) -> None:
         self.store = store
+        self.pace = pace
+        self.pace_max_s = pace_max_s
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.method != "POST" or not request.url.path.endswith("/responses"):
@@ -521,6 +545,8 @@ class ReplayTransport(httpx.AsyncBaseTransport):
                                "code": "unknown_url"}}
             return _response(404, json.dumps(error).encode("utf-8"), "application/json")
         answer = self._answer(await request.aread(), request.headers.get(BRANCH_HEADER))
+        if answer.wait_s > 0:
+            await asyncio.sleep(answer.wait_s)
         if answer.miss is not None:
             _audit("replay_miss", **answer.miss)
             # The transport runs inside the gateway's upstream send, so the miss marks that model call's span (LAB-09,
@@ -548,9 +574,10 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         if not complete:
             return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
                               scenario=recording.scenario)
+        wait = min(self.pace_max_s, self.pace * recorded_seconds(recording.response))
         if stream:
-            return _Answer(encode_events(response), "text/event-stream", None)
-        return _Answer(json.dumps(response).encode("utf-8"), "application/json", None)
+            return _Answer(encode_events(response), "text/event-stream", None, wait)
+        return _Answer(json.dumps(response).encode("utf-8"), "application/json", None, wait)
 
     @staticmethod
     def _miss(model: Any, cause: str, step: int | None, branch: str, stream: bool, **extra: Any) -> _Answer:
@@ -888,6 +915,7 @@ class UpstreamSource:
                 raise ValueError(f"ACS_CAPTURE_SCENARIO file {self._capture_path} already exists. Move it away or "
                                  "choose another scenario")
         self._recordings_dir = config.recordings_dir
+        self._replay_pace = config.replay_pace
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir, config.replay_scenario)
@@ -921,7 +949,7 @@ class UpstreamSource:
         """A fresh transport for one lifespan, or None for the default."""
         if self.mode == "replay":
             assert self._store is not None
-            return ReplayTransport(self._store)
+            return ReplayTransport(self._store, self._replay_pace)
         if self._capture_path is not None:
             return CaptureTransport(LiveTransport(self._key), self._capture_path, self._scenario, self._max_bytes)
         if self._key is not None:
