@@ -88,7 +88,10 @@ def classify(row: Row, history: BeatHistory) -> str | None:
     if row.decision == "modify":
         return "modify"
     if row.decision == "allow" and row.tool:
-        if history.denials.get(row.tool, set()) - {row.session_id}:
+        # In shadow mode the gateway forwards every call whatever the Guardian decides, so an allow there follows no
+        # fix. Labelled allow_after_fix, module 2's shadow send read "Allow after the fix" over its own would-deny
+        # (2026-11-25 m2 keeper).
+        if row.mode != "shadow" and history.denials.get(row.tool, set()) - {row.session_id}:
             return "allow_after_fix"
         if history.first_allow.setdefault(row.session_id, row.id) == row.id:
             return "first_allow"
