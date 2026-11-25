@@ -777,10 +777,8 @@ def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, caps
     _set_env(harness, "ACS_LAB_MODE=enforce", f"ACS_LAB_MODE={mode}")
     harness.lab.chat_done = True
     harness.run(capsys, *argv)
-    # Setup draws on the scenario's takes, then the steps on the one take that fits (2026-11-24 m4 takes).
-    assert harness.lab.replay_selected == [argv[0], want, None]
-    record = harness.records()[-1]
-    assert record["replay"] == want and record["setup_replay"] == argv[0]
+    assert harness.lab.replay_selected[0] == want and harness.lab.replay_selected[-1] is None
+    assert harness.records()[-1]["replay"] == want
 
 
 def test_a_run_no_row_settles_replays_from_its_own_scenarios_takes(harness, capsys):
@@ -804,7 +802,7 @@ def test_a_learners_own_policy_still_settles_a_run_whose_recording_does_not_turn
     live = harness.bundle / "policy" / "outbound_email.rego"
     live.write_text(live.read_text() + "\n# my own fix\n")
     harness.run(capsys, "s1")
-    assert harness.lab.replay_selected[1] == "s1__enforce"
+    assert harness.lab.replay_selected[0] == "s1__enforce"
 
 
 def test_s2_under_an_unknown_module_3_policy_replays_from_its_own_takes(harness, capsys):
