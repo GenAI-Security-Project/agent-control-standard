@@ -830,7 +830,10 @@ class Run:
                 # other scenario's answer can reach it. The run says so, since an answer may come from a sibling take.
                 self.replay_family = self.args.scenario
                 report.info(f"No single recording fits this run, so replay draws on {self.args.scenario}'s recordings")
-            self.admin.select_replay(self.replay or self.replay_family, self.replay_pace(self.replay))
+            # Setup draws on every take of this scenario, and the steps on the one take that fits. Setup is vendor
+            # onboarding, and FinBot's agents race through it, so its turns land in whichever take recorded that
+            # order: s4a__reject held none of the onboarding turns s4a__approve did (2026-11-24 m4 takes).
+            self.admin.select_replay(self.args.scenario, self.replay_pace(self.replay))
         try:
             return self._execute()
         finally:
@@ -869,6 +872,9 @@ class Run:
         if self.setup_timed_out:
             result, error = "timed_out", "the scenario's setup didn't go quiet"
 
+        if self.replay is not None:
+            self.admin.select_replay(self.replay, self.replay_pace(self.replay))
+
         # The run's window starts here: setup's sessions are closed and the history is clear. From here on every exit
         # writes a record, a crash or a signal included, so a check never reads the run before as the newest (M4).
         audit_start, inputs_start = self.logs.offsets()
@@ -878,6 +884,8 @@ class Run:
             "flags": {"answer": self.args.answer, "clean": self.args.clean},
             "mode": self.env["ACS_LAB_MODE"], "signing": self.env["ACS_RESPONSE_SIGNING"],
             "upstream": self.env["ACS_UPSTREAM"], "capture": self.args.capture, "replay": self.replay,
+            "setup_replay": self.args.scenario if self.env.get("ACS_UPSTREAM") == "replay" and self.args.capture is None
+            else None,
             "policy_sha256": "",
             "started": _rfc3339(started), "ended": "", "result": "broken",
             "error": "the driver stopped before the run finished",
