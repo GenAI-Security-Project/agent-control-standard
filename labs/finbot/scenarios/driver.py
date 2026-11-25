@@ -805,6 +805,19 @@ class Run:
             return None
         return float(pace)
 
+    def setup_misses_expected(self, recording: str | None) -> int:
+        """The setup misses the manifest expects for a recording, 0 when it names none. s4a__reject was captured with
+        FinBot's vendor onboarding already done, so its setup's onboarding turns have no answer in it, and every run of
+        it misses the same 4 (2026-11-24 m4 takes). Its steps replay whole. Any other count still fails the run."""
+        if recording is None:
+            return 0
+        try:
+            expected = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
+                .get("setupMissesExpected", {}).get(recording)
+        except (OSError, ValueError, AttributeError):
+            return 0
+        return expected if isinstance(expected, int) and not isinstance(expected, bool) and expected > 0 else 0
+
     def _after_setup(self, a0: int, epoch_before: Any) -> tuple[Any, dict[str, Any]]:
         """Setup's quiet, its epoch closed and its sessions ended, then the baseline and a clear chat history."""
         if self.scenario["setup"]:
@@ -886,6 +899,7 @@ class Run:
             # setup, so it covers every line the run's FinBot wrote, and the flag names the run that changed a tool.
             "model_input_span": [setup_inputs, inputs_start], "poisoned": self._poisoned(),
             "sessions_unended": [], "replay_misses": 0, "setup_replay_misses": 0, "setup_audit_start": a0,
+            "setup_replay_misses_expected": self.setup_misses_expected(self.replay),
             "epoch": [epoch_before, None], "quiet_s": self.quiet_s,
             "approval": {"answer": self.args.answer, "waiting_seen": False, "answered": False, "status": None,
                          "error": None},
@@ -994,6 +1008,9 @@ class Run:
         if isinstance(reply, str) and reply:
             shown = _fold(reply)
             report.info(f"FinBot's reply: {shown[:REPLY_SHOWN]}{'...' if len(shown) > REPLY_SHOWN else ''}")
+        if code == report.EXIT_PASS and record.get("setup_replay_misses"):
+            report.info(f"Setup had {record['setup_replay_misses']} model calls with no recording, as the manifest "
+                        "expects for this recording. The scenario's steps replayed whole.")
         if code == report.EXIT_PASS:
             report.done(f"{name} ran in {record['mode']} mode and FinBot went quiet. {where}")
         else:
@@ -1010,7 +1027,9 @@ def judge(record: dict[str, Any]) -> tuple[int, str]:
     environment never reaches here: execute stores broken for it."""
     if record["result"] != "completed":
         return report.EXIT_NOT_YET, record["result"].replace("_", " ")
-    misses = record["replay_misses"] + record.get("setup_replay_misses", 0)
+    setup = record.get("setup_replay_misses", 0)
+    # The manifest's expected setup misses pass only when the count is exactly that (setup_misses_expected).
+    misses = record["replay_misses"] + (0 if setup == record.get("setup_replay_misses_expected", 0) else setup)
     errors = record["finbot"].get("errors") or {}
     approval = record["approval"]
     approval_error = approval.get("error")

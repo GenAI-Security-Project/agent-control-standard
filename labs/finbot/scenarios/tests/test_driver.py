@@ -952,3 +952,38 @@ def test_a_replay_miss_during_setup_fails_the_run(harness, capsys):
     record = harness.records()[-1]
     assert record["setup_replay_misses"] == 1 and record["replay_misses"] == 0
     assert "had no recording in replay" in record["error"]
+
+
+def _judged(**fields):
+    record = {"result": "completed", "error": None, "replay_misses": 0, "setup_replay_misses": 0,
+              "finbot": {"errors": {}}, "approval": {"answer": None, "answered": False, "error": None},
+              "sessions_unended": [], **fields}
+    return driver.judge(record), record
+
+
+def test_setup_misses_pass_only_at_the_count_the_manifest_expects():
+    """2026-11-24 m4 takes: s4a__reject was captured after FinBot's vendor onboarding, so every run of it misses the
+    same 4 setup calls while its steps replay whole. Exactly that count passes. Any other fails, as before."""
+    (code, _), record = _judged(setup_replay_misses=4, setup_replay_misses_expected=4)
+    assert code == 0 and record["error"] is None
+    for setup, expected in ((5, 4), (3, 4), (4, 0), (1, 0)):
+        (code, _), record = _judged(setup_replay_misses=setup, setup_replay_misses_expected=expected)
+        assert code != 0 and "had no recording in replay" in record["error"], (setup, expected)
+    # A step miss always fails, whatever setup expects.
+    (code, _), record = _judged(replay_misses=1, setup_replay_misses=4, setup_replay_misses_expected=4)
+    assert code != 0
+
+
+def test_the_manifest_names_expected_setup_misses_for_s4a_reject_only(harness, tmp_path):
+    import shutil
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, harness.settings, harness.bundle)
+    assert run.setup_misses_expected("s4a__reject") == 4
+    assert run.setup_misses_expected("s4a__approve") == 0 and run.setup_misses_expected(None) == 0
+    scen = tmp_path / "scenarios"
+    shutil.copytree(SCENARIOS, scen, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    doc = json.loads((scen / "manifest.json").read_text(encoding="utf-8"))
+    doc["setupMissesExpected"] = {"a": True, "b": -2, "c": "4", "d": 2.5}
+    (scen / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
+                     harness.bundle)
+    assert [run.setup_misses_expected(k) for k in "abcd"] == [0, 0, 0, 0]
