@@ -885,7 +885,7 @@ def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, mo
         typist.join(5)
     assert code == 0, lines
     # Setup's onboarding cues a view of the vendor dashboard, then the chat cues its page (2026-11-25).
-    assert [(c["page"], c.get("view", False)) for c in sent] == [("/vendor/dashboard", True),
+    assert [(c["page"], c.get("view", False)) for c in sent] == [("/admin/mcp-activity", True),
                                                                  ("/vendor/assistant", False)]
     assert sent[0]["message"] == "" and [c["name"] for c in sent[1]["cookies"]] == ["finbot_session", "agreedToRules"]
     assert sent[1]["url"] == "http://localhost:8097"
@@ -1011,5 +1011,5 @@ def test_an_invoice_run_in_browser_mode_cues_the_invoices_page(harness, capsys, 
         stop.set()
         typist.join(5)
     assert code == 0, lines
-    assert [(c["page"], c.get("view")) for c in sent] == [("/vendor/dashboard", True), ("/vendor/invoices", True)]
+    assert [(c["page"], c.get("view")) for c in sent] == [("/admin/mcp-activity", True), ("/admin/mcp-activity", True)]
     assert all(c["message"] == "" for c in sent)

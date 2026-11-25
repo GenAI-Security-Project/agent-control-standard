@@ -109,9 +109,10 @@ class Settings:
 # instead of posting the message itself. Every other step runs as before. The page each surface chats on, under the
 # finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
 CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
-# The FinBot page a browser-mode run shows for each step the driver makes through FinBot's API, with nothing typed, so
-# the video shows FinBot act (2026-11-25: m4's invoice and s1's onboarding left FinBot on its portal page).
-VIEW_PAGES = {"register_vendor": "/vendor/dashboard", "create_invoice": "/vendor/invoices"}
+# The FinBot page a browser-mode run shows for each step the driver makes through FinBot's API, with nothing typed:
+# FinBot's admin MCP activity log, each tool call its agents make, beside the viewer's decision on it (2026-11-25: m4's
+# invoice and s1's onboarding left FinBot on its portal page, and the vendor pages show nothing its agents do).
+VIEW_PAGES = {"register_vendor": "/admin/mcp-activity", "create_invoice": "/admin/mcp-activity"}
 CHAT_CUE = "chat-cue.json"
 AGREEMENT_COOKIE = "agreedToRules"
 
