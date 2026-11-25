@@ -39,6 +39,12 @@ const VERIFY_WORDS = {
 const DECISION_CLASSES = { allow: "d-allow", deny: "d-deny", modify: "d-modify", ask: "d-ask" };
 
 const POLL_MS = 500;
+// Handshake and first allow repeat for every session FinBot's agents open, often in the same poll as an ask or a
+// deny. A beat outside this set holds the headline for HOLD_MS, so a routine beat can't replace it before a viewer
+// has read it. Routine beats that arrive during the hold are not shown, so they are not logged as paints either.
+const ROUTINE_BEATS = new Set(["handshake", "first_allow"]);
+const HOLD_MS = 8000;
+let heldUntil = 0;
 // The page keeps at most this many rows and drops the oldest past it, so a long run can't slow the page down.
 const MAX_DOM_ROWS = 1000;
 
@@ -156,6 +162,9 @@ function postPaint(body) {
 
 function paint(row) {
   if (!Object.hasOwn(BEAT_LABELS, row.beat)) return;
+  const routine = ROUTINE_BEATS.has(row.beat);
+  if (routine && Date.now() < heldUntil) return;
+  if (!routine) heldUntil = Date.now() + HOLD_MS;
   const label = BEAT_LABELS[row.beat];
   beatEl.textContent = label;
   detailEl.textContent = summary(row);
@@ -175,6 +184,7 @@ function apply(data) {
       groups.clear();
       paintedBeat.clear();
       lastPainted = null;
+      heldUntil = 0;
       beatEl.textContent = WAITING_LABEL;
       detailEl.textContent = "";
       dropsAtLoad = null;
@@ -197,6 +207,7 @@ function apply(data) {
         if (group === lastPainted) {
           // The big label never names a row that has left the table.
           lastPainted = null;
+          heldUntil = 0;
           beatEl.textContent = WAITING_LABEL;
           detailEl.textContent = "";
         }

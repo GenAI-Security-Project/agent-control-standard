@@ -54,3 +54,26 @@ def test_the_harness_catches_a_reset_that_keeps_the_old_rows():
     seen = run("--keep-rows")
     assert ["rm", "deny", "verified"] in seen["onB"]
     assert seen["onB"] != [["rm", "DENY", "failed"]]
+
+
+HOLD_HARNESS = VIEWER_DIR / "tests" / "beat_hold_harness.mjs"
+
+
+def run_hold(*extra: str) -> dict:
+    done = subprocess.run([*runtime(), str(HOLD_HARNESS), str(APP), *extra], capture_output=True, text=True,
+                          timeout=60, cwd=HOLD_HARNESS.parent, check=False)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def test_an_ask_keeps_the_headline_through_a_burst_of_routine_beats():
+    # A handshake and a first allow from other sessions arrive in the same poll as the ask. The ask stays up until
+    # its hold ends, and a later routine beat then takes the headline.
+    seen = run_hold()
+    assert seen["afterBurst"] == "Ask: the call waits for a human approver"
+    assert seen["afterHold"] == "Allow: the Guardian lets the call through"
+
+
+def test_the_harness_catches_a_page_without_the_hold():
+    seen = run_hold("--without-hold")
+    assert seen["afterBurst"] == "Allow: the Guardian lets the call through"
