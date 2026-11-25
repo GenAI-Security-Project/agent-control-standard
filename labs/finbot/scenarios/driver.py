@@ -109,10 +109,14 @@ class Settings:
 # instead of posting the message itself. Every other step runs as before. The page each surface chats on, under the
 # finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
 CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
-# The FinBot page a browser-mode run shows for each step the driver makes through FinBot's API, with nothing typed:
-# FinBot's admin MCP activity log, each tool call its agents make, beside the viewer's decision on it (2026-11-25: m4's
-# invoice and s1's onboarding left FinBot on its portal page, and the vendor pages show nothing its agents do).
-VIEW_PAGES = {"register_vendor": "/admin/mcp-activity", "create_invoice": "/admin/mcp-activity"}
+# The FinBot form a browser-mode run fills on camera for each step it would otherwise make through FinBot's API: the
+# vendor onboarding form and the invoice form, so the audience sees what sets FinBot's agents to work (2026-11-25:
+# m4's invoice and s1's onboarding showed nothing on FinBot's side). Each form posts the body the API step does, with
+# the fields FinBot's page adds (phone "" and attachments []), and both bodies were checked to replay whole.
+FORM_PAGES = {"register_vendor": ("onboarding", "/vendor/onboarding"), "create_invoice": ("invoice", "/vendor/invoices")}
+ONBOARDING_FIELDS = ("company_name", "vendor_category", "industry", "services", "name", "email", "phone", "tin",
+                     "bank_account_number", "bank_name", "bank_routing_number", "bank_account_holder_name")
+INVOICE_FIELDS = ("invoice_number", "amount", "description", "invoice_date", "due_date")
 CHAT_CUE = "chat-cue.json"
 AGREEMENT_COOKIE = "agreedToRules"
 
@@ -586,18 +590,27 @@ class Run:
     def step(self, step: dict[str, Any]) -> None:
         kind = step["kind"]
         if kind == "register_vendor":
+            if self.chat_in_browser:
+                fields = {k: step["body"].get(k, "") for k in ONBOARDING_FIELDS}
+                vendor_id = self.form_in_page(kind, fields, lambda: self._current_vendor())
+                if vendor_id is not None:
+                    self.ids["vendor_id"] = vendor_id
+                return
             answer = self.finbot.call(routes.REGISTER_VENDOR, body=step["body"])
             if isinstance(answer, dict) and isinstance(answer.get("vendor_id"), int):
                 self.ids["vendor_id"] = answer["vendor_id"]
-            if self.chat_in_browser:
-                self.write_cue("vendor", VIEW_PAGES[kind], "", view=True)
         elif kind == "create_invoice":
+            if self.chat_in_browser:
+                fields = {k: step["body"][k] for k in INVOICE_FIELDS}
+                number = fields["invoice_number"]
+                invoice_id = self.form_in_page(kind, fields, lambda: self._invoice_id(number))
+                if invoice_id is not None:
+                    self.ids["invoice_id"] = invoice_id
+                return
             answer = self.finbot.call(routes.CREATE_INVOICE, body=step["body"])
             invoice = answer.get("invoice") if isinstance(answer, dict) else None
             if isinstance(invoice, dict) and isinstance(invoice.get("id"), int):
                 self.ids["invoice_id"] = invoice["id"]
-            if self.chat_in_browser:
-                self.write_cue("vendor", VIEW_PAGES[kind], "", view=True)
         elif kind == "chat":
             if self.chat_in_browser:
                 result = self.chat_in_page(step["surface"], step["message"])
@@ -614,7 +627,8 @@ class Run:
             else:
                 self.finbot.call(routes.RESET_TOOLS, server=step["server"])
 
-    def write_cue(self, surface: str, page: str, message: str, *, view: bool = False) -> str:
+    def write_cue(self, surface: str, page: str, message: str, *, view: bool = False,
+                  form: tuple[str, dict[str, Any]] | None = None) -> str:
         """Writes the next cue for the browser and returns FinBot's port. A view cue names a page and types nothing."""
         self.cue_seq += 1
         cookie = next((c for c in self.finbot.jar if c.name == finbot_client.SESSION_COOKIE), None)
@@ -629,6 +643,8 @@ class Run:
                            {"name": AGREEMENT_COOKIE, "value": "yes", "path": "/", "httpOnly": False}]}
         if view:
             cue["view"] = True
+        if form is not None:
+            cue["form"], cue["fields"] = form
         folder = self.state / "ui"
         folder.mkdir(mode=0o700, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=".cue-")
@@ -636,6 +652,31 @@ class Run:
             json.dump(cue, f)
         os.replace(tmp, folder / CHAT_CUE)
         return port
+
+    def form_in_page(self, kind: str, fields: dict[str, Any], made) -> int | None:
+        """Cues FinBot's form for a step and waits, up to the done bound, for `made` to return the id it created."""
+        form, page = FORM_PAGES[kind]
+        port = self.write_cue("vendor", page, "", form=(form, fields))
+        report.info(f"Fill FinBot's {form} form at http://localhost:{port}{page}")
+        deadline = time.monotonic() + self.settings.done_timeout_s
+        while time.monotonic() < deadline:
+            found = made()
+            if found is not None:
+                return found
+            time.sleep(self.settings.poll_s)
+        raise finbot_client.FinBotError(f"FinBot's {form} form was not submitted in time")
+
+    def _current_vendor(self) -> int | None:
+        answer = self.finbot.call(routes.VENDOR_ME)
+        vendor = answer.get("current_vendor_id") if isinstance(answer, dict) else None
+        return vendor if isinstance(vendor, int) and not isinstance(vendor, bool) else None
+
+    def _invoice_id(self, number: str) -> int | None:
+        for invoice in self._list(self.finbot.call(routes.INVOICES), "invoices"):
+            if isinstance(invoice, dict) and invoice.get("invoice_number") == number \
+                    and isinstance(invoice.get("id"), int):
+                return invoice["id"]
+        return None
 
     def chat_in_page(self, surface: str, message: str) -> finbot_client.ChatResult:
         """Cues one chat step for FinBot's page and waits, up to the done bound, for FinBot's history to hold the message

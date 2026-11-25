@@ -860,6 +860,20 @@ def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
                 # A view cue opens a page and types nothing, as acsrec.typist does.
                 stop.wait(0.05)
                 continue
+            if cue.get("form"):
+                # A form cue posts what FinBot's own form would: the onboarding form adds nothing the cue lacks, the
+                # invoice form adds attachments (static/js/vendor/invoice.js:260-267).
+                path = "/vendor/api/v1/vendors/register" if cue["form"] == "onboarding" else "/vendor/api/v1/invoices"
+                body = dict(cue["fields"]) if cue["form"] == "onboarding" else {**cue["fields"], "attachments": []}
+                headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
+                           "X-CSRF-Token": harness.lab.csrf,
+                           "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
+                request = urllib.request.Request(harness.settings.finbot_url + path, method="POST", headers=headers,
+                                                 data=json.dumps(body).encode())
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    response.read()
+                stop.wait(0.05)
+                continue
             path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
             headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
                        "X-CSRF-Token": harness.lab.csrf, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
@@ -885,9 +899,11 @@ def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, mo
         typist.join(5)
     assert code == 0, lines
     # Setup's onboarding cues a view of the vendor dashboard, then the chat cues its page (2026-11-25).
-    assert [(c["page"], c.get("view", False)) for c in sent] == [("/admin/mcp-activity", True),
-                                                                 ("/vendor/assistant", False)]
+    # Setup's onboarding is filled into FinBot's form, then the chat cues its page (2026-11-25).
+    assert [(c["page"], c.get("form")) for c in sent] == [("/vendor/onboarding", "onboarding"),
+                                                          ("/vendor/assistant", None)]
     assert sent[0]["message"] == "" and [c["name"] for c in sent[1]["cookies"]] == ["finbot_session", "agreedToRules"]
+    assert harness.lab.registered_bodies[0]["phone"] == "" and "company_name" in harness.lab.registered_bodies[0]
     assert sent[1]["url"] == "http://localhost:8097"
     assert any("Type the message into FinBot's chat at http://localhost:8097/vendor/assistant" in line for line in lines)
     # One chat, the typist's, and the session never moved (a fingerprint mismatch would start a new namespace).
@@ -995,7 +1011,7 @@ def test_the_manifest_names_expected_setup_misses_for_s4a_reject_only(harness, t
     assert [run.setup_misses_expected(k) for k in "abcd"] == [0, 0, 0, 0]
 
 
-def test_an_invoice_run_in_browser_mode_cues_the_invoices_page(harness, capsys, monkeypatch):
+def test_an_invoice_run_in_browser_mode_fills_finbots_forms(harness, capsys, monkeypatch):
     """2026-11-25: s4a makes its invoice through FinBot's API, so with nothing typed FinBot's pane sat on its portal
     page through m4. The driver now cues a view of the vendor's invoices page after the invoice, and the dashboard
     after onboarding, so the video shows FinBot act."""
@@ -1011,5 +1027,7 @@ def test_an_invoice_run_in_browser_mode_cues_the_invoices_page(harness, capsys, 
         stop.set()
         typist.join(5)
     assert code == 0, lines
-    assert [(c["page"], c.get("view")) for c in sent] == [("/admin/mcp-activity", True), ("/admin/mcp-activity", True)]
+    assert [(c["page"], c.get("form")) for c in sent] == [("/vendor/onboarding", "onboarding"),
+                                                          ("/vendor/invoices", "invoice")]
     assert all(c["message"] == "" for c in sent)
+    assert harness.lab.invoice_bodies[0]["attachments"] == [] and harness.lab.invoice_bodies[0]["invoice_number"]

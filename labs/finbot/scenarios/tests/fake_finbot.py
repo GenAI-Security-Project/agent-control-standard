@@ -76,6 +76,9 @@ class FakeLab:
     reply: str = "Payment notice sent to the vendor."
     # When set, an invoice holds one call for the approver, and the background work waits for the answer.
     ask_on_invoice: bool = False
+    # The bodies a registration and an invoice arrived with, from the driver or from a form a typist submitted.
+    registered_bodies: list = field(default_factory=list)
+    invoice_bodies: list = field(default_factory=list)
     # When set, a rejected held call is retried once as a new held call, as FinBot's agent retried the transfer in
     # the s4a__reject recording (2026-11-24). The background work waits for both answers.
     ask_again_on_reject: bool = False
@@ -311,7 +314,14 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
                 if lab.replay_miss_on_register:
                     lab.audit("replay_miss", recording_dir="/lab/replay/recordings", reason="no_recording")
                 lab.background("onboarding")
+                lab.registered_bodies.append(body)
                 _json(self, 200, {"success": True, "vendor_id": 1, "workflow_id": "wf_1"}, set_cookie)
+            elif route == ("GET", "/vendor/api/v1/vendors/me"):
+                current = 1 if lab.registered_bodies else None
+                _json(self, 200, {"vendors": [], "current_vendor_id": current, "total_count": 0}, set_cookie)
+            elif route == ("GET", "/vendor/api/v1/invoices"):
+                _json(self, 200, {"invoices": [{"id": 1, "invoice_number": b.get("invoice_number")}
+                                               for b in lab.invoice_bodies]}, set_cookie)
             elif route == ("GET", "/vendor/api/v1/vendors/1"):
                 _json(self, 200, {"id": 1, "company_name": "Northwind Supplies", "status": "active"}, set_cookie)
             elif route == ("POST", "/vendor/api/v1/invoices"):
@@ -320,6 +330,7 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
                     ask = uuid.uuid4().hex
                     lab.pending[ask] = None
                 lab.background("invoice", wait_for_answer=ask)
+                lab.invoice_bodies.append(body)
                 _json(self, 200, {"success": True, "invoice": {"id": 1, "amount": body["amount"],
                                                                "status": "submitted"}}, set_cookie)
             elif route == ("GET", "/vendor/api/v1/invoices/1"):
