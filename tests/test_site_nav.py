@@ -292,7 +292,9 @@ def test_mkdocs_build_surface_is_pinned():
     assert "hooks" not in cfg, message
     assert cfg["plugins"] == ["search"], message
     assert cfg["extra_javascript"] == [
-        "assets/javascripts/mermaid.min.js", "assets/javascripts/mermaid-init.js",
+        "assets/javascripts/mermaid.min.js",
+        "assets/javascripts/mermaid-init.js",
+        "assets/javascripts/a11y.js",
     ], message
     assert cfg["extra_css"] == ["stylesheets/extra.css"], message
     assert cfg["theme"]["name"] == "material", message

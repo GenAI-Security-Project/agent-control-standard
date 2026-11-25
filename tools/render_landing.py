@@ -309,7 +309,10 @@ def render_nav(config: NavConfig) -> str:
     return (
         '<nav id="site-nav" aria-label="Navigation"><ul>\n'
         # href="./" rather than "/": it works at the domain root and on a project subpath.
-        '<li><details open><summary><a href="./" aria-current="page">Home</a></summary><ul>\n'
+        # Keep the link sibling to <details> rather than inside <summary> so two
+        # interactive controls are never nested (WCAG 4.1.2 / axe nested-interactive).
+        '<li class="nav-home"><a href="./" aria-current="page">Home</a>'
+        '<details open><summary aria-label="Home sections"></summary><ul>\n'
         + "".join(sections)
         + "</ul></details></li>\n"
         + _nav_items(config.nav, "nav")
