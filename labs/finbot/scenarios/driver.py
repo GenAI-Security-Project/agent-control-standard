@@ -538,6 +538,7 @@ class Run:
         # apart (2026-11-24 m3 take, where s3's first cue read as s2's).
         self.cue_run = uuid.uuid4().hex
         self.setup_timed_out = False
+        self.replay_family: str | None = None
 
     # -- waits ---------------------------------------------------------------------------------------------------
 
@@ -824,11 +825,16 @@ class Run:
         if replaying:
             # Always set, so a selection a crashed run left behind never reaches this one.
             self.replay = self.replay_recording()
-            self.admin.select_replay(self.replay, self.replay_pace(self.replay))
+            if self.replay is None:
+                # No single take fits this run, as with a learner's own policy. Its scenario's takes still do, and no
+                # other scenario's answer can reach it. The run says so, since an answer may come from a sibling take.
+                self.replay_family = self.args.scenario
+                report.info(f"No single recording fits this run, so replay draws on {self.args.scenario}'s recordings")
+            self.admin.select_replay(self.replay or self.replay_family, self.replay_pace(self.replay))
         try:
             return self._execute()
         finally:
-            if replaying and self.replay is not None:
+            if replaying and (self.replay is not None or self.replay_family is not None):
                 try:
                     self.admin.select_replay(None)
                 except DriverError:
@@ -879,7 +885,8 @@ class Run:
             # lab pins keeps a poisoned run's model input lines out of the tool registry. The span starts before
             # setup, so it covers every line the run's FinBot wrote, and the flag names the run that changed a tool.
             "model_input_span": [setup_inputs, inputs_start], "poisoned": self._poisoned(),
-            "sessions_unended": [], "replay_misses": 0, "epoch": [epoch_before, None], "quiet_s": self.quiet_s,
+            "sessions_unended": [], "replay_misses": 0, "setup_replay_misses": 0, "setup_audit_start": a0,
+            "epoch": [epoch_before, None], "quiet_s": self.quiet_s,
             "approval": {"answer": self.args.answer, "waiting_seen": False, "answered": False, "status": None,
                          "error": None},
             "finbot": {"namespace": namespace, "vendor": {}, "evidence": {"baseline": baseline}, "chats": self.chats,
@@ -972,6 +979,11 @@ class Run:
             "model_input_span": [record["model_input_span"][0], max(record["model_input_span"][0], inputs_end)],
             "sessions": _opened(events),
             "replay_misses": sum(1 for e in events if e.get("acs_audit_event") == "replay_miss"),
+            # Setup's misses too: a setup that got neutral replies leaves FinBot in a state the recording never had,
+            # and the run window alone hid them (2026-11-24 premortem, m7 on paced replay).
+            "setup_replay_misses": sum(1 for e in self.logs.audit_since(record["setup_audit_start"])
+                                       if e.get("acs_audit_event") == "replay_miss")
+                                   - sum(1 for e in events if e.get("acs_audit_event") == "replay_miss"),
         })
         return judge(record)
 
@@ -998,7 +1010,7 @@ def judge(record: dict[str, Any]) -> tuple[int, str]:
     environment never reaches here: execute stores broken for it."""
     if record["result"] != "completed":
         return report.EXIT_NOT_YET, record["result"].replace("_", " ")
-    misses = record["replay_misses"]
+    misses = record["replay_misses"] + record.get("setup_replay_misses", 0)
     errors = record["finbot"].get("errors") or {}
     approval = record["approval"]
     approval_error = approval.get("error")

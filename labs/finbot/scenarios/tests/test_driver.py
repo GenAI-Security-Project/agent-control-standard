@@ -767,10 +767,12 @@ def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, caps
     assert harness.records()[-1]["replay"] == want
 
 
-def test_a_run_no_row_settles_replays_from_every_recording(harness, capsys):
-    # No guide row runs s1 with an answer, so the gateway keeps every recording.
-    harness.run(capsys, "s1", "--answer", "approve")
-    assert harness.lab.replay_selected == [None]
+def test_a_run_no_row_settles_replays_from_its_own_scenarios_takes(harness, capsys):
+    # No guide row runs s1 with an answer, so the gateway draws on s1's takes only, never another scenario's
+    # (2026-11-24 premortem, C-08), and the selection is cleared after the run.
+    code, lines = harness.run(capsys, "s1", "--answer", "approve")
+    assert harness.lab.replay_selected == ["s1", None]
+    assert any("replay draws on s1's recordings" in line for line in lines)
     assert harness.records()[-1]["replay"] is None
 
 
@@ -789,22 +791,22 @@ def test_a_learners_own_policy_still_settles_a_run_whose_recording_does_not_turn
     assert harness.lab.replay_selected[0] == "s1__enforce"
 
 
-def test_s2_under_an_unknown_module_3_policy_replays_from_every_recording(harness, capsys):
+def test_s2_under_an_unknown_module_3_policy_replays_from_its_own_takes(harness, capsys):
     # s2 has a take per policy set (starter, module 3 fixed, every solution), so an unknown policy can't pick one.
     _policy_pack(harness, m3="solution")
     live = harness.bundle / "policy" / "outbound_email.rego"
     live.write_text(live.read_text() + "\n# my own fix\n")
     harness.run(capsys, "s2")
-    assert harness.lab.replay_selected == [None]
+    assert harness.lab.replay_selected == ["s2", None]
 
 
-def test_s3_with_an_unknown_policy_replays_from_every_recording(harness, capsys):
+def test_s3_with_an_unknown_policy_replays_from_its_own_takes(harness, capsys):
     # s3's deny and allow takes turn on module 3's policy, so an unknown policy can't pick one.
     _policy_pack(harness)
     live = harness.bundle / "policy" / "outbound_email.rego"
     live.write_text(live.read_text() + "\n# my own fix\n")
     harness.run(capsys, "s3")
-    assert harness.lab.replay_selected == [None]
+    assert harness.lab.replay_selected == ["s3", None]
 
 
 def test_a_gateway_with_no_replay_route_still_runs_every_recording(harness, capsys, monkeypatch):
@@ -924,3 +926,15 @@ def test_a_recording_with_a_pinned_pace_is_selected_with_it(harness, tmp_path):
                      harness.bundle)
     assert run.replay_pace("s4a__reject") == 0.0
     assert run.replay_pace("bad") is None and run.replay_pace("s1__off") is None and run.replay_pace(None) is None
+
+
+
+def test_a_replay_miss_during_setup_fails_the_run(harness, capsys):
+    """2026-11-24 premortem: m7's setup missed its recording on paced replay while the run read completed, because only
+    the run's own window counted misses. A setup that got neutral replies is not the recorded run."""
+    harness.lab.replay_miss_on_register = True
+    code, lines = harness.run(capsys, "s3")
+    assert code != 0, lines
+    record = harness.records()[-1]
+    assert record["setup_replay_misses"] == 1 and record["replay_misses"] == 0
+    assert "had no recording in replay" in record["error"]

@@ -415,9 +415,16 @@ class RecordingStore:
             raise ValueError(f"ACS_RECORDINGS_DIR {directory} is not a directory")
         if scenario is not None:
             only = directory / f"{scenario}.jsonl"
-            if not only.is_file():
+            family = sorted(directory.glob(f"{scenario}__*.jsonl")) if "__" not in scenario else []
+            if only.is_file():
+                paths = [only]
+            elif family:
+                # A bare scenario name selects that scenario's own takes and no other's, for a run no single take
+                # fits, such as a learner's own policy, so it never draws on another scenario's answers (2026-11-24
+                # premortem, C-08).
+                paths = family
+            else:
                 raise ValueError(f"ACS_REPLAY_SCENARIO file {only} does not exist")
-            paths = [only]
         else:
             paths = sorted(directory.glob("*.jsonl"))
         files = []

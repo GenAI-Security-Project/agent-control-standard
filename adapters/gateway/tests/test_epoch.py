@@ -216,3 +216,17 @@ def test_a_selection_can_name_its_own_replay_pace(gateway, tmp_path, token_file,
     assert waits == [2.0, 2.0]          # 0.1 of 20 s, then no wait at pace 0, then 0.1 again
     for bad in (-0.5, 2, "fast", True):
         assert admin.post("/replay", json={"scenario": "s4a__reject", "pace": bad}, headers=auth).status_code == 400
+
+
+def test_a_bare_scenario_selects_only_that_scenarios_takes(gateway, tmp_path, token_file):
+    """2026-11-24 premortem (C-08): a run no single take fits draws on its own scenario's takes, never another's."""
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    (rec / "s1__enforce.jsonl").write_text(_line("s1__enforce", "from s1") + "\n")
+    (rec / "s3__allow.jsonl").write_text(_line("s3__allow", "from s3") + "\n")
+    client = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(rec))
+    admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
+    auth = {"Authorization": f"Bearer {'t' * 40}"}
+    assert admin.post("/replay", json={"scenario": "s3"}, headers=auth).status_code == 200
+    assert client.post("/v1/responses", json=finbot_request()).json()["output"][0]["content"][0]["text"] == "from s3"
+    assert admin.post("/replay", json={"scenario": "s9"}, headers=auth).status_code == 409

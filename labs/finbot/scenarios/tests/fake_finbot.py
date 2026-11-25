@@ -106,6 +106,8 @@ class FakeLab:
     # slow upstream call or a Guardian decision does on a live run.
     gap_s: float = 0.0
     replay_miss_on_chat: bool = False
+    # A replay miss logged while setup's vendor registration runs, before the run's window opens (2026-11-24 premortem).
+    replay_miss_on_register: bool = False
     # The capture stem, as compose.capture.yaml hands it to the real gateway, which appends one recording line per
     # exchange it records. Set by a test that runs a capture, so the driver sees each call recorded.
     capture: str | None = None
@@ -298,6 +300,8 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
                 _json(self, 200, {"csrf_token": lab.csrf, "namespace": lab.namespaces[cookie], "user_id": "u1",
                                   "is_temporary": True}, set_cookie)
             elif route == ("POST", "/vendor/api/v1/vendors/register"):
+                if lab.replay_miss_on_register:
+                    lab.audit("replay_miss", recording_dir="/lab/replay/recordings", reason="no_recording")
                 lab.background("onboarding")
                 _json(self, 200, {"success": True, "vendor_id": 1, "workflow_id": "wf_1"}, set_cookie)
             elif route == ("GET", "/vendor/api/v1/vendors/1"):
