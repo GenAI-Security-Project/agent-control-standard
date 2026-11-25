@@ -1,0 +1,26 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "agent",
+        "type": "application",
+        "name": "agent",
+        "properties": [
+          {
+            "name": "acs:name-is-id",
+            "value": "true"
+          }
+        ]
+      },
+      "components": []
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    }
+  ]
+}

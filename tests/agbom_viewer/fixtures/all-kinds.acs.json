@@ -1,0 +1,184 @@
+{
+  "agbom_version": "0.1.0",
+  "agent": {
+    "agent_id": "agent",
+    "name": "Analyst",
+    "version": "5",
+    "vendor": "agent-vendor",
+    "description": "Answers ledger questions."
+  },
+  "components": [
+    {
+      "id": "m",
+      "type": "model",
+      "name": "Model",
+      "version": "1",
+      "provider": "model-provider",
+      "endpoint": "https://models.example.com",
+      "registration_provenance": {
+        "provenance_id": "p-model",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "model_fields": {
+        "context_window": 64000,
+        "args": {
+          "seed": 8,
+          "flags": [
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "id": "ledger-mcp-server",
+      "type": "mcp_server",
+      "name": "Ledger",
+      "version": "3",
+      "endpoint": "https://ledger.example.com/mcp",
+      "registration_provenance": {
+        "provenance_id": "p-server",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "mcp_server_fields": {
+        "tools": [
+          "balance-tool",
+          "search-tool"
+        ]
+      }
+    },
+    {
+      "id": "balance-tool",
+      "type": "tool",
+      "name": "Balance",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-tool",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "tool_fields": {
+        "capability": "ledger.read"
+      }
+    },
+    {
+      "id": "search-tool",
+      "type": "tool",
+      "name": "Search",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-new",
+        "origin": "tool_output",
+        "source_id": "mcp-list-result",
+        "derived_from": [
+          "p-server"
+        ]
+      },
+      "tool_fields": {
+        "capability": "ledger.search"
+      }
+    },
+    {
+      "id": "peer",
+      "type": "a2a_peer",
+      "endpoint": "https://peer.example.com",
+      "a2a_peer_fields": {
+        "protocol_version": "0.3",
+        "agent_card_ref": "https://peer.example.com/card"
+      }
+    },
+    {
+      "id": "kb",
+      "type": "knowledge_source",
+      "name": "Docs",
+      "endpoint": "https://kb.example.com",
+      "knowledge_source_fields": {
+        "source_type": "vector_db",
+        "schema_ref": "https://kb.example.com/schema"
+      }
+    },
+    {
+      "id": "mem",
+      "type": "memory_store",
+      "name": "Workspace memory",
+      "memory_store_fields": {
+        "scope": "tenant",
+        "store_type": "kv",
+        "path": "file:///memory",
+        "window_size": 0
+      }
+    },
+    {
+      "id": "cap",
+      "type": "agent_capability",
+      "name": "Reporting",
+      "agent_capability_fields": {
+        "description": "Report",
+        "tools": [
+          "balance-tool"
+        ],
+        "mcp_servers": [
+          "ledger-mcp-server"
+        ],
+        "a2a_peers": [
+          "peer"
+        ]
+      }
+    },
+    {
+      "id": "report",
+      "type": "skill",
+      "name": "Report",
+      "skill_fields": {
+        "description": "Prepare report",
+        "definition": {
+          "ref": "https://skills.example.com/report.zip",
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "4013ccde235bf7afa5787c29b947ae18eb88f9100f625d46b74f4ee184b78ac7"
+          }
+        },
+        "declared_capabilities": [
+          "ledger.read"
+        ],
+        "tools": [
+          "balance-tool"
+        ],
+        "mcp_servers": [
+          "ledger-mcp-server"
+        ],
+        "a2a_peers": [
+          "peer"
+        ],
+        "models": [
+          "m"
+        ],
+        "composed_skills": [
+          "helper"
+        ]
+      }
+    },
+    {
+      "id": "helper",
+      "type": "skill",
+      "name": "Helper",
+      "skill_fields": {
+        "description": "Format",
+        "definition": {
+          "ref": "file:///helper.zip",
+          "digest": {
+            "algorithm": "sha-512",
+            "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "tools": []
+      }
+    }
+  ],
+  "generated_at": "2026-11-23T12:01:00Z",
+  "agbom_hash": "64c730fa9a0b76b1a0e8268b01454c88fdfcc892488b123c64d7e6029a8d324c"
+}

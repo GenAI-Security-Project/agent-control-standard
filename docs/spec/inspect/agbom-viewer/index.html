@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; font-src 'self' file:; style-src 'self' file:; script-src 'self' file:; base-uri 'none'; form-action 'none'">
+  <title>AgBOM Viewer</title>
+  <link rel="stylesheet" href="./viewer.css">
+  <script defer src="./viewer-data.js"></script>
+  <script defer src="./viewer.js"></script>
+  <script defer src="./use-cases.js"></script>
+  <!-- LOCAL_SCRIPT -->
+</head>
+<body>
+  <a class="skip" href="#main">Skip to viewer</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <span class="brand"><strong>OWASP ACS - AgBOM Viewer</strong></span>
+      <button class="theme" id="theme" type="button" aria-pressed="false">
+        <span class="theme-symbol" aria-hidden="true">☼</span><span id="theme-label">Light mode</span>
+      </button>
+    </div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar">
+      <nav aria-label="Viewer navigation">
+        <a href="#agbom-json" data-view="agbom-json" aria-current="page">Sample AgBOM</a>
+        <a href="#cyclonedx-mapping" data-view="cyclonedx-mapping">CycloneDX mapping</a>
+        <a href="#field-reference" data-view="field-reference">Field reference</a>
+        <a href="#mapping-rules" data-view="mapping-rules">Mapping rules</a>
+        <a href="#use-case" data-view="use-case">Explore Use Cases</a>
+        <!-- LOCAL_NAV -->
+      </nav>
+    </aside>
+    <main id="main">
+      <header class="intro">
+        <h1>AgBOM Viewer</h1>
+        <p>Explore how an Agent Bill of Materials maps from ACS to the proposed <a href="https://github.com/CycloneDX/specification/tree/2.0-dev">CycloneDX 2.0-dev</a> format.</p>
+      </header>
+      <section id="agbom-json" class="view" aria-labelledby="sample-title">
+        <h2 id="sample-title">Sample AgBOM</h2>
+        <p class="muted explanation">This structural sample illustrates all eight ACS component types and their relationships. Inspect the whole AgBOM or select a component.</p>
+        <div class="sample-controls">
+          <label class="select-field" for="sample-component">Part of the sample<select id="sample-component"></select></label>
+          <a id="sample-download" download>Download full CycloneDX 2.0-dev AgBOM JSON</a>
+        </div>
+        <div class="sample-mode" role="group" aria-label="Sample display">
+          <button id="sample-values" type="button" aria-pressed="true">CycloneDX 2.0-dev JSON</button>
+          <button id="sample-placeholders" type="button" aria-pressed="false">Expected types in JSON</button>
+        </div>
+        <p id="sample-mode-note" class="muted explanation" hidden>Reading guide. Angle brackets show expected types or values. The download contains the full sample with real JSON values.</p>
+        <div class="source-panel">
+          <div class="source-heading"><strong id="sample-format">CycloneDX 2.0-dev JSON</strong><code id="sample-filename"></code></div>
+          <pre id="sample-json" tabindex="0" aria-label="Sample CycloneDX JSON contents"></pre>
+        </div>
+        <p class="explanation"><a id="sample-mapping" href="#cyclonedx-mapping/all" data-view-link>Review full mapping</a></p>
+      </section>
+
+      <section id="cyclonedx-mapping" class="view" aria-labelledby="mapping-title" hidden>
+        <div class="section-heading">
+          <h2 id="mapping-title">CycloneDX mapping</h2>
+          <span class="muted" id="mapping-target"></span>
+        </div>
+        <p class="muted explanation">Trace recorded ACS values to their CycloneDX representation. Use the filters to narrow the mapping or open a rule for its schema details.</p>
+        <div class="mapping-files panel">
+          <dl id="mapping-files" class="file-list"></dl>
+          <details id="export-panel" class="source-disclosure">
+            <summary>View CycloneDX JSON</summary>
+            <pre id="cdx-json" tabindex="0" aria-label="CycloneDX JSON contents"></pre>
+          </details>
+        </div>
+        <div id="mapping-filters"></div>
+        <div id="evidence"></div>
+      </section>
+
+      <section id="field-reference" class="view" hidden>
+        <h2>Field reference</h2>
+        <div id="reference-content"></div>
+      </section>
+      <section id="mapping-rules" class="view" hidden>
+        <h2>Mapping rules</h2>
+        <div class="legend">
+          <h3>Mapping legend</h3>
+          <div class="legend-content">
+            <div><span class="badge native">Native</span><p>A CycloneDX construct carries the meaning of the ACS field.</p></div>
+            <div><span class="badge convention">ACS convention</span><p>A named property, encoding or relationship carries meaning by agreement on an ACS convention.</p></div>
+            <div><span class="badge partial">Partial or lossy</span><p>Some valid source values or meanings exceed the target representation.</p></div>
+          </div>
+        </div>
+        <div id="rule-content"></div>
+      </section>
+      <section id="use-case" class="view" hidden>
+        <h2>Explore Use Cases</h2>
+        <div class="select-field use-case-choice" id="use-case-picker" hidden>
+          <label for="use-case-choice">Use case</label>
+          <select id="use-case-choice"></select>
+        </div>
+        <section id="case-context" class="panel scenario-context"></section>
+        <div id="scenario-content"></div>
+      </section>
+      <!-- LOCAL_VIEWS -->
+      <footer>
+        <a id="guide-link" href="../">ACS Inspect documentation</a>
+        <details id="about"><summary>About</summary><p id="publication-label" hidden></p><p id="reviewed-acs"></p><p id="target-commit"></p><p id="mapping-revision"></p></details>
+      </footer>
+    </main>
+  </div>
+  <dialog id="aibom-dialog" aria-labelledby="aibom-title">
+    <header class="section-heading"><h2 id="aibom-title"></h2><button id="close-aibom" type="button" autofocus>Close</button></header>
+    <pre id="aibom-json" tabindex="0" aria-label="AIBOM JSON contents"></pre>
+  </dialog>
+  <noscript>Enable JavaScript to inspect the bundled AgBOM sample.</noscript>
+</body>
+</html>

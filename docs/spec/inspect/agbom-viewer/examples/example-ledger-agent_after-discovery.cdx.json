@@ -1,0 +1,196 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0-dev",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "agent",
+        "type": "application",
+        "name": "Analyst",
+        "version": "5",
+        "description": "Answers ledger questions.",
+        "properties": [
+          {
+            "name": "acs:vendor",
+            "value": "agent-vendor"
+          }
+        ]
+      },
+      "components": [
+        {
+          "refId": "m",
+          "type": "machine-learning-model",
+          "name": "Model",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "model-provider"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://models.example.com"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-model"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "64000"
+            },
+            {
+              "name": "acs:model:args",
+              "value": "{\"flags\":[true,null],\"seed\":8}"
+            }
+          ],
+          "externalReferences": [
+            {
+              "type": "bom",
+              "url": "urn:cdx:06303425-ebf2-477a-9350-bf20e755acaa/1"
+            }
+          ]
+        },
+        {
+          "refId": "ledger-mcp-server",
+          "type": "service",
+          "name": "Ledger",
+          "version": "3",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "mcp_server"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-server"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            }
+          ],
+          "endpoints": [
+            "https://ledger.example.com/mcp"
+          ]
+        },
+        {
+          "refId": "balance-tool",
+          "type": "application",
+          "name": "Balance",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-tool"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "ledger.read"
+            }
+          ]
+        },
+        {
+          "refId": "search-tool",
+          "type": "application",
+          "name": "Search",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-new"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "tool_output"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "mcp-list-result"
+            },
+            {
+              "name": "acs:provenance:derived_from",
+              "value": "[\"p-server\"]"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "ledger.search"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    },
+    {
+      "name": "acs:agbom_hash",
+      "value": "c1bb3862337640860e4a9bb7a0bbbd6ea729ef20415f63be31a457db3dacf53f"
+    },
+    {
+      "name": "acs:generated_at",
+      "value": "2026-11-23T12:01:00Z"
+    }
+  ],
+  "blueprints": [
+    {
+      "name": "Observed composition",
+      "modelTypes": [
+        "operational"
+      ],
+      "relationships": [
+        {
+          "ref": "ledger-mcp-server",
+          "custom": [
+            {
+              "type": "acs:exposes-tool",
+              "targets": [
+                "balance-tool",
+                "search-tool"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

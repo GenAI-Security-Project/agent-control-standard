@@ -4,6 +4,7 @@ book/
 site/
 references/
 .DS_Store
+/inventory/
 
 # Python build artifacts from `uv pip install -e .`
 *.egg-info/

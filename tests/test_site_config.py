@@ -5,6 +5,7 @@ unset entirely, Material emitted <script src=".../gtag/js?id=">. No env value su
 it, so the analytics block had to be removed. Removing it alone was not enough: the theme
 also fetched Roboto from fonts.googleapis.com on all 37 pages.
 """
+import json
 import os
 import re
 import subprocess
@@ -42,6 +43,49 @@ def test_mkdocs_config_disables_theme_fonts():
     assert re.search(r"^\s*font:\s*false\s*$", (REPO / "mkdocs.yml").read_text(encoding="utf-8"), re.M)
 
 
+def test_agbom_viewer_source_matches_public_package():
+    """Keep local inventories and other extra files out of the published viewer."""
+    viewer_path = Path("docs/spec/inspect/agbom-viewer")
+    viewer = REPO / viewer_path
+    assert viewer.is_dir() and not viewer.is_symlink(), f"Expected a directory at {viewer_path.as_posix()}"
+    index_path = "examples/index.json"
+    allowed = {
+        "index.html", "viewer.css", "viewer.js", "use-cases.js", "viewer-data.js",
+        "assets/InterVariable.woff2", "assets/OFL.txt", index_path,
+    }
+    files = set()
+    unexpected = set()
+    for path in viewer.rglob("*"):
+        relative = path.relative_to(viewer).as_posix()
+        if path.is_symlink():
+            unexpected.add(relative)
+        elif path.is_file():
+            files.add(relative)
+        elif not (path.is_dir() and relative in {"assets", "examples"}):
+            unexpected.add(relative)
+
+    index = (viewer_path / index_path).as_posix()
+    assert index_path in files, f"Expected a regular file at {index}"
+    for entry in json.loads((viewer / index_path).read_text(encoding="utf-8")):
+        names = [entry["acs"], *(entry.get("aiboms") or [])]
+        if entry.get("cdx"):
+            names.append(entry["cdx"])
+        for name in names:
+            assert (
+                isinstance(name, str)
+                and re.fullmatch(r"[a-z0-9][a-z0-9._-]*\.json", name, re.ASCII | re.IGNORECASE)
+                and name.lower() != "index.json"
+            ), f"Invalid example filename in {index}: {name!r}"
+            allowed.add(f"examples/{name}")
+
+    unexpected.update(files - allowed)
+    missing = allowed - files
+    assert not (unexpected or missing), "\n".join(
+        [f"Unexpected viewer path: {(viewer_path / name).as_posix()}" for name in sorted(unexpected)]
+        + [f"Missing viewer file: {(viewer_path / name).as_posix()}" for name in sorted(missing)]
+    )
+
+
 def test_built_site_loads_nothing_from_google(built_site):
     for page in built_site.rglob("*.html"):
         text = page.read_text(encoding="utf-8")
@@ -68,18 +112,12 @@ def test_built_site_loads_no_third_party_resource(built_site):
     assert not offenders, f"third-party resource loads: {offenders}"
 
 
-def test_only_scripts_the_pinned_theme_ships_reach_the_site(built_site):
-    """Every script must be one the installed theme installs.
-
-    A path check cannot tell our own file from the theme's, because mkdocs copies
-    docs/assets/ into the same output directory, so docs/assets/javascripts/x.js
-    lands beside the theme's own bundle. Comparing against the package's manifest
-    can, which puts a first-party script in front of a human wherever it is placed.
-    """
+def test_only_theme_and_reviewed_first_party_scripts_reach_the_site(built_site):
+    """Verify the built scripts against the pinned theme and reviewed source files."""
     from conftest import stray_scripts
 
     stray = stray_scripts(built_site)
-    assert stray == [], f"script not shipped by the pinned theme: {stray}"
+    assert stray == [], f"script not shipped by the pinned theme or reviewed source: {stray}"
 
 
 # Package CDNs exist to serve executable code. A licence link or a documentation link
@@ -138,7 +176,7 @@ def test_no_unreviewed_package_cdn_reference_in_built_javascript(built_site):
 
 # Any scheme a script can open a connection with. A host a script names is not proof
 # that it fetches, so each one below was read in place and recorded per file.
-_SCRIPT_URL = re.compile(r"""\b(?:https?|wss?)://([^\s/?#'"),<>]+)""", re.I)
+_SCRIPT_URL = re.compile(r"""\b(?:https?|wss?)://([^\s/?#'"\\),<>]+)""", re.I)
 _HOSTNAME = re.compile(r"^[a-z0-9.-]+$")
 
 # Licence banners, documentation links, and comments name most of these. The lunr
@@ -163,6 +201,12 @@ REVIEWED_SCRIPT_HOSTS = {
         "underscorejs.org", "www.w3.org",
     },
     "assets/javascripts/workers/search.min.js": {"bit.ly", "lunrjs.com", "tartarus.org"},
+    # Schema links open on demand. Reserved example hosts appear as values in the bundled BOMs.
+    "spec/inspect/agbom-viewer/viewer.js": {"github.com"},
+    "spec/inspect/agbom-viewer/viewer-data.js": {
+        "example.org", "kb.example.com", "ledger.example.com", "models.example.com",
+        "peer.example.com", "skills.example.com",
+    },
 }
 # A URL built at runtime, such as `https://${e}`, names no host this scan can read. The
 # count pins how many the bundle carries, so a new one is read before it ships.

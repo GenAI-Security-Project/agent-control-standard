@@ -1,0 +1,37 @@
+{
+  "captures": [
+    {
+      "file": "session-start.agbom.json",
+      "label": "Session start",
+      "intent": "The initial inventory records the configured triage model and MCP server, before the code-review tool is discovered.",
+      "cdx": "session-start.cdx.json"
+    },
+    {
+      "file": "after-discovery.agbom.json",
+      "label": "After tool discovery",
+      "intent": "The later inventory records the tool and coding model. The reported discovery event supplies the reason and originating step.",
+      "cdx": "after-discovery.cdx.json"
+    }
+  ],
+  "events": [
+    {
+      "file": "session-start.event.json",
+      "label": "Session-start snapshot",
+      "capture": "session-start.agbom.json",
+      "synthetic": true
+    },
+    {
+      "file": "discovery-full.event.json",
+      "label": "Full snapshot",
+      "capture": "after-discovery.agbom.json",
+      "synthetic": true
+    },
+    {
+      "file": "discovery-diff.event.json",
+      "label": "Component diff",
+      "capture": "after-discovery.agbom.json",
+      "baseline": "session-start.agbom.json",
+      "synthetic": true
+    }
+  ]
+}
