@@ -34,6 +34,7 @@ the conformance evidence that makes either credible:
 - Closing the Cursor adapter's file-read gap
 - Conformance and dogfooding reports that document where ACS fails in practice
 - The public site, when a change helps an evaluator find, install, or run the Guardian
+- The AgBOM workstream's mapping of AgBOM fields to CycloneDX 2.0, and the tools that check that mapping ([D-044](https://owaspacs.org/docs/decisions/#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first))
 
 **Deferred to v0.2.0.** Real work, tracked, landing in a later release: async and composition,
 streaming, batching semantics, recursive ask, quorum, multi-tenant isolation, the Cedar
