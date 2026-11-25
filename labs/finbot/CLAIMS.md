@@ -47,6 +47,10 @@ A claim marker is an HTML comment such as `<!-- claim:C-03 -->`. It goes in the 
 | N-11 | That 0.1.5 makes an ACS-Crypto or ACS-Core claim. | Signing is experimental and off by default. |
 | N-12 | Retired 2026-11-22. | Rock, 2026-11-22. |
 | N-13 | That the signing library is a FIPS 140-3 validated module. | ML-DSA-65 follows FIPS 204, and the library has no FIPS 140 validation. |
+| N-14 | That FinBot answered live in the lab videos. | Every take replays recorded model answers (C-08), and the title card says so. |
+| N-15 | That the timing on screen is the Guardian's or the model's real latency. | Replay waits a share of each recorded call's time (`labs/finbot/compose.yaml` ACS_REPLAY_PACE), and trimming removes still stretches. |
+| N-16 | That the lab videos are unedited. | Still waits and container restarts are cut, and each cut carries an on-screen marker. |
+| N-17 | That the lab runs release 0.1.5 as tagged. | The lab runs a checkout with lab commits after the v0.1.5 tag (C-11). |
 
 ## Banned phrasing
 
@@ -84,6 +88,11 @@ Windows is supported
 works on Windows
 runs on Windows
 runs under Windows
+answered live
+in real time
+real latency
+unedited
+runs release 0.1.5 as tagged
 ```
 
 Each Not claimed row names the banned phrases it excuses, as `N-NN: phrase | phrase`. Every Not claimed row needs a line here unless it's retired, and every phrase must be on the banned list above. A retired row keeps its id, its claim cell reads exactly `Retired YYYY-MM-DD.` with the date of the ruling and nothing else, its evidence reads `Rock, YYYY-MM-DD.` with the same date, a claim row's limits cell is empty, and it has no line here, so it excuses nothing and its old phrases stay banned. A marker naming a retired row is a finding of its own and backs no claim, and the sign gate names each retired row instead of counting it as confirmed.
@@ -100,6 +109,10 @@ N-09: 0.2.0 is released
 N-10: Agent Governance Toolkit | AGT | interoperates with | interoperability with | benchmarked against
 N-11: ACS-Crypto
 N-13: FIPS 140 | FIPS validated | FIPS-validated
+N-14: answered live | in real time
+N-15: real latency
+N-16: unedited
+N-17: runs release 0.1.5 as tagged
 ```
 
 ## Claim triggers
