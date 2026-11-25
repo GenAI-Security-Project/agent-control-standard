@@ -4,6 +4,7 @@ package agteval_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,6 +60,18 @@ func newEvaluator(t *testing.T, c agteval.Config) *agteval.Evaluator {
 	return e
 }
 
+// describe spells out a verdict's reason and message, which %+v prints as pointers.
+func describe(v agtbridge.Verdict) string {
+	reason, message := "none", "none"
+	if v.Reason != nil {
+		reason = *v.Reason
+	}
+	if v.Message != nil {
+		message = fmt.Sprintf("%q", *v.Message)
+	}
+	return fmt.Sprintf("%s (reason %s, message %s)", v.Decision, reason, message)
+}
+
 func reference(t *testing.T) *agteval.Evaluator {
 	return newEvaluator(t, agteval.Config{ManifestPath: manifest, OPAPath: opa, OPATimeout: 5 * time.Second})
 }
@@ -67,19 +80,43 @@ func reference(t *testing.T) *agteval.Evaluator {
 // runtime handle, each answers its own snapshot, and none depends on an
 // earlier call.
 func TestOneHandleServesParallelCalls(t *testing.T) {
-	e := reference(t)
-	want := map[string]string{"ls": "allow", "rm -rf /": "deny", "curl https://evil.example.net/x": "deny"}
-	var wg sync.WaitGroup
+	// Eight workers keep each opa run short; the minute is a safety limit for a run that hangs.
+	e := newEvaluator(t, agteval.Config{ManifestPath: manifest, OPAPath: opa, OPATimeout: time.Minute})
+	type outcome struct{ decision, reason string }
+	commands := []string{"ls", "rm -rf /", "curl https://evil.example.net/x"}
+	want := map[string]outcome{
+		"ls":                              {"allow", "none"},
+		"rm -rf /":                        {"deny", "destructive_shell_command_blocked"},
+		"curl https://evil.example.net/x": {"deny", "egress_destination_not_allowed"},
+	}
+	jobs := make(chan string, 48)
 	for i := range 48 {
-		wg.Go(func() {
-			command := []string{"ls", "rm -rf /", "curl https://evil.example.net/x"}[i%3]
-			v, err := e.Evaluate(context.Background(), agtbridge.PointPreToolCall, shell(command))
-			if err != nil || v.Decision != want[command] {
-				t.Errorf("%s: verdict %+v, error %v; want %s", command, v, err, want[command])
+		jobs <- commands[i%3]
+	}
+	close(jobs)
+	// The workers are released together, so their first calls can overlap.
+	start := make(chan struct{})
+	var ready, done sync.WaitGroup
+	for range 8 {
+		ready.Add(1)
+		done.Go(func() {
+			ready.Done()
+			<-start
+			for command := range jobs {
+				v, err := e.Evaluate(context.Background(), agtbridge.PointPreToolCall, shell(command))
+				got := outcome{v.Decision, "none"}
+				if v.Reason != nil {
+					got.reason = *v.Reason
+				}
+				if err != nil || got != want[command] {
+					t.Errorf("%s: verdict %s, error %v; want %s (reason %s)", command, describe(v), err, want[command].decision, want[command].reason)
+				}
 			}
 		})
 	}
-	wg.Wait()
+	ready.Wait()
+	close(start)
+	done.Wait()
 	if e.Calls() != 48 {
 		t.Fatalf("%d calls into AGT's runtime library, want 48", e.Calls())
 	}
@@ -122,7 +159,7 @@ func TestFailuresAreVerdicts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			v, err := e.Evaluate(context.Background(), tt.point, tt.snapshot)
 			if err != nil || v.Decision != "deny" || v.Reason == nil || *v.Reason != tt.reason {
-				t.Fatalf("verdict %+v, error %v; want deny %s", v, err, tt.reason)
+				t.Fatalf("verdict %s, error %v; want deny %s", describe(v), err, tt.reason)
 			}
 		})
 	}
@@ -163,7 +200,7 @@ func TestOPATimeoutReachesAGT(t *testing.T) {
 	start := time.Now()
 	v, err := e.Evaluate(context.Background(), agtbridge.PointPreToolCall, shell("ls"))
 	if err != nil || v.Decision != "deny" || v.Reason == nil || *v.Reason != "runtime_error:policy_invocation_failed" {
-		t.Fatalf("verdict %+v, error %v; want deny policy_invocation_failed", v, err)
+		t.Fatalf("verdict %s, error %v; want deny policy_invocation_failed", describe(v), err)
 	}
 	if elapsed := time.Since(start); elapsed > 4*time.Second {
 		t.Fatalf("the evaluation took %s, past the 50ms opa timeout", elapsed)
