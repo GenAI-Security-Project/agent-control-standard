@@ -185,3 +185,34 @@ def test_replay_selection_refuses_a_gateway_not_on_replay(gateway, guardian, tok
     admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
     refused = admin.post("/replay", json={"scenario": "s1__off"}, headers={"Authorization": f"Bearer {'t' * 40}"})
     assert refused.status_code == 409
+
+
+def test_a_selection_can_name_its_own_replay_pace(gateway, tmp_path, token_file, audit, monkeypatch):
+    """2026-11-24 m4 takes: s4a's reject recording catches FinBot's agents racing, and replays only at the instant pace
+    it was checked at. A selection's pace holds until the next selection, which drops back to ACS_REPLAY_PACE."""
+    import json
+    from acs_gateway import upstream as upstream_module
+    from conftest import message_item
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(upstream_module.asyncio, "sleep", sleep)
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    body = {**response_body(message_item("timed")), "created_at": 100, "completed_at": 120}
+    (rec / "s4a__reject.jsonl").write_text(json.dumps({"scenario": "s4a__reject", "match": "Pay\\ vendor\\ 7",
+                                                       "turn": 1, "step": 0, "branch": "", "stream": False,
+                                                       "ids": [], "response": body}) + "\n")
+    client = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(rec), ACS_REPLAY_PACE="0.1")
+    admin = TestClient(create_admin_app(client.app.state.gateway, load_admin_token(token_file)))
+    auth = {"Authorization": f"Bearer {'t' * 40}"}
+    client.post("/v1/responses", json=finbot_request())
+    assert admin.post("/replay", json={"scenario": "s4a__reject", "pace": 0}, headers=auth).status_code == 200
+    client.post("/v1/responses", json=finbot_request())
+    assert admin.post("/replay", json={"scenario": None}, headers=auth).status_code == 200
+    client.post("/v1/responses", json=finbot_request())
+    assert waits == [2.0, 2.0]          # 0.1 of 20 s, then no wait at pace 0, then 0.1 again
+    for bad in (-0.5, 2, "fast", True):
+        assert admin.post("/replay", json={"scenario": "s4a__reject", "pace": bad}, headers=auth).status_code == 400

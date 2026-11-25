@@ -404,6 +404,8 @@ class RecordingStore:
     def __init__(self, files: list[list[Recording]]) -> None:
         # One list per file, in file name order, each in line order.
         self.files = files
+        # A pace the run's selection named, or None for the gateway's ACS_REPLAY_PACE.
+        self.pace: float | None = None
 
     @classmethod
     def load(cls, directory: Path, scenario: str | None = None) -> RecordingStore:
@@ -574,7 +576,8 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         if not complete:
             return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
                               scenario=recording.scenario)
-        wait = min(self.pace_max_s, self.pace * recorded_seconds(recording.response))
+        pace = self.store.pace if self.store.pace is not None else self.pace
+        wait = min(self.pace_max_s, pace * recorded_seconds(recording.response))
         if stream:
             return _Answer(encode_events(response), "text/event-stream", None, wait)
         return _Answer(json.dumps(response).encode("utf-8"), "application/json", None, wait)
@@ -920,7 +923,7 @@ class UpstreamSource:
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir, config.replay_scenario)
 
-    def select(self, scenario: str | None) -> None:
+    def select(self, scenario: str | None, pace: float | None = None) -> None:
         """Serve replay from <scenario>.jsonl alone, or from every file when scenario is None.
 
         Two recordings of one scenario share their first keys, s1__off and s1__enforce among them, and the store searches
@@ -932,8 +935,13 @@ class UpstreamSource:
             raise ValueError("the gateway does not run on replay")
         if scenario is not None and not SCENARIO_NAME.fullmatch(scenario):
             raise ValueError("a replay scenario is a plain name of letters, digits, _ and -")
+        if pace is not None and not (isinstance(pace, (int, float)) and not isinstance(pace, bool) and 0 <= pace <= 1):
+            raise ValueError("a replay pace is a number from 0 to 1")
         assert self._recordings_dir is not None
         self._store.files = RecordingStore.load(self._recordings_dir, scenario).files
+        # A recording whose agents race each other replays only at the pace it was checked at, so its selection can
+        # name one, and None keeps ACS_REPLAY_PACE (2026-11-24 m4 takes, where s4a's reject run missed at 0.1).
+        self._store.pace = None if pace is None else float(pace)
 
     @property
     def records_branch(self) -> bool:

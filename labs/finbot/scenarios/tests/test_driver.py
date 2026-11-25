@@ -812,13 +812,13 @@ def test_a_gateway_with_no_replay_route_still_runs_every_recording(harness, caps
     monkeypatch.setattr(harness.lab, "admin_token", harness.lab.admin_token)
     original = driver.Admin.select_replay
 
-    def no_route(self, recording):
+    def no_route(self, recording, pace=None):
         if recording is None:
             import io
             import urllib.error
             raise_404 = urllib.error.HTTPError(self.url, 404, "not found", {}, io.BytesIO(b""))
             monkeypatch.setattr(self._opener, "open", lambda *a, **k: (_ for _ in ()).throw(raise_404))
-        return original(self, recording)
+        return original(self, recording, pace)
     monkeypatch.setattr(driver.Admin, "select_replay", no_route)
     code, lines = harness.run(capsys, "s1")
     assert code == 0, lines
@@ -910,3 +910,17 @@ def test_a_finbot_stall_after_setup_is_waited_out_once(harness, capsys, monkeypa
     assert code == 0, lines
     assert any("waits for quiet again" in line for line in lines)
     assert sum(1 for s in harness.lab.seen if s.path == "/vendor/api/v1/vendors/register") == 1
+
+
+def test_a_recording_with_a_pinned_pace_is_selected_with_it(harness, tmp_path):
+    """2026-11-24 m4 takes: s4a's reject recording replays only at pace 0, which the manifest pins."""
+    import shutil
+    scen = tmp_path / "scen"
+    shutil.copytree(SCENARIOS, scen, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    doc = json.loads((scen / "manifest.json").read_text(encoding="utf-8"))
+    doc["replayPace"] = {"s4a__reject": 0, "bad": 3}
+    (scen / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
+                     harness.bundle)
+    assert run.replay_pace("s4a__reject") == 0.0
+    assert run.replay_pace("bad") is None and run.replay_pace("s1__off") is None and run.replay_pace(None) is None

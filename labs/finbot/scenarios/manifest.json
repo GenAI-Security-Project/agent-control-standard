@@ -20,5 +20,6 @@
     {"run": "m7-hmac", "module": 7, "scenario": "s2", "mode": "enforce", "signing": "HMAC-SHA256", "policy": {"m3": "solution", "m4": "solution", "m5": "solution", "m6": "solution"}, "answer": null, "clean": false, "command": "run s2", "recording": "s2__solutions", "shared_proof": "acceptance"},
     {"run": "m7-mldsa", "module": 7, "scenario": "s2", "mode": "enforce", "signing": "ML-DSA-65", "policy": {"m3": "solution", "m4": "solution", "m5": "solution", "m6": "solution"}, "answer": null, "clean": false, "command": "run s2", "recording": "s2__solutions", "shared_proof": "acceptance"},
     {"run": "pins-s6-clean", "module": null, "scenario": "s6", "mode": "off", "signing": "ML-DSA-65", "policy": null, "answer": null, "clean": true, "command": "record s6__clean s6 --clean", "recording": "s6__clean"}
-  ]
+  ],
+  "replayPace": {"s4a__approve": 0, "s4a__reject": 0}
 }

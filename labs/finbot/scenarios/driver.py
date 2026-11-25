@@ -286,10 +286,14 @@ class Admin:
             raise DriverError("the gateway's epoch answer has no epoch number")
         return epoch
 
-    def select_replay(self, recording: str | None) -> None:
-        """POST /replay: the one recording the gateway replays from, or every one with None (2026-11-24)."""
+    def select_replay(self, recording: str | None, pace: float | None = None) -> None:
+        """POST /replay: the one recording the gateway replays from, or every one with None (2026-11-24), and the
+        recording's own replay pace when the manifest pins one."""
+        doc: dict[str, Any] = {"scenario": recording}
+        if pace is not None:
+            doc["pace"] = pace
         request = urllib.request.Request(self.url.removesuffix("/epoch") + "/replay", method="POST",
-                                         data=json.dumps({"scenario": recording}).encode("utf-8"),
+                                         data=json.dumps(doc).encode("utf-8"),
                                          headers={"Authorization": f"Bearer {self.token}",
                                                   "Content-Type": "application/json"})
         try:
@@ -785,6 +789,21 @@ class Run:
                 return next(iter(found))
         return None
 
+    def replay_pace(self, recording: str | None) -> float | None:
+        """The pace the manifest pins for a recording, or None for the gateway's own. A recording that catches FinBot's
+        agents racing each other replays only at the pace it was checked at: s4a's reject run missed its recording at
+        the lab's 0.1 and matched at 0 (2026-11-24 m4 takes)."""
+        if recording is None:
+            return None
+        try:
+            pace = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
+                .get("replayPace", {}).get(recording)
+        except (OSError, ValueError, AttributeError):
+            return None
+        if isinstance(pace, bool) or not isinstance(pace, (int, float)) or not 0 <= pace <= 1:
+            return None
+        return float(pace)
+
     def _after_setup(self, a0: int, epoch_before: Any) -> tuple[Any, dict[str, Any]]:
         """Setup's quiet, its epoch closed and its sessions ended, then the baseline and a clear chat history."""
         if self.scenario["setup"]:
@@ -805,7 +824,7 @@ class Run:
         if replaying:
             # Always set, so a selection a crashed run left behind never reaches this one.
             self.replay = self.replay_recording()
-            self.admin.select_replay(self.replay)
+            self.admin.select_replay(self.replay, self.replay_pace(self.replay))
         try:
             return self._execute()
         finally:

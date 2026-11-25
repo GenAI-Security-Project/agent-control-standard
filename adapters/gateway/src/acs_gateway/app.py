@@ -292,11 +292,12 @@ class Gateway:
             chunks.append(chunk)
         return b"".join(chunks)
 
-    def select_replay(self, scenario: str | None) -> None:
-        """Replay from one recording, or from all of them with None. ValueError when the gateway is not on replay or
-        the recording is missing, and the store is then left as it was."""
-        self.upstream_source.select(scenario)
-        _audit("replay_selected", scenario=scenario)
+    def select_replay(self, scenario: str | None, pace: float | None = None) -> None:
+        """Replay from one recording, or from all of them with None, at `pace` or the configured pace with None.
+        ValueError when the gateway is not on replay, the recording is missing or the pace is not from 0 to 1, and the
+        store is then left as it was."""
+        self.upstream_source.select(scenario, pace)
+        _audit("replay_selected", scenario=scenario, pace=pace)
 
     def bump_epoch(self) -> int:
         dropped = self.sessions.held()
@@ -1567,7 +1568,8 @@ def create_admin_app(gateway: Gateway, token: str) -> Starlette:
         return JSONResponse({"epoch": gateway.bump_epoch()})
 
     async def replay(request: Request) -> Response:
-        """POST /replay {"scenario": "<recording>" | null}: the recording a lab run replays, or every one (2026-11-24)."""
+        """POST /replay {"scenario": "<recording>" | null, "pace": 0..1}: the recording a lab run replays, or every one,
+        and optionally its own replay pace (2026-11-24)."""
         given = request.headers.get("authorization", "").encode("utf-8")
         if not hmac.compare_digest(given, expected):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -1578,8 +1580,11 @@ def create_admin_app(gateway: Gateway, token: str) -> Starlette:
         scenario = body.get("scenario", ...) if isinstance(body, dict) else ...
         if scenario is not None and not isinstance(scenario, str):
             return JSONResponse({"error": "scenario must be a recording name or null"}, status_code=400)
+        pace = body.get("pace") if isinstance(body, dict) else None
+        if pace is not None and (isinstance(pace, bool) or not isinstance(pace, (int, float)) or not 0 <= pace <= 1):
+            return JSONResponse({"error": "pace must be a number from 0 to 1, or absent"}, status_code=400)
         try:
-            gateway.select_replay(scenario)
+            gateway.select_replay(scenario, pace)
         except ValueError:
             # The message can name the recordings directory, so the answer is a fixed line.
             return JSONResponse({"error": "the gateway is not on replay, or holds no such recording"},
