@@ -109,6 +109,9 @@ class Settings:
 # instead of posting the message itself. Every other step runs as before. The page each surface chats on, under the
 # finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
 CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
+# The FinBot page a browser-mode run shows for each step the driver makes through FinBot's API, with nothing typed, so
+# the video shows FinBot act (2026-11-25: m4's invoice and s1's onboarding left FinBot on its portal page).
+VIEW_PAGES = {"register_vendor": "/vendor/dashboard", "create_invoice": "/vendor/invoices"}
 CHAT_CUE = "chat-cue.json"
 AGREEMENT_COOKIE = "agreedToRules"
 
@@ -585,11 +588,15 @@ class Run:
             answer = self.finbot.call(routes.REGISTER_VENDOR, body=step["body"])
             if isinstance(answer, dict) and isinstance(answer.get("vendor_id"), int):
                 self.ids["vendor_id"] = answer["vendor_id"]
+            if self.chat_in_browser:
+                self.write_cue("vendor", VIEW_PAGES[kind], "", view=True)
         elif kind == "create_invoice":
             answer = self.finbot.call(routes.CREATE_INVOICE, body=step["body"])
             invoice = answer.get("invoice") if isinstance(answer, dict) else None
             if isinstance(invoice, dict) and isinstance(invoice.get("id"), int):
                 self.ids["invoice_id"] = invoice["id"]
+            if self.chat_in_browser:
+                self.write_cue("vendor", VIEW_PAGES[kind], "", view=True)
         elif kind == "chat":
             if self.chat_in_browser:
                 result = self.chat_in_page(step["surface"], step["message"])
@@ -606,27 +613,34 @@ class Run:
             else:
                 self.finbot.call(routes.RESET_TOOLS, server=step["server"])
 
-    def chat_in_page(self, surface: str, message: str) -> finbot_client.ChatResult:
-        """Cues one chat step for FinBot's page and waits, up to the done bound, for FinBot's history to hold the message
-        and a reply after it. The cue names the page, the message and the driver's session cookie, so the typist's
-        browser joins this run's session. It is written owner-only under state/, like the lab's other secrets."""
+    def write_cue(self, surface: str, page: str, message: str, *, view: bool = False) -> str:
+        """Writes the next cue for the browser and returns FinBot's port. A view cue names a page and types nothing."""
         self.cue_seq += 1
         cookie = next((c for c in self.finbot.jar if c.name == finbot_client.SESSION_COOKIE), None)
         if cookie is None:
             raise finbot_client.FinBotError("no FinBot session cookie to hand to the browser")
         port = self.env.get("LAB_PORT_FINBOT", "").strip() or "8097"
-        cue = {"run": self.cue_run, "seq": self.cue_seq, "surface": surface, "page": CHAT_PAGES[surface], "message": message,
+        cue = {"run": self.cue_run, "seq": self.cue_seq, "surface": surface, "page": page, "message": message,
                "url": f"http://localhost:{port}",
                # The session, then FinBot's CTF agreement, which its pages ask a fresh browser to accept first
                # (finbot/static/pages/agreement.html sets this cookie). The lab's operator accepts it by running the lab.
                "cookies": [{"name": cookie.name, "value": cookie.value, "path": "/", "httpOnly": True},
                            {"name": AGREEMENT_COOKIE, "value": "yes", "path": "/", "httpOnly": False}]}
+        if view:
+            cue["view"] = True
         folder = self.state / "ui"
         folder.mkdir(mode=0o700, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=folder, prefix=".cue-")
         with os.fdopen(fd, "w") as f:
             json.dump(cue, f)
         os.replace(tmp, folder / CHAT_CUE)
+        return port
+
+    def chat_in_page(self, surface: str, message: str) -> finbot_client.ChatResult:
+        """Cues one chat step for FinBot's page and waits, up to the done bound, for FinBot's history to hold the message
+        and a reply after it. The cue names the page, the message and the driver's session cookie, so the typist's
+        browser joins this run's session. It is written owner-only under state/, like the lab's other secrets."""
+        port = self.write_cue(surface, CHAT_PAGES[surface], message)
         report.info(f"Type the message into FinBot's chat at http://localhost:{port}{CHAT_PAGES[surface]}")
         route = routes.probe_route({"kind": "chat_reply", "surface": surface})
         deadline = time.monotonic() + self.settings.done_timeout_s

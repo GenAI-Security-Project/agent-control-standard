@@ -856,6 +856,10 @@ def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
         if cue and (cue["run"], cue["seq"]) != done:
             done = (cue["run"], cue["seq"])
             sent.append(cue)
+            if cue.get("view"):
+                # A view cue opens a page and types nothing, as acsrec.typist does.
+                stop.wait(0.05)
+                continue
             path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
             headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
                        "X-CSRF-Token": harness.lab.csrf, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
@@ -880,9 +884,11 @@ def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, mo
         stop.set()
         typist.join(5)
     assert code == 0, lines
-    assert [c["page"] for c in sent] == ["/vendor/assistant"]
-    assert [c["name"] for c in sent[0]["cookies"]] == ["finbot_session", "agreedToRules"]
-    assert sent[0]["url"] == "http://localhost:8097"
+    # Setup's onboarding cues a view of the vendor dashboard, then the chat cues its page (2026-11-25).
+    assert [(c["page"], c.get("view", False)) for c in sent] == [("/vendor/dashboard", True),
+                                                                 ("/vendor/assistant", False)]
+    assert sent[0]["message"] == "" and [c["name"] for c in sent[1]["cookies"]] == ["finbot_session", "agreedToRules"]
+    assert sent[1]["url"] == "http://localhost:8097"
     assert any("Type the message into FinBot's chat at http://localhost:8097/vendor/assistant" in line for line in lines)
     # One chat, the typist's, and the session never moved (a fingerprint mismatch would start a new namespace).
     assert sum(1 for s in harness.lab.seen if s.method == "POST" and s.path == "/vendor/api/v1/chat") == 1
@@ -912,7 +918,7 @@ def test_each_run_names_its_cues(harness, capsys, monkeypatch):
         stop.set()
         typist.join(5)
     assert (first, second) == (0, 0)
-    assert [c["seq"] for c in sent] == [1, 1] and len({c["run"] for c in sent}) == 2
+    assert [c["seq"] for c in sent] == [1, 2, 1, 2] and len({c["run"] for c in sent}) == 2
 
 
 def test_a_finbot_stall_after_setup_is_waited_out_once(harness, capsys, monkeypatch):
@@ -987,3 +993,23 @@ def test_the_manifest_names_expected_setup_misses_for_s4a_reject_only(harness, t
     run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
                      harness.bundle)
     assert [run.setup_misses_expected(k) for k in "abcd"] == [0, 0, 0, 0]
+
+
+def test_an_invoice_run_in_browser_mode_cues_the_invoices_page(harness, capsys, monkeypatch):
+    """2026-11-25: s4a makes its invoice through FinBot's API, so with nothing typed FinBot's pane sat on its portal
+    page through m4. The driver now cues a view of the vendor's invoices page after the invoice, and the dashboard
+    after onboarding, so the video shows FinBot act."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    harness.lab.ask_on_invoice = True
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        code, lines = harness.run(capsys, "s4a", "--answer", "approve")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert code == 0, lines
+    assert [(c["page"], c.get("view")) for c in sent] == [("/vendor/dashboard", True), ("/vendor/invoices", True)]
+    assert all(c["message"] == "" for c in sent)
