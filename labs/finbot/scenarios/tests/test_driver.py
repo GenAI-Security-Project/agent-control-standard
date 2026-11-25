@@ -256,6 +256,20 @@ def test_evidence_snapshot_written(harness, capsys):
     assert record["finbot"]["evidence"]["reply"] == harness.lab.reply
 
 
+def test_answer_answers_each_held_call_once(harness, capsys):
+    """FinBot retried the rejected transfer in the s4a__reject recording, so a second call was held. --answer reject
+    answers that one too, and it does not time out (2026-11-24, m4 took 4 min 41 s on the 240 s ask deadline)."""
+    harness.lab.ask_on_invoice = True
+    harness.lab.ask_again_on_reject = True
+    code, lines = harness.run(capsys, "s4a", "--answer", "reject")
+    assert code == 0, lines
+    assert [a["choice"] for a in harness.lab.answers] == ["reject", "reject"]
+    assert len({a["id"] for a in harness.lab.answers}) == 2
+    assert all(choice == "reject" for choice in harness.lab.pending.values())
+    (record,) = harness.records()
+    assert record["approval"]["answered"] is True and record["approval"]["error"] is None
+
+
 def test_answer_posts_once_with_token_and_origin(harness, capsys):
     harness.lab.ask_on_invoice = True
     code, lines = harness.run(capsys, "s4a", "--answer", "approve")

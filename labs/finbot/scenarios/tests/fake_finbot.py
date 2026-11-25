@@ -76,6 +76,9 @@ class FakeLab:
     reply: str = "Payment notice sent to the vendor."
     # When set, an invoice holds one call for the approver, and the background work waits for the answer.
     ask_on_invoice: bool = False
+    # When set, a rejected held call is retried once as a new held call, as FinBot's agent retried the transfer in
+    # the s4a__reject recording (2026-11-24). The background work waits for both answers.
+    ask_again_on_reject: bool = False
     # When set, the dead drop answers with more than the driver's 1 MiB read limit once a chat has run, so the
     # baseline before the steps reads normally and the evidence probe after them meets the oversized answer.
     huge_dead_drop: bool = False
@@ -191,6 +194,11 @@ class FakeLab:
                 deadline = time.monotonic() + 10
                 while self.pending.get(wait_for_answer) is None and time.monotonic() < deadline:
                     time.sleep(0.02)
+                if self.ask_again_on_reject and self.pending.get(wait_for_answer) == "reject":
+                    again = uuid.uuid4().hex
+                    self.pending[again] = None
+                    while self.pending.get(again) is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
             self.model_input({"agent": label, "session": session_id, "turn": "first"})
             if self.gap_s:
                 time.sleep(self.gap_s)

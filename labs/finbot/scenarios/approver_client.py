@@ -53,7 +53,9 @@ class Waiting:
 
 @dataclass
 class Outcome:
-    """What a watch saw: how many polls showed a waiting call, and the one answer it posted, if any."""
+    """What a watch saw: how many polls showed a waiting call, and whether every answer it posted was taken.
+
+    status is the last post's HTTP status. answered is True only when every post got 303."""
     choice: str | None
     polls_waiting: int = 0
     answered: bool = False
@@ -152,7 +154,7 @@ def watch(approver: Approver, *, stop: threading.Event, choice: str | None = Non
           on_poll: Callable[[list[Waiting]], None] | None = None,
           on_poll_start: Callable[[], None] | None = None,
           on_poll_end: Callable[[], None] | None = None) -> Outcome:
-    """Polls the page until stop is set. With a choice, posts it once for the one waiting call.
+    """Polls the page until stop is set. With a choice, posts it once for each call held, one at a time.
 
     on_poll gets every poll's waiting calls, so the driver can hold its quiet timer while a person decides. A failed
     poll is recorded, since a held call could have gone unseen during it, and the watch polls again. It stops after
@@ -161,6 +163,7 @@ def watch(approver: Approver, *, stop: threading.Event, choice: str | None = Non
     """
     outcome = Outcome(choice=choice)
     failed = 0
+    posted: set[str] = set()
     while not stop.is_set():
         if on_poll_start is not None:
             on_poll_start()
@@ -183,17 +186,23 @@ def watch(approver: Approver, *, stop: threading.Event, choice: str | None = Non
         if items:
             outcome.polls_waiting += 1
             outcome.ask_ids += [i.ask_id for i in items if i.ask_id not in outcome.ask_ids]
-        if choice is not None and not outcome.answered and outcome.status is None and items:
+        # Each held call gets the choice once. FinBot's agent can retry a rejected call, and the retry is a new held
+        # call that nobody would answer, so it waited out the ask deadline (2026-11-24, s4a__reject).
+        fresh = [i for i in items if i.ask_id not in posted]
+        if choice is not None and fresh and outcome.error is None:
             if len(items) == 1:
+                posted.add(items[0].ask_id)
                 try:
                     outcome.status = approver.post(items[0], choice)
                 except ApproverError as e:
                     outcome.error = str(e)
+                    outcome.answered = False
                     break
-                outcome.answered = outcome.status == 303
-                if not outcome.answered:
+                # True only while every post so far was taken. The first post has no earlier one to answer for.
+                outcome.answered = outcome.status == 303 and (len(posted) == 1 or outcome.answered)
+                if outcome.status != 303:
                     outcome.error = f"the approver page refused the answer with HTTP {outcome.status}"
-            elif outcome.error is None:
+            else:
                 outcome.error = f"{len(items)} calls wait for approval at once, so the driver answered none"
         stop.wait(poll_s)
     return outcome
