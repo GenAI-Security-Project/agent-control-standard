@@ -99,7 +99,10 @@ class Settings:
     done_timeout_s: float = 420.0
     # sessionEnd waits on the decision timeout (5 s in compose.yaml) plus the gateway's grace, per session, in
     # parallel. A session whose start failed never ends, so the wait has a bound.
-    end_wait_s: float = 20.0
+    # The bound on waiting for every session's end. It returns as soon as all have ended, so the bound costs nothing
+    # on a healthy run. FinBot's SQLite stalls for 16 to 40 s when a browser page and its agents contend for it
+    # (2026-11-25 intro keeper: six sessions opened during a stall and were judged unended at 20 s).
+    end_wait_s: float = 60.0
     approver_wait_s: float = approver_client.WAIT_S
     scenarios_dir: Path = HERE
 
