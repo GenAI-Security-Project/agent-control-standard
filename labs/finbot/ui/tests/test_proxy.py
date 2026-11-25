@@ -17,10 +17,14 @@ import proxy  # noqa: E402
 class Upstream(BaseHTTPRequestHandler):
     seen: list = []
     fingerprints: list = []
+    cookies: list = []
+    authorizations: list = []
 
     def do_GET(self):
         Upstream.seen.append((self.command, self.path, self.headers.get("Host"), None))
         Upstream.fingerprints.append((self.headers.get("Accept-Language"), self.headers.get("Accept-Encoding")))
+        Upstream.cookies.append(self.headers.get("Cookie"))
+        Upstream.authorizations.append(self.headers.get("Authorization"))
         if self.path == "/stream":
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -51,6 +55,8 @@ class Upstream(BaseHTTPRequestHandler):
 def stack():
     Upstream.seen = []
     Upstream.fingerprints = []
+    Upstream.cookies = []
+    Upstream.authorizations = []
     up = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     threading.Thread(target=up.serve_forever, daemon=True).start()
     proxy.Handler.upstream = ("127.0.0.1", up.server_address[1])
@@ -115,3 +121,34 @@ def test_the_browser_carries_the_drivers_fingerprint(stack):
     assert Upstream.fingerprints == [("en-US", "identity")]
     import finbot_client
     assert {k: finbot_client.FINGERPRINT_HEADERS[k] for k in proxy.FINGERPRINT} == proxy.FINGERPRINT
+
+
+
+def test_only_finbots_cookies_reach_finbot(stack):
+    """2026-11-24 premortem: an approver session in the same browser must never reach FinBot."""
+    conn = http.client.HTTPConnection("127.0.0.1", stack, timeout=5)
+    conn.request("GET", "/vendor/assistant", headers={
+        "Host": "localhost:8097", "Authorization": "Bearer t0ken",
+        "Cookie": "acs_approver=SECRET; finbot_session=abc; agreedToRules=yes; other=x"})
+    conn.getresponse().read()
+    assert Upstream.cookies == ["finbot_session=abc; agreedToRules=yes"]
+    assert Upstream.authorizations == [None]
+
+
+def test_a_request_with_only_foreign_cookies_sends_none(stack):
+    conn = http.client.HTTPConnection("127.0.0.1", stack, timeout=5)
+    conn.request("GET", "/", headers={"Host": "localhost", "Cookie": "acs_approver=SECRET"})
+    conn.getresponse().read()
+    assert Upstream.cookies == [None]
+
+
+@pytest.mark.parametrize("extra", [[("Host", "evil.example.com")], [("Content-Length", "0"), ("Content-Length", "40")]])
+def test_duplicate_host_or_length_is_refused(stack, extra):
+    conn = http.client.HTTPConnection("127.0.0.1", stack, timeout=5)
+    conn.putrequest("POST", "/vendor/api/v1/chat", skip_host=True)
+    conn.putheader("Host", "localhost:8097")
+    for name, value in extra:
+        conn.putheader(name, value)
+    conn.endheaders()
+    assert conn.getresponse().status == 400
+    assert Upstream.seen == []

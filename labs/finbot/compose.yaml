@@ -10,7 +10,7 @@
 #               publishes none. The lab CLI drives FinBot over drive-net.
 #   upstream-net the gateway alone. Not internal, so the gateway reaches OpenAI for live runs and capture takes, and
 #               publishes the approver port.
-#   drive-net   FinBot and the lab CLI only, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
+#   drive-net   FinBot, the lab CLI and the finbot-ui proxy, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
 #               so the CLI, which mounts state/secrets, still has no path to the internet.
 #   acs-net     gateway, Guardian, OPA, Jaeger and the lab CLI. internal: true, so nothing on it reaches the internet,
 #               and FinBot, which isn't on it, can't reach the Guardian, OPA or the gateway's admin port.
@@ -175,7 +175,8 @@ services:
       finbot-net: {}
       acs-net:
         ipv4_address: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
-      # The one way out of the stack, for the model upstream and the published approver port. Only the gateway joins it.
+      # The way out of the stack for the model upstream and the published approver port. Only the gateway joins it.
+      # finbot-ui-net is the only other non-internal network a FinBot-side container joins (2026-11-24 premortem).
       upstream-net: {}
     extra_hosts:
       # Reaches a model served on the host, such as Ollama, on Linux as on Docker Desktop.

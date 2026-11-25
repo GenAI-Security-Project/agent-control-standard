@@ -125,6 +125,9 @@ jobs:
           bun-version: "1.3.11"
       - name: Run the decision viewer tests with the pqc extra
         run: uv run --project adapters --locked --extra pqc --group test python -m pytest labs/finbot/viewer/tests -v
+      # The finbot-ui proxy, which C-17 relies on to forward only to FinBot and only FinBot's cookies (2026-11-24).
+      - name: Run the finbot-ui proxy tests
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/ui/tests -v
 
   images:
     runs-on: ubuntu-latest

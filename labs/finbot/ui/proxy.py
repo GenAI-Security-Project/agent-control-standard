@@ -1,6 +1,6 @@
 """Forward a browser on the host to FinBot's own web UI, which publishes no port (C-17).
 
-Owner: Rock Lambros. Version 0.1.0. Lab code for the FinBot lab, added 2026-11-24 for the lab videos, which type the
+Owner: Rock Lambros. Version 0.2.0. Lab code for the FinBot lab, added 2026-11-24 for the lab videos, which type the
 attack into FinBot's real chat page.
 
     python labs/finbot/ui/proxy.py [--host 0.0.0.0] [--port 8097] [--upstream finbot:8000]
@@ -32,6 +32,11 @@ HOP_BY_HOP = frozenset({"connection", "keep-alive", "proxy-authenticate", "proxy
 # chat stream uncompressed, so it streams as FinBot writes it.
 FINGERPRINT = {"Accept-Language": "en-US", "Accept-Encoding": "identity"}
 FINGERPRINT_NAMES = frozenset(k.lower() for k in FINGERPRINT)
+# Browsers don't separate cookies by port, so a browser that signed in to the approver on localhost:8090 sends that
+# session here too. Forwarded, it would let FinBot answer its own held call (2026-11-24 premortem, C-17). Only
+# FinBot's own cookies pass, and no credential header does.
+FINBOT_COOKIES = frozenset({"finbot_session", "agreedToRules"})
+WITHHELD = frozenset({"cookie", "authorization"})
 MAX_BODY = 10 * 1024 * 1024
 # A chat can think for minutes on a live model (FinBot's LLM_TIMEOUT is 360 s in compose.yaml).
 UPSTREAM_TIMEOUT_S = 400.0
@@ -44,6 +49,17 @@ def host_name(host_header: str) -> str:
     if host.startswith("["):
         return host[: host.find("]") + 1] if "]" in host else host
     return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def finbot_cookies(values: list[str]) -> str:
+    """The Cookie header to forward: the FinBot cookies among `values`, in order, and nothing else."""
+    kept = []
+    for value in values:
+        for part in value.split(";"):
+            name, sep, _ = part.strip().partition("=")
+            if sep and name in FINBOT_COOKIES:
+                kept.append(part.strip())
+    return "; ".join(kept)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -62,6 +78,11 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _forward(self) -> None:
+        # One Host and at most one Content-Length: the checks below read the first, and a second could otherwise reach
+        # FinBot unchecked (2026-11-24 premortem).
+        if len(self.headers.get_all("Host") or []) != 1 or len(self.headers.get_all("Content-Length") or []) > 1:
+            self._refuse(400, "a request names one Host and at most one Content-Length")
+            return
         if host_name(self.headers.get("Host", "")) not in LOOPBACK_NAMES:
             self._refuse(421, "this proxy answers only a loopback host name")
             return
@@ -78,8 +99,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(length) if length else None
         headers = {k: v for k, v in self.headers.items()
-                   if k.lower() not in HOP_BY_HOP and k.lower() not in FINGERPRINT_NAMES}
+                   if k.lower() not in HOP_BY_HOP and k.lower() not in FINGERPRINT_NAMES and k.lower() not in WITHHELD}
         headers.update(FINGERPRINT)
+        cookies = finbot_cookies(self.headers.get_all("Cookie") or [])
+        if cookies:
+            headers["Cookie"] = cookies
         conn = http.client.HTTPConnection(*self.upstream, timeout=UPSTREAM_TIMEOUT_S)
         try:
             conn.request(self.command, self.path, body=body, headers=headers)

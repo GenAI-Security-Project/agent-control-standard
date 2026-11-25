@@ -54,10 +54,11 @@ COMPOSE_OPENAI = BUNDLE / "compose.openai.yaml"
 DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
 LAB_IMAGES = {"LAB_RUNTIME_IMAGE": "ghcr.io/genai-security-project/acs-lab-runtime",
               "LAB_FINBOT_IMAGE": "ghcr.io/genai-security-project/acs-lab-finbot"}
-# A.2 as amended: three published ports, each on loopback with its own override variable. FinBot joins only internal
+# A.2 as amended: four published ports, each on loopback with its own override variable. FinBot joins only internal
 # networks, so it publishes none (Rock, 2026-11-22, C-17).
+# finbot-ui (2026-11-24) publishes FinBot's own web page for the lab videos, through a proxy fixed to finbot:8000.
 PORTS = {"acs-gateway": ("LAB_PORT_APPROVER", 8090), "acs-viewer": ("LAB_PORT_VIEWER", 8095),
-         "jaeger": ("LAB_PORT_JAEGER", 16686)}
+         "jaeger": ("LAB_PORT_JAEGER", 16686), "finbot-ui": ("LAB_PORT_FINBOT", 8097)}
 # FinBot's own docker-compose.yml at 1450fc4, its app service's environment block, vendored so the test needs no
 # network. The lab may differ from it in exactly the four A.3 settings.
 FINBOT_OWN_ENV = {"REDIS_URL": "redis://redis:6379", "DATABASE_URL": "${DATABASE_URL:-sqlite://data/finbot.db}",
@@ -144,7 +145,7 @@ def test_ports_bind_loopback_with_override():
         assert services[name]["ports"] == [f"127.0.0.1:${{{variable}:-{port}}}:{port}"], name
 
 
-def test_only_three_ports_published():
+def test_only_the_listed_ports_published():
     published = {name for path in (COMPOSE, COMPOSE_OPENAI) for name, s in _services(path).items() if s.get("ports")}
     assert published == set(PORTS)
     for path in (COMPOSE, COMPOSE_OPENAI):
@@ -188,7 +189,27 @@ def test_only_the_gateway_joins_the_outside_network():
     on_upstream = {name for name, s in _services().items() if "upstream-net" in s.get("networks", [])}
     assert on_upstream == {"acs-gateway"}
     outside = {name for name, n in _compose()["networks"].items() if not (n or {}).get("internal")}
-    assert outside == {"upstream-net", "ui-net"}
+    assert outside == {"upstream-net", "ui-net", "finbot-ui-net"}
+
+
+def test_finbot_ui_is_the_only_member_of_its_network_and_forwards_only_to_finbot():
+    """2026-11-24 premortem (C-17): finbot-ui is the one container besides the gateway that sits on a network FinBot
+    joins and also on one that leaves the stack. Nothing else may join finbot-ui-net, finbot-ui may join nothing else
+    but drive-net, and its proxy names FinBot's web port as its one upstream."""
+    services = _services()
+    on_ui_net = {name for name, s in services.items() if "finbot-ui-net" in s.get("networks", [])}
+    assert on_ui_net == {"finbot-ui"}
+    assert set(services["finbot-ui"]["networks"]) == {"drive-net", "finbot-ui-net"}
+    command = services["finbot-ui"]["command"]
+    assert command[command.index("--upstream") + 1] == "finbot:8000"
+    assert "volumes" not in services["finbot-ui"] and "env_file" not in services["finbot-ui"]
+    # Every network a FinBot-side container shares with something outside: only the gateway and finbot-ui bridge one.
+    networks = _compose()["networks"]
+    internal_finbot = {"finbot-net", "drive-net"}
+    bridges = {name for name, s in services.items()
+               if internal_finbot & set(s.get("networks", []))
+               and any(not (networks[n] or {}).get("internal") for n in s.get("networks", []))}
+    assert bridges == {"acs-gateway", "finbot-ui"}
 
 
 def test_published_services_have_a_non_internal_network():
@@ -203,7 +224,8 @@ def test_service_networks_match_a2():
     expected = {"finbot": {"finbot-net", "drive-net"}, "redis": {"finbot-net"},
                 "acs-gateway": {"finbot-net", "acs-net", "upstream-net"}, "acs-guardian": {"acs-net"},
                 "opa": {"acs-net"},
-                "acs-viewer": {"ui-net"}, "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net", "drive-net"}}
+                "acs-viewer": {"ui-net"}, "jaeger": {"acs-net", "ui-net"}, "lab": {"acs-net", "drive-net"},
+                "finbot-ui": {"drive-net", "finbot-ui-net"}}
     services = _services()
     assert set(services) == set(expected)
     for name, nets in expected.items():
@@ -646,7 +668,7 @@ def test_redis_keeps_only_the_capabilities_its_user_drop_needs():
 
 DOCKERFILE = BUNDLE / "images" / "acs.Dockerfile"
 # The bundle paths the image runs from. policy/, replay/ and state/ reach the containers by bind mount, never the image.
-IMAGE_SOURCES = {"labs/finbot/cli", "labs/finbot/vie[w]er", "labs/finbot/images/entrypoint.sh",
+IMAGE_SOURCES = {"labs/finbot/cli", "labs/finbot/vie[w]er", "labs/finbot/ui", "labs/finbot/images/entrypoint.sh",
                  "labs/finbot/images/claims-requirements.txt"}
 
 
@@ -735,9 +757,10 @@ def test_lab_cli_joins_finbot_net_and_publishes_nothing():
     networks = _compose()["networks"]
     assert networks["drive-net"] == {"internal": True}
     assert "drive-net" in _services()["finbot"]["networks"] and "finbot-net" in _services()["finbot"]["networks"]
-    # Only FinBot and the CLI share drive-net. The Guardian and OPA stay on acs-net alone.
+    # FinBot, the CLI and the finbot-ui proxy share drive-net. The Guardian and OPA stay on acs-net alone. finbot-ui's
+    # own limits are test_finbot_ui_is_the_only_member_of_its_network_and_forwards_only_to_finbot's.
     on_drive = {name for name, service in _services().items() if "drive-net" in service.get("networks", [])}
-    assert on_drive == {"finbot", "lab"}
+    assert on_drive == {"finbot", "lab", "finbot-ui"}
     merged = _merged(COMPOSE)
     assert merged["networks"]["drive-net"]["internal"] is True
     assert merged["networks"]["acs-net"]["internal"] is True
