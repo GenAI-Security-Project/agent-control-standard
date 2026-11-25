@@ -13,6 +13,7 @@ If that describes you and you aren't listed here, open a PR that names the work.
 - **Eva Benn** ([@evabenn](https://github.com/evabenn))
 - **Evgeniy Kokuykin** ([@artmaro](https://github.com/artmaro))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
+- **Helen Oakley** ([@e2hln](https://github.com/e2hln))
 - **Imran Siddique** ([@imran-siddique](https://github.com/imran-siddique))
 - **Mayur Agnihotri** ([@Mayur021](https://github.com/Mayur021))
 - **narko4u** ([@narko4u](https://github.com/narko4u))
