@@ -185,4 +185,4 @@ The signer fills in the row on 2026-11-30 with a name, an ISO date, the full com
 
 | Signed by | Date | Commit | Ledger sha256 |
 |---|---|---|---|
-| Rock Lambros | 2026-11-24 | 1270d2a4c89ac4bceffc84b417a16ced343c322b | d9396ec0ef304e477ccfadfa8eb5e776d091bfc028ba7737c4691a56bed08e37 |
+| Rock Lambros | 2026-11-24 | b61a0b97ee675c9f817451a014970b3456b73a2b | d9396ec0ef304e477ccfadfa8eb5e776d091bfc028ba7737c4691a56bed08e37 |
