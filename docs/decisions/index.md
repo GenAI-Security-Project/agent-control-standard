@@ -14,6 +14,14 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 ## Decisions
 
+### D-052: Land 0.2 specification work on `release/0.2`
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+`release/0.2` carries out [D-049](#d-049-promote-integration-as-015-then-branch-02). It starts from the 0.1.5 work on `integration`. A pull request targets `release/0.2` when it changes normative text under `docs/spec/`, a schema under `specification/`, or a conformance requirement, or when its issue is in the v0.2.0 milestone, because [D-048](#d-048-version-by-what-changed-until-10) makes a specification change a minor release. Fixes to shipped code, adapters, reference implementation work, and documentation of shipped behavior stay on `integration` and ship in 0.1.x. A lead merges `integration` into `release/0.2` so those fixes reach both lines.
+
+**Source:** [Issue #99](https://github.com/GenAI-Security-Project/agent-control-standard/issues/99), which tracks how release branches are versioned.
+
 ### D-051: Adopt Part 2 of the Code of Conduct
 
 **Date:** 2026-11-20 · **Decided by:** a project lead · **Status:** decided
