@@ -126,7 +126,9 @@ BUILD_SIDE = frozenset({"page_not_in_nav", "section_rules", "not_found_base", "n
 # Row ceilings for the landing pane, enforced in tests/test_landing_page.py. They live
 # here because the repair message sends the author here to raise them.
 CEILING_WITH_PAGE_OPEN_SET = 20
-CEILING_WITH_EVERY_GROUP_CLOSED = 12
+# 13 since Labs became a top-level group (2026-11-26). At 1366x768 with every group closed, the last pane row ends
+# near 712 px, inside the fold.
+CEILING_WITH_EVERY_GROUP_CLOSED = 13
 
 
 def load_mkdocs() -> dict:
@@ -280,7 +282,7 @@ def test_out_of_nav_prefixes_are_declared_and_end_with_a_slash():
 
 def test_nav_order_puts_faq_at_the_top_level_and_drops_acs_home():
     titles = [next(iter(entry)) for entry in load_mkdocs()["nav"]]
-    assert titles == ["Trustworthy Agents", "ACS", "FAQ", "Topics", "Concepts", "Specification", "About"]
+    assert titles == ["Trustworthy Agents", "ACS", "FAQ", "Topics", "Labs", "Concepts", "Specification", "About"]
 
 
 def test_mkdocs_build_surface_is_pinned():
