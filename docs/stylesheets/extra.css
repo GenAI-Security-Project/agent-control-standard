@@ -19,10 +19,11 @@
 
 /* Light. Values match landing/assets/acs.css, including the contrast-corrected ones. */
 [data-md-color-scheme="default"] {
+  color-scheme: light;
   --md-default-bg-color: #ffffff;
   --md-default-fg-color: #121212;
   --md-default-fg-color--light: #5f636d;
-  --md-default-fg-color--lighter: #6b7079;
+  --md-default-fg-color--lighter: #5f636d;
   --md-default-fg-color--lightest: #d0d5dd;
   --md-primary-fg-color: #111111;
   --md-primary-bg-color: #f7f7f7;
@@ -31,12 +32,24 @@
   --md-typeset-a-color: #1b4f72;
   --md-code-bg-color: #eef0f4;
   --md-code-fg-color: #121212;
+  /* Light syntax tokens darkened for >= 5.7:1 contrast against --md-code-bg-color (#eef0f4). */
+  --md-code-hl-number-color: #b81d1d;
+  --md-code-hl-special-color: #b50f4b;
+  --md-code-hl-function-color: #892d9c;
+  --md-code-hl-constant-color: #543fc2;
+  --md-code-hl-keyword-color: #2b56a6;
+  --md-code-hl-string-color: #15693f;
+  --md-code-hl-comment-color: #535861;
   --md-footer-bg-color: #111111;
   --md-footer-bg-color--dark: #0a0a0a;
+  --md-footer-fg-color: #f7f7f7;
+  --md-footer-fg-color--light: #d4d8e0;
+  --md-footer-fg-color--lighter: #a8b0bd;
 }
 
 /* Dark. */
 [data-md-color-scheme="slate"] {
+  color-scheme: dark;
   --md-default-bg-color: #0a0a0a;
   --md-default-fg-color: #ffffff;
   --md-default-fg-color--light: #9ca3af;
@@ -51,6 +64,9 @@
   --md-code-fg-color: #ffffff;
   --md-footer-bg-color: #0a0a0a;
   --md-footer-bg-color--dark: #000000;
+  --md-footer-fg-color: #f7f7f7;
+  --md-footer-fg-color--light: #d4d8e0;
+  --md-footer-fg-color--lighter: #a8b0bd;
 }
 
 /* The theme's own palette sets --md-typeset-a-color from the primary colour, and the
@@ -63,6 +79,55 @@
 [data-md-color-scheme="slate"][data-md-color-primary] {
   --md-typeset-a-color: #63b3ed;
   --md-accent-fg-color: #63b3ed;
+}
+
+/* Persistent underlines on inline prose and footer links so links do not rely on
+   color alone (WCAG 1.4.1). UI chrome links keep their non-underlined chrome style. */
+.md-typeset a:not(.headerlink):not(.md-button):not(.md-content__button):not(.md-search-result__link):not(.md-social__link):not(.md-nav__link):not(.md-tag),
+.md-copyright a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: 0.08em;
+}
+.md-typeset .tabbed-labels a {
+  text-decoration: none;
+}
+.md-typeset a:not(.headerlink):not(.md-button):not(.md-content__button):not(.md-search-result__link):not(.md-social__link):not(.md-nav__link):not(.md-tag):hover,
+.md-typeset a:not(.headerlink):not(.md-button):not(.md-content__button):not(.md-search-result__link):not(.md-social__link):not(.md-nav__link):not(.md-tag):focus-visible,
+.md-copyright a:hover,
+.md-copyright a:focus-visible {
+  text-decoration-thickness: 0.14em;
+}
+
+/* Search status bar and mobile nested navigation headers: Material pairs
+   --md-default-fg-color--light on --md-default-fg-color--lightest (4.08:1 in light). */
+[data-md-color-scheme="default"] .md-search-result__meta,
+[data-md-color-scheme="default"] .md-nav--primary .md-nav__title:not([for="__drawer"]) {
+  background-color: #eef0f4;
+  color: #3f444d;
+}
+[data-md-color-scheme="slate"] .md-search-result__meta,
+[data-md-color-scheme="slate"] .md-nav--primary .md-nav__title:not([for="__drawer"]) {
+  background-color: #202020;
+  color: #c4cad4;
+}
+
+/* Wrap code previews inside search results so narrow viewports never produce
+   unscrollable horizontal overflow inside a result link (WCAG 2.1.1). */
+.md-search-result__article pre,
+.md-search-result__article pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: visible;
+}
+
+/* Dark-mode Mermaid edge labels: reinforce high contrast for both SVG and HTML labels. */
+[data-md-color-scheme="slate"] .acs-mermaid .edgeLabel,
+[data-md-color-scheme="slate"] .acs-mermaid .edgeLabel p,
+[data-md-color-scheme="slate"] .acs-mermaid .edgeLabel span,
+[data-md-color-scheme="slate"] .acs-mermaid .edgeLabel .labelBkg {
+  background-color: #161616;
+  color: #f7f7f7;
 }
 
 /* Square off Material's rounded chrome to match the landing page's flatter shapes. */
@@ -83,6 +148,96 @@
   max-width: none;
 }
 
+/* Drawer toggle morphs its two horizontal bars into an X while the drawer is open,
+   both via [aria-expanded="true"] (JS-upgraded button) and via the #__drawer checkbox
+   (pure-CSS <label> fallback when JS is disabled). */
+@media screen and (min-width: 76.25em) {
+  .md-header__button.acs-drawer-toggle {
+    display: none;
+  }
+}
+.acs-drawer-toggle .menu-line {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .acs-drawer-toggle .menu-line {
+    transition: transform 0.25s ease;
+  }
+}
+.acs-drawer-toggle[aria-expanded="true"] .menu-line--top,
+[data-md-toggle="drawer"]:checked ~ .md-header .acs-drawer-toggle .menu-line--top {
+  transform: translateY(3.5px) rotate(45deg);
+}
+.acs-drawer-toggle[aria-expanded="true"] .menu-line--bottom,
+[data-md-toggle="drawer"]:checked ~ .md-header .acs-drawer-toggle .menu-line--bottom {
+  transform: translateY(-3.5px) rotate(-45deg);
+}
+
+/* Keep the closed mobile drawer out of the keyboard tab order even before JS runs
+   (WCAG 2.4.3). Start the drawer below the header so the X close button stays
+   visible and clickable to recall the menu, matching the landing page. */
+@media screen and (max-width: 76.234375em) {
+  .md-header {
+    z-index: 6;
+  }
+  .md-sidebar--primary {
+    top: 2.4rem;
+    height: calc(100% - 2.4rem);
+    visibility: hidden;
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), box-shadow .25s, visibility 0s .25s;
+  }
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary {
+    visibility: visible;
+    transition: transform .25s cubic-bezier(.4, 0, .2, 1), box-shadow .25s, visibility 0s;
+  }
+}
+
+/* Keep the collapsed mobile search overlay out of the tab order when closed. */
+@media screen and (max-width: 59.984375em) {
+  .md-search__inner {
+    visibility: hidden;
+  }
+  [data-md-toggle="search"]:checked ~ .md-header .md-search__inner {
+    visibility: visible;
+  }
+}
+
+/* High-contrast focus indicators for dark header-bar controls, search controls,
+   and keyboard-scrollable regions. Limiting the light header ring to bar controls
+   keeps it off the light-mode search input and results inside .md-header. */
+.md-header__button:focus-visible,
+.md-header__ellipsis:focus-visible,
+.md-header__option:focus-visible,
+.md-header__source .md-source:focus-visible {
+  outline: 3px solid var(--md-primary-bg-color);
+  outline-offset: -2px;
+}
+.md-search__input:focus-visible,
+.md-search-result__link:focus-visible {
+  outline: 3px solid var(--md-accent-fg-color);
+  outline-offset: -2px;
+}
+.md-sidebar .md-nav__link:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.md-typeset pre > code[tabindex="0"]:focus-visible,
+.md-typeset__scrollwrap[tabindex="0"]:focus-visible,
+.md-typeset .tabbed-labels[tabindex="0"]:focus-visible {
+  outline: 3px solid var(--md-accent-fg-color);
+  outline-offset: 2px;
+}
+
+/* Ensure split nav disclosure toggle meets minimum 24x24 CSS px target size. */
+.md-nav__container > label.md-nav__link {
+  min-width: 24px;
+  min-height: 24px;
+  justify-content: center;
+  align-items: center;
+}
+
 /* The header title is a link to the landing page. Material styles this element as a
    div and sets no display, so as an inline anchor it collapses to zero width, and the
    absolutely positioned title inside it, sized from it, disappears. */
@@ -91,3 +246,30 @@ a.md-header__ellipsis { display: block; }
 /* Weight the current page's link in the left pane the way the landing page weights
    its own. The nav-item override sets the attribute. */
 .md-nav__link[aria-current="page"] { font-weight: 600; }
+
+/* Respect reduced-motion preferences for drawer and search spatial transitions. */
+@media (prefers-reduced-motion: reduce) {
+  .md-sidebar--primary,
+  [data-md-toggle="drawer"]:checked ~ .md-container .md-sidebar--primary,
+  .md-search__inner,
+  .md-overlay,
+  .md-nav__icon::after {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .md-header__button:focus-visible,
+  .md-header__ellipsis:focus-visible,
+  .md-header__option:focus-visible,
+  .md-header__source .md-source:focus-visible,
+  .md-search__input:focus-visible,
+  .md-search-result__link:focus-visible,
+  .md-sidebar .md-nav__link:focus-visible,
+  .md-typeset a:focus-visible,
+  .md-typeset pre > code[tabindex="0"]:focus-visible,
+  .md-typeset__scrollwrap[tabindex="0"]:focus-visible,
+  .md-typeset .tabbed-labels[tabindex="0"]:focus-visible {
+    outline: 3px solid Highlight;
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "developer-support-assistant",
+        "type": "application",
+        "name": "Developer Support Assistant",
+        "version": "1.2",
+        "description": "Triages developer requests and routes code-review work to an internal tool.",
+        "properties": [
+          {
+            "name": "acs:vendor",
+            "value": "Example Engineering"
+          }
+        ]
+      },
+      "components": [
+        {
+          "refId": "support-triage-model",
+          "type": "machine-learning-model",
+          "name": "Qwen/Qwen2.5-0.5B-Instruct",
+          "version": "7ae55760",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "Example Engineering"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://triage.models.example.org/api"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "config-triage-model"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "support-models.yaml"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "32768"
+            }
+          ]
+        },
+        {
+          "refId": "internal-review-mcp",
+          "type": "service",
+          "name": "Internal Review MCP",
+          "version": "1.4",
+          "endpoints": [
+            "https://review.example.org/mcp"
+          ],
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "mcp_server"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "config-review-mcp"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "support-mcp.yaml"
+            },
+            {
+              "name": "acs:empty:exposes-tool",
+              "value": "true"
+            }
+          ]
+        },
+        {
+          "refId": "bootstrap-handbook",
+          "type": "service",
+          "name": "Bootstrap handbook cache",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "knowledge_source"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "config-bootstrap-handbook"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "support-sources.yaml"
+            },
+            {
+              "name": "acs:knowledge_source:source_type",
+              "value": "knowledge_base"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    },
+    {
+      "name": "acs:generated_at",
+      "value": "2026-11-24T15:00:00Z"
+    },
+    {
+      "name": "acs:agbom_hash",
+      "value": "f52487d6c511c996e7f0614964cbc780a54e206cace6f6ca8e290330d9782254"
+    }
+  ]
+}

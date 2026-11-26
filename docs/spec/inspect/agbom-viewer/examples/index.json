@@ -1,0 +1,33 @@
+[
+  {
+    "id": "sample",
+    "role": "primary",
+    "label": "Sample AgBOM",
+    "description": "Structural example covering all eight ACS component types.",
+    "acs": "sample-agbom-v0.1.0.json",
+    "cdx": "sample-cyclonedx.json",
+    "aiboms": [
+      "sample-model.aibom.json"
+    ]
+  },
+  {
+    "id": "ledger-startup",
+    "role": "ledger",
+    "label": "Startup",
+    "acs": "example-ledger-agent_startup.acs.json",
+    "cdx": "example-ledger-agent_startup.cdx.json",
+    "aiboms": [
+      "example-ledger-model.aibom.json"
+    ]
+  },
+  {
+    "id": "ledger-after-discovery",
+    "role": "ledger",
+    "label": "After tool discovery",
+    "acs": "example-ledger-agent_after-discovery.acs.json",
+    "cdx": "example-ledger-agent_after-discovery.cdx.json",
+    "aiboms": [
+      "example-ledger-model.aibom.json"
+    ]
+  }
+]

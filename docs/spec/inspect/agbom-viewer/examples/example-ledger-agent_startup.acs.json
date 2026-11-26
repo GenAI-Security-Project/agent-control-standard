@@ -1,0 +1,69 @@
+{
+  "agbom_version": "0.1.0",
+  "agent": {
+    "agent_id": "agent",
+    "name": "Analyst",
+    "version": "5",
+    "vendor": "agent-vendor",
+    "description": "Answers ledger questions."
+  },
+  "components": [
+    {
+      "id": "m",
+      "type": "model",
+      "name": "Model",
+      "version": "1",
+      "provider": "model-provider",
+      "endpoint": "https://models.example.com",
+      "registration_provenance": {
+        "provenance_id": "p-model",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "model_fields": {
+        "context_window": 64000,
+        "args": {
+          "seed": 8,
+          "flags": [
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "id": "ledger-mcp-server",
+      "type": "mcp_server",
+      "name": "Ledger",
+      "version": "3",
+      "endpoint": "https://ledger.example.com/mcp",
+      "registration_provenance": {
+        "provenance_id": "p-server",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "mcp_server_fields": {
+        "tools": [
+          "balance-tool"
+        ]
+      }
+    },
+    {
+      "id": "balance-tool",
+      "type": "tool",
+      "name": "Balance",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-tool",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "tool_fields": {
+        "capability": "ledger.read"
+      }
+    }
+  ],
+  "generated_at": "2026-11-23T12:00:00Z",
+  "agbom_hash": "7224a9172c8c4f7105eaea3e037df2c48c85195b578c6b56ae0537b829bc16b3"
+}

@@ -14,6 +14,14 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 ## Decisions
 
+### D-052: Ship the FinBot lab with the repository
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+The FinBot guided lab was built on its own branch, `refimpl/acs-lab-2026-12-09`, for the OWASP GenAI Security Project workshop at the Agentic AI Security Summit Europe on December 9, 2026. The lab now merges into `integration` and reaches `main` through the usual promotion, so `labs/finbot` ships with the repository and anyone who clones it can run the lab at home. The documentation site gets a top-level Labs section. Its pages include the lab's own files, so each guide exists once and the site can't drift from the repository.
+
+**Source:** [PR #672](https://github.com/GenAI-Security-Project/agent-control-standard/pull/672) and [issue #591](https://github.com/GenAI-Security-Project/agent-control-standard/issues/591).
+
 ### D-051: Adopt Part 2 of the Code of Conduct
 
 **Date:** 2026-11-20 · **Decided by:** a project lead · **Status:** decided
