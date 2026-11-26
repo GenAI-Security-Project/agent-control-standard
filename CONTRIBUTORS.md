@@ -10,6 +10,7 @@ If that describes you and you aren't listed here, open a PR that names the work.
 - **Almog Langleben** ([@almogbhl](https://github.com/almogbhl))
 - **Ariel Fogel** ([@afogel](https://github.com/afogel))
 - **Bar Kaduri** ([@bar-capsule](https://github.com/bar-capsule))
+- **DanPazlev** ([@DanPazlev](https://github.com/DanPazlev))
 - **Eva Benn** ([@evabenn](https://github.com/evabenn))
 - **Evgeniy Kokuykin** ([@artmaro](https://github.com/artmaro))
 - **Fred Wilmot** ([@fewdisc](https://github.com/fewdisc))
