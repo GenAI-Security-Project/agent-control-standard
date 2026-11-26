@@ -120,3 +120,35 @@ def test_modules_flag_takes_only_module_numbers(text):
 
 def test_modules_flag_sorts_and_dedupes():
     assert acceptance._modules("7,1,3,1") == [1, 3, 7]
+
+
+def _guide(tmp_path: Path, after: str) -> acceptance.guide_sim.Command:
+    page = tmp_path / "2.md"
+    page.write_text("Run the check.\n\n```sh\n./lab.sh check 2\n```\n\n" + after, encoding="utf-8")
+    return acceptance.guide_sim.Command(page, 3, ("./lab.sh", "check", "2"))
+
+
+def test_a_check_the_guide_shows_as_not_yet_must_say_its_words_up_to_the_count(tmp_path):
+    line = "NOT YET: module 2 wants a shadow run, and 1 message reached an outside address."
+    command = _guide(tmp_path, f"```text\n{line}\n```\n")
+    assert acceptance.promised_not_yet(command) == "NOT YET: module 2 wants a shadow run, and "
+
+
+@pytest.mark.parametrize("after", [
+    "```text\nDONE: module 2 is done.\n```\n",
+    "```sh\n./lab.sh mode shadow\n```\n\n```text\nNOT YET: a later command's line.\n```\n",
+    "No fence follows.\n",
+])
+def test_a_check_with_no_not_yet_line_right_after_it_must_pass(tmp_path, after):
+    assert acceptance.promised_not_yet(_guide(tmp_path, after)) is None
+
+
+def test_the_shipped_guides_promise_not_yet_only_for_their_early_checks():
+    promised = {}
+    for n in range(1, 8):
+        for c in acceptance.guide_sim.find_commands(acceptance.BUNDLE / "modules" / f"{n}.md", n):
+            if c.argv[1] == "check":
+                promised.setdefault(n, []).append(acceptance.promised_not_yet(c) is not None)
+    # Each guide's last check is the one that has to say DONE.
+    assert all(not flags[-1] for flags in promised.values())
+    assert promised[2] == [True, False] and promised[3] == [True, False]

@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -55,6 +56,8 @@ STATE = BUNDLE / "state"
 AUDIT_LOG = STATE / "audit.log"
 RUNS_DIR = STATE / "runs"
 RECORDINGS_DIR = BUNDLE / "replay" / "recordings"
+# A count of mail in a check line. It comes from the run, so a guide may show a different one.
+MESSAGE_COUNT = re.compile(r"\b\d+ messages?\b")
 MISS_MARK = '"acs_audit_event": "replay_miss"'
 # The module 7 kit prints NOT YET for a forgery that fails, which is the point of the lesson.
 LESSON_VERBS = {"forge", "verify", "downgrade"}
@@ -162,6 +165,23 @@ def _run(argv: tuple[str, ...], env: dict[str, str]) -> tuple[int, str]:
     return process.wait(), verdict
 
 
+def promised_not_yet(command: guide_sim.Command) -> str | None:
+    """The start of the NOT YET line a guide shows right after a check, up to its first message count, or None when
+    the guide shows no NOT YET there. A guide runs a check early on purpose to show what it still wants, and the
+    counts in that line come from the run, so only the words before them are held to the guide."""
+    text = command.path.read_text(encoding="utf-8")
+    for start, tag, body in guide_sim.fences(text):
+        if start <= command.line:
+            continue
+        if tag in guide_sim.SHELL:
+            return None
+        first = next((line.strip() for line in body if line.strip()), "")
+        if tag != "text" or not first.startswith("NOT YET"):
+            return None
+        return MESSAGE_COUNT.split(first, maxsplit=1)[0]
+    return None
+
+
 class Acceptance:
     def __init__(self, modules: list[int], guide_dir: Path, env: dict[str, str]) -> None:
         self.modules = modules
@@ -174,9 +194,16 @@ class Acceptance:
         self.recordings = {p.name: p.read_text(encoding="utf-8", errors="replace")
                            for p in sorted(RECORDINGS_DIR.glob("*.jsonl"))} if RECORDINGS_DIR.is_dir() else {}
 
-    def command(self, argv: tuple[str, ...]) -> None:
+    def command(self, argv: tuple[str, ...], promised: str | None = None) -> None:
         verb = argv[1]
         code, verdict = _run(argv, self.env)
+        if promised is not None:
+            # The guide shows this check saying NOT YET, so it has to say that, in the words the guide shows.
+            if code != 1 or not verdict.startswith(promised):
+                raise NotYet(f"{' '.join(argv)} exited {code} with {verdict or 'no verdict'!r}, and the guide shows "
+                             f"a line starting {promised!r}")
+            _say(f"DONE: {' '.join(argv)} said NOT YET, as the guide shows")
+            return
         allowed = (0, 1) if verb in LESSON_VERBS else (0,)
         if code not in allowed:
             raise NotYet(f"{' '.join(argv)} exited {code}" + (f": {verdict}" if verdict else ""))
@@ -235,7 +262,7 @@ class Acceptance:
                     self.command(("./lab.sh", "init"))
                     self.command(("./lab.sh", "up"))
                     set_up = True
-                self.command(c.argv)
+                self.command(c.argv, promised_not_yet(c) if verb == "check" else None)
                 if verb == "reset":
                     set_up = False
                 elif verb == "up":
