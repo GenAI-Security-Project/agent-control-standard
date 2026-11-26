@@ -369,10 +369,17 @@ def first_party_script_digests() -> set[str]:
 def stray_scripts(built_site: Path) -> list[str]:
     """Return every built script neither the pinned theme nor this repository ships."""
     digests = theme_script_digests() | first_party_script_digests()
+    docs = Path(__file__).resolve().parent.parent / "docs"
+    viewer = "spec/inspect/agbom-viewer"
+    viewer_scripts = {f"{viewer}/{name}" for name in ("viewer-data.js", "viewer.js", "use-cases.js")}
     stray: list[str] = []
     for path in built_site.rglob("*.js"):
         rel = path.relative_to(built_site).as_posix()
-        if hashlib.sha256(path.read_bytes()).hexdigest() not in digests:
+        if rel in viewer_scripts:
+            # The viewer ships as static files. Check each script against its source at the same path.
+            if path.read_bytes() != (docs / rel).read_bytes():
+                stray.append(rel)
+        elif hashlib.sha256(path.read_bytes()).hexdigest() not in digests:
             stray.append(rel)
     return stray
 

@@ -89,7 +89,7 @@ REPAIR = {
     "host": (
         "`{url}` is not a reviewed pane link. Every pane URL comes from `mkdocs.yml`, is `https`, "
         "carries no port, userinfo, or backslash, and leaves the site only for github.com or "
-        "owasp.slack.com. The hero's links in `landing/index.html` go only where the pane goes."
+        "the owasp.org Slack invite. The hero's links in `landing/index.html` go only where the pane goes."
     ),
     "section_rules": (
         "The theme stylesheet lost a rule the External resources section in "
@@ -185,7 +185,7 @@ def test_repo_url_and_the_three_resources_are_the_literals():
     assert urls == {
         "GitHub": REPO_URL,
         "Roadmap": REPO_URL + "/milestones",
-        "Slack": "https://owasp.slack.com",
+        "Slack": "https://owasp.org/slack/invite",
     }
 
 
@@ -274,7 +274,7 @@ def test_landing_sections_anchors_match_the_landing_sections_in_order():
 
 def test_out_of_nav_prefixes_are_declared_and_end_with_a_slash():
     prefixes = acs_nav()["out_of_nav_prefixes"]
-    assert prefixes == ["spec/instrument/a2a/hooks/"]
+    assert prefixes == ["spec/instrument/a2a/hooks/", "spec/inspect/agbom-viewer/"]
     assert all(p.endswith("/") for p in prefixes)
 
 
@@ -309,7 +309,7 @@ FAQ = REPO / "docs" / "topics" / "faq.md"
 FAQ_BANNER = "This section is non-normative."
 RFC2119 = re.compile(r"\b(MUST|MUST NOT|REQUIRED|SHALL|SHALL NOT|SHOULD|SHOULD NOT|RECOMMENDED|MAY|OPTIONAL)\b")
 FENCE = re.compile(r"^\s*(```|~~~)")
-REVIEWED_HOSTS = frozenset({"github.com", "owasp.slack.com"})
+REVIEWED_HOSTS = frozenset({"github.com", "owasp.org"})
 WIDE = "@media screen and (min-width:76.25em)"
 CANONICAL = re.compile(r'<link rel="canonical" href="([^"]+)"')
 CONFIG = re.compile(r'<script id="__config" type="application/json">(.*?)</script>', re.S)
@@ -349,8 +349,12 @@ def samples(built_docs, landing_rows) -> dict[str, Path]:
         assert row is not None, REPAIR["sample_state"].format(state=state)
         chosen[state], rows[state] = _built_path(built_docs, row[2]), row
     chosen["not_found"] = rows["not_found"] = built_docs / "404.html"
+    mkdocs_pages = _built_mkdocs_pages(built_docs)
     for index, prefix in enumerate(acs_nav()["out_of_nav_prefixes"]):
-        found = sorted((built_docs / prefix).rglob("index.html"))
+        if prefix == "spec/inspect/agbom-viewer/":
+            continue  # The standalone viewer uses its own header.
+        found = [path for path in mkdocs_pages if path.name == "index.html"
+                 and path.is_relative_to(built_docs / prefix)]
         assert found, REPAIR["prefix_matches_nothing"].format(prefix=prefix)
         chosen[f"out_of_nav_{index}"] = rows[f"out_of_nav_{index}"] = found[0]
     for state, path in chosen.items():
@@ -534,8 +538,11 @@ def _header(markup: str) -> str:
     return markup[markup.index("<header"):markup.index("</header>")]
 
 
-def _built_pages(built_docs: Path) -> list[Path]:
-    pages = sorted(built_docs.rglob("*.html"))
+def _built_mkdocs_pages(built_docs: Path) -> list[Path]:
+    """Find pages that MkDocs renders with site navigation and header links."""
+    docs = REPO / "docs"
+    pages = sorted(path for path in built_docs.rglob("*.html")
+                   if not (docs / path.relative_to(built_docs)).is_file())
     assert built_docs / "404.html" in pages
     return pages
 
@@ -573,11 +580,8 @@ def test_landing_header_carries_the_docs_header_items(samples, page):
 
 
 def test_icon_and_title_link_home_on_every_built_page(built_docs):
-    """A reader gets home from the mark or the title wherever they landed, and a page
-    outside the nav or a missed URL is where that matters most, so this reads every
-    built page rather than the samples. Each page resolves against its own address,
-    because a relative href that looks right can point somewhere else from a deep page."""
-    pages = _built_pages(built_docs)
+    """Check the home links on every page that uses the MkDocs theme."""
+    pages = _built_mkdocs_pages(built_docs)
     for path in pages:
         markup = path.read_text(encoding="utf-8")
         base = _base(path, markup)

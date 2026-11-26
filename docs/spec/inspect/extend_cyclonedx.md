@@ -1,8 +1,10 @@
 # Extending CycloneDX
 
+## v0.1.0 mapping (CycloneDX 1.6)
+
 CycloneDX 1.6 is one of the three normative AgBOM serializations in v0.1.0. The canonical AgBOM document is the source of truth, and the Guardian derives CycloneDX output from it on request. The mapping rules live in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json), and this page restates them with an example. Where the two differ, the mapping file wins.
 
-## Component-type mapping
+### Component-type mapping
 
 Each canonical component becomes one entry in the CycloneDX `components[]` array, except an `agent_capability`, which becomes a composition. The CycloneDX `bom-ref` equals the canonical component `id`, so a consumer can trace each entry back to the canonical document.
 
@@ -21,7 +23,7 @@ Provenance attached to a component goes into CycloneDX `evidence` or `properties
 
 `metadata.tools` names the Observed Agent's framework as the BOM generator, as [`format-mapping.json`](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/specification/v0.1.0/inspect/format-mapping.json) recommends.
 
-## Example
+### Example
 
 This canonical AgBOM declares a model, a tool, a skill that uses the tool, and a capability that uses the tool:
 
@@ -216,7 +218,7 @@ Derived as CycloneDX 1.6:
 
 Each component keeps its canonical `id` as its `bom-ref`, and both provenance properties ride in `properties`. The skill's `sha-256` definition digest becomes a `SHA-256` hash. The capability has no component entry. Its composition carries the capability's `id` as its `bom-ref` and lists the tool it references.
 
-## Notes
+### Notes
 
 - `format-mapping.json` fixes the component types, `bom-ref`, the provenance properties, the compositions and the skill hash. It does not say where the other canonical fields go, such as `provider`, `endpoint`, `context_window` or a tool's `capability`. This example puts `provider` in `supplier` and leaves the rest out. The canonical document keeps every field.
 - The mapping file doesn't name the composition that a skill adds beside its component, which cannot reuse the component's `bom-ref`. This example appends `-composition` to the skill's `id`.
@@ -225,6 +227,13 @@ Each component keeps its canonical `id` as its `bom-ref`, and both provenance pr
 !!! note "Non-normative: CycloneDX services"
     CycloneDX 1.6 lists services in a top-level `services[]` array, and `service` is not one of its component types. A strict CycloneDX 1.6 validator therefore rejects a `components[]` entry with `type: service`, which the mapping file gives `mcp_server`, `a2a_peer` and `knowledge_source`. The example above holds none of those types for that reason. The mapping stays as published until the specification changes it.
 
+## CycloneDX 2.0-dev (non-normative draft)
+
+The AgBOM Viewer follows a pinned revision of CycloneDX 2.0-dev. The draft maps canonical ACS AgBOM fields and terms to CycloneDX 2.0 and records gaps.
+
 ## What comes next
 
-The leads decided that the next AgBOM step maps AgBOM fields and terms to CycloneDX 2.0 and records the gaps ([D-044](../../decisions/index.md#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first)). The v0.1.0 mapping stays CycloneDX 1.6.
+The ACS leads chose CycloneDX 2.0 as the first target for the AgBOM mapping workstream ([D-044](../../decisions/index.md#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first)). Once CycloneDX publishes the final 2.0 release, ACS will check the mapping and viewer against it and align both with the release.
+
+- Explore the 2.0-dev mapping, samples, use cases, and bundled capture comparisons in the [AgBOM Viewer](agbom-viewer/index.html).
+- Follow the [Local BOMs guide](agbom_viewer_local.md) to open the viewer from an ACS checkout and inspect and compare your own BOMs.

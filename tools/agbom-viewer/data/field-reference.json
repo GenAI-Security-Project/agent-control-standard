@@ -1,0 +1,580 @@
+{
+  "acs": [
+    {
+      "title": "AgBOM document and agent",
+      "schema": "agbom/document.json",
+      "fields": [
+        {
+          "field": "agbom_version",
+          "pointer": "/properties/agbom_version",
+          "type": "string",
+          "required": "Required",
+          "description": "Version of the AgBOM schema (independent of the ACS spec version, so AgBOM can evolve faster). v0.1 of this schema is '0.1.0'."
+        },
+        {
+          "field": "agent",
+          "pointer": "/properties/agent",
+          "type": "object",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "agent.agent_id",
+          "pointer": "/properties/agent/properties/agent_id",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "agent.name",
+          "pointer": "/properties/agent/properties/name",
+          "type": "string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent.version",
+          "pointer": "/properties/agent/properties/version",
+          "type": "string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent.vendor",
+          "pointer": "/properties/agent/properties/vendor",
+          "type": "string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent.description",
+          "pointer": "/properties/agent/properties/description",
+          "type": "string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "components",
+          "pointer": "/properties/components",
+          "type": "array of objects",
+          "required": "Required",
+          "description": "Flat list of components. Inter-component references (an agent_capability listing its tools, an mcp_server listing its tools) are by component id, not by nesting, so the document remains diffable."
+        },
+        {
+          "field": "generated_at",
+          "pointer": "/properties/generated_at",
+          "type": "string · date-time",
+          "required": "Optional",
+          "description": "ISO 8601 timestamp of AgBOM construction."
+        },
+        {
+          "field": "agbom_hash",
+          "pointer": "/properties/agbom_hash",
+          "type": "string",
+          "required": "Optional",
+          "description": "Lowercase-hex SHA-256 of the RFC 8785 (JCS) canonicalization of this object with the agbom_hash field REMOVED. Lets Guardians and downstream consumers detect AgBOM mutations even when re-emitted snapshots are byte-identical to what they had before. RECOMMENDED."
+        }
+      ]
+    },
+    {
+      "title": "Components",
+      "schema": "agbom/component.json",
+      "fields": [
+        {
+          "field": "id",
+          "pointer": "/properties/id",
+          "type": "string",
+          "required": "Required",
+          "description": "Stable identifier for this component within the AgBOM. SHOULD remain stable across version upgrades of the same logical component, so 'changed' diffs reference an unchanging id."
+        },
+        {
+          "field": "type",
+          "pointer": "/properties/type",
+          "type": "string · model, mcp_server, a2a_peer, tool, knowledge_source, memory_store, agent_capability, skill",
+          "required": "Required",
+          "description": "Component type. Drives which type-specific fields are required."
+        },
+        {
+          "field": "name",
+          "pointer": "/properties/name",
+          "type": "string",
+          "required": "Required for model, mcp_server, tool, knowledge_source, memory_store, agent_capability, skill",
+          "description": ""
+        },
+        {
+          "field": "version",
+          "pointer": "/properties/version",
+          "type": "string",
+          "required": "Required for model, mcp_server, tool",
+          "description": ""
+        },
+        {
+          "field": "provider",
+          "pointer": "/properties/provider",
+          "type": "string",
+          "required": "Required for model, tool",
+          "description": ""
+        },
+        {
+          "field": "endpoint",
+          "pointer": "/properties/endpoint",
+          "type": "string · uri",
+          "required": "Required for model, mcp_server, a2a_peer",
+          "description": "URI per Section 3.11 (file:///, posix:///, https://, etc.)."
+        },
+        {
+          "field": "registration_provenance",
+          "pointer": "/properties/registration_provenance",
+          "type": "object",
+          "required": "Optional",
+          "description": "Provenance of how this component entered the AgBOM. origin SHOULD be 'system' for framework/configuration registrations and 'user_input' / 'tool_output' for runtime-discovered or user-installed components."
+        },
+        {
+          "field": "model_fields",
+          "pointer": "/properties/model_fields",
+          "type": "object",
+          "required": "Required for model",
+          "description": "Required when type='model'."
+        },
+        {
+          "field": "model_fields.context_window",
+          "pointer": "/properties/model_fields/properties/context_window",
+          "type": "integer",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "model_fields.args",
+          "pointer": "/properties/model_fields/properties/args",
+          "type": "object",
+          "required": "Optional",
+          "description": "Snapshot of model configuration (temperature, top_p, system prompt hash, etc.) at registration time."
+        },
+        {
+          "field": "mcp_server_fields",
+          "pointer": "/properties/mcp_server_fields",
+          "type": "object",
+          "required": "Required for mcp_server",
+          "description": "Required when type='mcp_server'."
+        },
+        {
+          "field": "mcp_server_fields.tools",
+          "pointer": "/properties/mcp_server_fields/properties/tools",
+          "type": "array of string",
+          "required": "Required",
+          "description": "Component ids of tool components exposed by this MCP server."
+        },
+        {
+          "field": "a2a_peer_fields",
+          "pointer": "/properties/a2a_peer_fields",
+          "type": "object",
+          "required": "Required for a2a_peer",
+          "description": "Required when type='a2a_peer'."
+        },
+        {
+          "field": "a2a_peer_fields.protocol_version",
+          "pointer": "/properties/a2a_peer_fields/properties/protocol_version",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "a2a_peer_fields.agent_card_ref",
+          "pointer": "/properties/a2a_peer_fields/properties/agent_card_ref",
+          "type": "string · uri",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "tool_fields",
+          "pointer": "/properties/tool_fields",
+          "type": "object",
+          "required": "Required for tool",
+          "description": "Required when type='tool'."
+        },
+        {
+          "field": "tool_fields.capability",
+          "pointer": "/properties/tool_fields/properties/capability",
+          "type": "string",
+          "required": "Required",
+          "description": "Abstract capability per Section 3.11 (e.g., filesystem.delete, network.egress, process.execute)."
+        },
+        {
+          "field": "knowledge_source_fields",
+          "pointer": "/properties/knowledge_source_fields",
+          "type": "object",
+          "required": "Required for knowledge_source",
+          "description": "Required when type='knowledge_source'."
+        },
+        {
+          "field": "knowledge_source_fields.source_type",
+          "pointer": "/properties/knowledge_source_fields/properties/source_type",
+          "type": "string · vector_db, search_index, knowledge_base, web_search, other",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "knowledge_source_fields.schema_ref",
+          "pointer": "/properties/knowledge_source_fields/properties/schema_ref",
+          "type": "string · uri",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "memory_store_fields",
+          "pointer": "/properties/memory_store_fields",
+          "type": "object",
+          "required": "Required for memory_store",
+          "description": "Required when type='memory_store'."
+        },
+        {
+          "field": "memory_store_fields.scope",
+          "pointer": "/properties/memory_store_fields/properties/scope",
+          "type": "string · session, user, tenant, global",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "memory_store_fields.store_type",
+          "pointer": "/properties/memory_store_fields/properties/store_type",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "memory_store_fields.path",
+          "pointer": "/properties/memory_store_fields/properties/path",
+          "type": "string · uri",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "memory_store_fields.window_size",
+          "pointer": "/properties/memory_store_fields/properties/window_size",
+          "type": "integer",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent_capability_fields",
+          "pointer": "/properties/agent_capability_fields",
+          "type": "object",
+          "required": "Required for agent_capability",
+          "description": "Required when type='agent_capability'. References to other components in the same AgBOM by id."
+        },
+        {
+          "field": "agent_capability_fields.description",
+          "pointer": "/properties/agent_capability_fields/properties/description",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "agent_capability_fields.tools",
+          "pointer": "/properties/agent_capability_fields/properties/tools",
+          "type": "array of string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent_capability_fields.mcp_servers",
+          "pointer": "/properties/agent_capability_fields/properties/mcp_servers",
+          "type": "array of string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "agent_capability_fields.a2a_peers",
+          "pointer": "/properties/agent_capability_fields/properties/a2a_peers",
+          "type": "array of string",
+          "required": "Optional",
+          "description": ""
+        },
+        {
+          "field": "skill_fields",
+          "pointer": "/properties/skill_fields",
+          "type": "object",
+          "required": "Required for skill",
+          "description": "Required when type='skill'. A skill is loadable executable content that composes lower-level components into a higher-level ability. Composition references reuse the agent_capability shape; definition and declared_capabilities are what a skill adds. A skill differs from an agent_capability in carrying a definition artifact, the surface attackers poison. The spec persists only its reference and integrity digest, never its body (see steps/skillRegister for where the body is inspected)."
+        },
+        {
+          "field": "skill_fields.description",
+          "pointer": "/properties/skill_fields/properties/description",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "skill_fields.definition",
+          "pointer": "/properties/skill_fields/properties/definition",
+          "type": "object",
+          "required": "Required",
+          "description": "Reference and integrity digest for the skill's COMPLETE loadable artifact, including any bundled or fetched model files, adapters, or other binary assets, not only text. The body itself MUST NOT be required on the wire. Only the reference and digest persist in the AgBOM; the full body is available for inspection in the transient steps/skillRegister payload. A model-bearing skill, whose backdoor can live in opaque weights rather than readable instructions, is governed here through the digest and registration_provenance rather than source inspection."
+        },
+        {
+          "field": "skill_fields.definition.ref",
+          "pointer": "/properties/skill_fields/properties/definition/properties/ref",
+          "type": "string · uri",
+          "required": "Required",
+          "description": "URI of the complete loadable skill artifact per Section 3.11 (file:///, https://, etc.), including any bundled model files or adapters."
+        },
+        {
+          "field": "skill_fields.definition.digest",
+          "pointer": "/properties/skill_fields/properties/definition/properties/digest",
+          "type": "object",
+          "required": "Required",
+          "description": "Integrity digest over the complete loadable artifact, not only its text. Lets a Guardian detect tampering between registration and load, and bind a steps/skillLoad to the exact artifact vetted at steps/skillRegister via the (skill_id, digest) pair."
+        },
+        {
+          "field": "skill_fields.definition.digest.algorithm",
+          "pointer": "/properties/skill_fields/properties/definition/properties/digest/properties/algorithm",
+          "type": "string · sha-256, sha-512",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "skill_fields.definition.digest.value",
+          "pointer": "/properties/skill_fields/properties/definition/properties/digest/properties/value",
+          "type": "string",
+          "required": "Required",
+          "description": ""
+        },
+        {
+          "field": "skill_fields.declared_capabilities",
+          "pointer": "/properties/skill_fields/properties/declared_capabilities",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Abstract capabilities the skill declares it needs (e.g., filesystem.write, network.egress): the skill's least-privilege manifest. A Guardian SHOULD compare this against the union of capabilities exposed by the composed tools and MAY deny a skill that declares more than it composes."
+        },
+        {
+          "field": "skill_fields.tools",
+          "pointer": "/properties/skill_fields/properties/tools",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Component ids of tools this skill composes."
+        },
+        {
+          "field": "skill_fields.mcp_servers",
+          "pointer": "/properties/skill_fields/properties/mcp_servers",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Component ids of MCP servers this skill composes."
+        },
+        {
+          "field": "skill_fields.a2a_peers",
+          "pointer": "/properties/skill_fields/properties/a2a_peers",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Component ids of A2A peers this skill composes."
+        },
+        {
+          "field": "skill_fields.models",
+          "pointer": "/properties/skill_fields/properties/models",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Component ids of model components this skill bundles. A model-bearing skill, one shipping learned weights where a backdoor can live in opaque parameters rather than any readable instruction, references its bundled model here so the AgBOM inventories it as a first-class 'model' component carrying its own registration_provenance. The whole-artifact definition.digest already binds those weights; listing the model here makes it visible to inventory and load-time policy instead of hidden inside the opaque definition body, which is the provenance-sensitive handling a model-bearing skill needs. A bundled artifact that does not fit the 'model' component's contract (no served endpoint, no language-model context window) is still covered by definition.digest and registration_provenance over the whole skill."
+        },
+        {
+          "field": "skill_fields.composed_skills",
+          "pointer": "/properties/skill_fields/properties/composed_skills",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Component ids of other skills this skill is permitted to load. A skill that loads a skill outside this declared set at runtime SHOULD be denied at steps/skillLoad. This is the containment boundary for inter-skill cascades (A loads B loads C)."
+        }
+      ]
+    },
+    {
+      "title": "Registration provenance",
+      "schema": "provenance.json",
+      "fields": [
+        {
+          "field": "provenance_id",
+          "pointer": "/properties/provenance_id",
+          "type": "string",
+          "required": "Required",
+          "description": "Unique identifier for this provenance node within the session"
+        },
+        {
+          "field": "origin",
+          "pointer": "/properties/origin",
+          "type": "string · user_input, system, tool_output, retrieved, agent_generated, a2a_inbound, external",
+          "required": "Required",
+          "description": "Where this data entered the system"
+        },
+        {
+          "field": "source_id",
+          "pointer": "/properties/source_id",
+          "type": "string",
+          "required": "Optional",
+          "description": "Identifier within the origin (tool name, URL, file path, retrieval source). Combined with origin, this is what Guardians key trust classification on in v0.1."
+        },
+        {
+          "field": "derived_from",
+          "pointer": "/properties/derived_from",
+          "type": "array of string",
+          "required": "Optional",
+          "description": "Lineage edges. Array of provenance_ids this data was derived from."
+        }
+      ]
+    }
+  ],
+  "cdx": [
+    {
+      "field": "specFormat",
+      "pointer": "/properties/specFormat",
+      "type": "literal \"CycloneDX\"",
+      "required": "Required",
+      "description": "Exporter supplies CycloneDX."
+    },
+    {
+      "field": "specVersion",
+      "pointer": "/properties/specVersion",
+      "type": "string",
+      "required": "Required",
+      "description": "Exporter supplies the target specification version."
+    },
+    {
+      "field": "serialNumber",
+      "pointer": "/properties/serialNumber",
+      "type": "string",
+      "required": "Optional",
+      "description": "Available in CycloneDX and omitted from the sample export."
+    },
+    {
+      "field": "version",
+      "pointer": "/properties/version",
+      "type": "integer",
+      "required": "Optional",
+      "description": "Available in CycloneDX and omitted from the sample export. BOM document revision defaults to 1 in the schema."
+    },
+    {
+      "field": "metadata",
+      "pointer": "/properties/metadata",
+      "type": "object",
+      "required": "Optional",
+      "description": "Available in CycloneDX and omitted from the sample export. An exporter may record its own creation time here."
+    },
+    {
+      "field": "inventories",
+      "pointer": "/properties/inventories",
+      "type": "array",
+      "required": "Optional",
+      "description": "Records the ACS agent subject and component membership. Optional at the CycloneDX document level."
+    },
+    {
+      "field": "blueprints",
+      "pointer": "/properties/blueprints",
+      "type": "array",
+      "required": "Optional",
+      "description": "Carries typed ACS graph connections using the draft convention."
+    },
+    {
+      "field": "properties",
+      "pointer": "/properties/properties",
+      "type": "array",
+      "required": "Optional",
+      "description": "Carries ACS values via named properties on the document, subject or component."
+    },
+    {
+      "field": "dependencies",
+      "pointer": "/properties/dependencies",
+      "type": "array",
+      "required": "Optional",
+      "description": "Available in CycloneDX and omitted from the sample export. A software dependency requires its own evidence."
+    },
+    {
+      "field": "externalReferences",
+      "pointer": "/properties/externalReferences",
+      "type": "array",
+      "required": "Optional",
+      "description": "Optional on a document or component. The sample records skill distribution references on its skill components."
+    }
+  ],
+  "requirements": {
+    "document": [
+      "agbom_version",
+      "agent",
+      "components"
+    ],
+    "agent": [
+      "agent_id"
+    ],
+    "component": [
+      "id",
+      "type"
+    ],
+    "kinds": {
+      "model": [
+        "name",
+        "version",
+        "provider",
+        "endpoint",
+        "model_fields"
+      ],
+      "mcp_server": [
+        "name",
+        "version",
+        "endpoint",
+        "mcp_server_fields"
+      ],
+      "a2a_peer": [
+        "endpoint",
+        "a2a_peer_fields"
+      ],
+      "tool": [
+        "name",
+        "version",
+        "provider",
+        "tool_fields"
+      ],
+      "knowledge_source": [
+        "name",
+        "knowledge_source_fields"
+      ],
+      "memory_store": [
+        "name",
+        "memory_store_fields"
+      ],
+      "agent_capability": [
+        "name",
+        "agent_capability_fields"
+      ],
+      "skill": [
+        "name",
+        "skill_fields"
+      ]
+    },
+    "nested": {
+      "model_fields": [
+        "context_window"
+      ],
+      "mcp_server_fields": [
+        "tools"
+      ],
+      "a2a_peer_fields": [
+        "protocol_version"
+      ],
+      "tool_fields": [
+        "capability"
+      ],
+      "knowledge_source_fields": [
+        "source_type"
+      ],
+      "memory_store_fields": [
+        "scope",
+        "store_type"
+      ],
+      "agent_capability_fields": [
+        "description"
+      ],
+      "skill_fields": [
+        "description",
+        "definition"
+      ]
+    },
+    "provenance": [
+      "provenance_id",
+      "origin"
+    ]
+  }
+}
