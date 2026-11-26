@@ -136,6 +136,13 @@ def _on_sigterm(signum: int, frame: Any) -> None:
     raise Terminated()
 
 
+def allowed_setup_misses(named: Any) -> list[int]:
+    """The setup miss counts a manifest value allows: one count, or a list of them. Anything else allows only 0."""
+    counts = named if isinstance(named, list) else [named]
+    valid = sorted({c for c in counts if isinstance(c, int) and not isinstance(c, bool) and c >= 0})
+    return valid or [0]
+
+
 def _fold(text: Any) -> str:
     """One line of text: report.escape keeps newlines, so they fold to spaces here first."""
     return " ".join(str(text).splitlines())
@@ -864,19 +871,21 @@ class Run:
             return None
         return float(pace)
 
-    def setup_misses_expected(self, recording: str | None) -> int:
-        """The setup misses the manifest expects for a recording, 0 when it names none. s4a__reject was captured with
-        FinBot's vendor onboarding already done, so its setup's onboarding turns have no answer in it, and every run of
-        it misses the same 4 (2026-11-24 m4 takes). s4a__off misses the same 4 on every run (2026-11-26 acceptance). Its
-        steps replay whole. Any other count still fails the run."""
+    def setup_misses_expected(self, recording: str | None) -> list[int]:
+        """The setup miss counts the manifest allows for a recording, [0] when it names none. s4a__reject was captured
+        with FinBot's vendor onboarding already done, so its setup's onboarding turns have no answer in it, and every
+        run of it misses the same 4 (2026-11-24 m4 takes). s4a__off misses the same 4 on every run (2026-11-26
+        acceptance). s6__deny names two counts: FinBot's background vendor notice sends either after the changed
+        send_email declaration lands, as in the take, or a few seconds before it, and then its next 2 calls have no
+        answer (2026-11-26 acceptance, 1 run in 5). The steps replay whole either way. Any other count fails the run."""
         if recording is None:
-            return 0
+            return [0]
         try:
-            expected = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
+            named = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
                 .get("setupMissesExpected", {}).get(recording)
         except (OSError, ValueError, AttributeError):
-            return 0
-        return expected if isinstance(expected, int) and not isinstance(expected, bool) and expected > 0 else 0
+            return [0]
+        return allowed_setup_misses(named)
 
     def _after_setup(self, a0: int, epoch_before: Any) -> tuple[Any, dict[str, Any]]:
         """Setup's quiet, its epoch closed and its sessions ended, then the baseline and a clear chat history."""
@@ -1088,8 +1097,9 @@ def judge(record: dict[str, Any]) -> tuple[int, str]:
     if record["result"] != "completed":
         return report.EXIT_NOT_YET, record["result"].replace("_", " ")
     setup = record.get("setup_replay_misses", 0)
-    # The manifest's expected setup misses pass only when the count is exactly that (setup_misses_expected).
-    misses = record["replay_misses"] + (0 if setup == record.get("setup_replay_misses_expected", 0) else setup)
+    # The manifest's expected setup misses pass only at a count it names (setup_misses_expected).
+    misses = record["replay_misses"] + (0 if setup in allowed_setup_misses(record.get("setup_replay_misses_expected"))
+                                        else setup)
     errors = record["finbot"].get("errors") or {}
     approval = record["approval"]
     approval_error = approval.get("error")

@@ -22,5 +22,5 @@
     {"run": "pins-s6-clean", "module": null, "scenario": "s6", "mode": "off", "signing": "ML-DSA-65", "policy": null, "answer": null, "clean": true, "command": "record s6__clean s6 --clean", "recording": "s6__clean"}
   ],
   "replayPace": {"s4a__approve": 0, "s4a__reject": 0},
-  "setupMissesExpected": {"s4a__off": 4, "s4a__reject": 4, "s6__off": 1, "s2__solutions": 2}
+  "setupMissesExpected": {"s4a__off": 4, "s4a__reject": 4, "s6__off": 1, "s6__deny": [0, 2], "s2__solutions": 2}
 }

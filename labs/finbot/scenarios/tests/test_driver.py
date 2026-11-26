@@ -991,24 +991,32 @@ def test_setup_misses_pass_only_at_the_count_the_manifest_expects():
     for setup, expected in ((5, 4), (3, 4), (4, 0), (1, 0)):
         (code, _), record = _judged(setup_replay_misses=setup, setup_replay_misses_expected=expected)
         assert code != 0 and "had no recording in replay" in record["error"], (setup, expected)
+    # A list allows each count it names, and only those.
+    for setup in (0, 2):
+        (code, _), record = _judged(setup_replay_misses=setup, setup_replay_misses_expected=[0, 2])
+        assert code == 0 and record["error"] is None, setup
+    (code, _), record = _judged(setup_replay_misses=1, setup_replay_misses_expected=[0, 2])
+    assert code != 0
     # A step miss always fails, whatever setup expects.
     (code, _), record = _judged(replay_misses=1, setup_replay_misses=4, setup_replay_misses_expected=4)
     assert code != 0
 
 
-def test_the_manifest_names_expected_setup_misses_for_s4a_reject_only(harness, tmp_path):
+def test_the_manifest_names_expected_setup_misses_per_recording(harness, tmp_path):
     import shutil
     run = driver.Run(driver.Args("s4a", "reject", False, None), {}, harness.settings, harness.bundle)
-    assert run.setup_misses_expected("s4a__reject") == 4
-    assert run.setup_misses_expected("s4a__approve") == 0 and run.setup_misses_expected(None) == 0
+    assert run.setup_misses_expected("s4a__reject") == [4]
+    assert run.setup_misses_expected("s6__deny") == [0, 2]
+    assert run.setup_misses_expected("s4a__approve") == [0] and run.setup_misses_expected(None) == [0]
     scen = tmp_path / "scenarios"
     shutil.copytree(SCENARIOS, scen, ignore=shutil.ignore_patterns("tests", "__pycache__"))
     doc = json.loads((scen / "manifest.json").read_text(encoding="utf-8"))
-    doc["setupMissesExpected"] = {"a": True, "b": -2, "c": "4", "d": 2.5}
+    doc["setupMissesExpected"] = {"a": True, "b": -2, "c": "4", "d": 2.5, "e": [2, "x", True, 0]}
     (scen / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
     run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
                      harness.bundle)
-    assert [run.setup_misses_expected(k) for k in "abcd"] == [0, 0, 0, 0]
+    assert [run.setup_misses_expected(k) for k in "abcd"] == [[0], [0], [0], [0]]
+    assert run.setup_misses_expected("e") == [0, 2]
 
 
 def test_an_invoice_run_in_browser_mode_fills_finbots_forms(harness, capsys, monkeypatch):

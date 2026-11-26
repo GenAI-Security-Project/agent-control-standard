@@ -188,6 +188,13 @@ def test_one_deny_and_one_send_through_is_not_yet(lab, capsys):
     assert code == 1 and "let 1" in out and "./lab.sh run s6" in out
 
 
+def test_a_background_send_allowed_before_the_change_is_not_the_runs(lab, capsys):
+    # FinBot's background onboarding sometimes mails the vendor just before the description changes (2026-11-26).
+    _run(lab, 10, decisions=[("allow", "allow", [], REQUEST, SESSION_B), deny([MISMATCH])])
+    code, out = _check(lab, capsys)
+    assert code == 0, out
+
+
 def test_gateway_failure_deny_is_not_the_guardians(lab, capsys):
     # Enforce turns a Guardian failure into a deny, with no Guardian decision behind it.
     _run(lab, 10, decisions=[("deny", None, [MISMATCH], REQUEST, None)])

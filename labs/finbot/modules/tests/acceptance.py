@@ -100,6 +100,15 @@ def new_audit_misses(path: Path, offset: int) -> tuple[int, list[str]]:
     return len(data), [line for line in lines if MISS_MARK in line]
 
 
+def _setup_counts(value: object) -> list[int] | None:
+    """The setup miss counts a run record allows: one count, or a list of them as the driver writes for a recording
+    the manifest names more than one count for. None when the record carries neither."""
+    counts = value if isinstance(value, list) else [value]
+    if not counts or any(isinstance(c, bool) or not isinstance(c, int) or c < 0 for c in counts):
+        return None
+    return sorted(set(counts))
+
+
 def record_problems(name: str, record: object, recordings: dict[str, str]) -> list[str]:
     """Why one run record fails acceptance, or nothing. recordings maps a recording's file name to its text."""
     if not isinstance(record, dict):
@@ -107,12 +116,12 @@ def record_problems(name: str, record: object, recordings: dict[str, str]) -> li
     problems = []
     if record.get("result") != "completed":
         problems.append(f"run record {name} says {record.get('result')!r}: {record.get('error')}")
-    setup_expected = record.get("setup_replay_misses_expected")
-    if isinstance(setup_expected, bool) or not isinstance(setup_expected, int) or setup_expected < 0:
+    allowed = _setup_counts(record.get("setup_replay_misses_expected"))
+    if allowed is None:
         problems.append(f"run record {name} has no count of expected setup misses")
-    elif record.get("setup_replay_misses") != setup_expected:
+    elif record.get("setup_replay_misses") not in allowed:
         problems.append(f"run record {name} counts {record.get('setup_replay_misses')!r} setup misses where its "
-                        f"recording expects {setup_expected}")
+                        f"recording expects {' or '.join(map(str, allowed))}")
     if record.get("replay_misses") != 0:
         problems.append(f"run record {name} counts {record.get('replay_misses')!r} replay misses")
     if record.get("upstream") != "replay":
@@ -243,7 +252,7 @@ class Acceptance:
             problems = record_problems(name, record, self.recordings)
             if problems:
                 raise NotYet(problems[0])
-            expected += record["setup_replay_misses_expected"]
+            expected += record["setup_replay_misses"]
             self.runs += 1
         return expected
 

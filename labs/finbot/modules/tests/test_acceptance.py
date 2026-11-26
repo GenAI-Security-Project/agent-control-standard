@@ -77,6 +77,8 @@ def test_a_good_record_passes():
     ({"replay_misses": None}, "counts None replay misses"),
     ({"upstream": "openai"}, "'openai' upstream"),
     ({"setup_replay_misses": 4}, "counts 4 setup misses where its recording expects 0"),
+    ({"setup_replay_misses": 1, "setup_replay_misses_expected": [0, 2]}, "where its recording expects 0 or 2"),
+    ({"setup_replay_misses_expected": []}, "no count of expected setup misses"),
     ({"setup_replay_misses_expected": None}, "no count of expected setup misses"),
     ({"setup_replay_misses_expected": True}, "no count of expected setup misses"),
     ({"finbot": {}}, "no FinBot namespace"),
@@ -158,6 +160,7 @@ def test_the_shipped_guides_promise_not_yet_only_for_their_early_checks():
     assert promised[2] == [True, False] and promised[3] == [True, False]
 
 
-def test_a_record_with_its_expected_setup_misses_passes():
-    record = {**GOOD, "setup_replay_misses": 4, "setup_replay_misses_expected": 4}
+@pytest.mark.parametrize(("setup", "expected"), [(4, 4), (0, [0, 2]), (2, [0, 2])])
+def test_a_record_with_its_expected_setup_misses_passes(setup, expected):
+    record = {**GOOD, "setup_replay_misses": setup, "setup_replay_misses_expected": expected}
     assert acceptance.record_problems("r.json", record, {}) == []
