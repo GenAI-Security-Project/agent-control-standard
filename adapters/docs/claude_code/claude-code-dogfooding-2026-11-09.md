@@ -33,6 +33,8 @@ conformance and does not close #434.
 | Model | Local scripted Anthropic `/v1/messages` endpoint, five modes; no model judgment under test |
 | Python | `3.12.16` |
 
+Results are for ACS db457a8 with Claude Code 2.1.283; they were not re-run on later trees.
+
 Only the model is faked. The client, the adapter and the Guardian are the ones a user installs. Each
 rep got its own scratch workspace, its own Guardian on a fresh port and its own endpoint port; the
 runner's own `~/.claude` was never touched.
@@ -112,11 +114,11 @@ about what a Guardian rejects:
 > SHOULD reject duplicate `nonce` values within a sliding window the deployment configures.
 
 Nothing in §10.3 requires deduplicating *distinct* envelopes that carry the same action. The
-implementation matches it: `check_replay` keeps the set of seen `request_id`s per session
-(`adapters/src/acs/guardian/example_guardian.py:296-304`) and is called for every step
-(`:512`). A step the model offers again gets a fresh id, so `REPLAY_DETECTED` is not reachable from a
-repeated call. That is why his two variants and my five calls behave identically: replay protection
-counts envelopes, not actions.
+implementation matches it: `check_replay` in `adapters/src/acs/guardian/example_guardian.py` keeps the
+set of seen `request_id`s per session, and the request handler calls it for every step. A step the
+model offers again gets a fresh id, so `REPLAY_DETECTED` is not reachable from a repeated call. That is
+why his two variants and my five calls behave identically: replay protection counts envelopes, not
+actions.
 
 So the repeated call is a policy question, not a replay bug, and there is no `MUST`-level
 disagreement to file. The observation belongs here, in the report. The `nonce` half of §10.3 is a
@@ -145,15 +147,18 @@ repeated nonce refused with -32005 (SHOULD):     False
 The same command exits 1 if either of the two `MUST` halves stops holding, so it can run in CI
 unchanged. The nonce line is printed and does not affect the exit status.
 
-### Observation: the nonce half of §10.3 is not implemented
+### Observation: the nonce half of §10.3 was not implemented at `db457a8`
 
-§10.3 also makes a duplicate `nonce` a SHOULD. The example Guardian keeps nonce state — `seen_nonces`,
-merged across Guardian instances and evicted on a window — but never reads it back to reject
-anything: two envelopes carrying the same nonce and different `request_id`s are both allowed, as the
-run above shows. The adapters emit no `nonce` at all; the field is OPTIONAL in v0.1, and
-`docs/claude_code/README.md` already records that. So no client in these runs is affected, and this is
-a gap against a SHOULD rather than a MUST. Recorded here as an observation; no issue is filed with this
-report.
+§10.3 also makes a duplicate `nonce` a SHOULD. On the tree these runs used, the example Guardian kept
+nonce state — `seen_nonces`, merged across Guardian instances and evicted on a window — but never read
+it back to reject anything: two envelopes carrying the same nonce and different `request_id`s were both
+allowed, as the run above, taken on that tree, shows. The adapters emit no `nonce` at all; the field is
+OPTIONAL in v0.1, and `docs/claude_code/README.md` already records that. So no client in these runs is
+affected, and this is a gap against a SHOULD rather than a MUST.
+
+It is tracked in [#524](https://github.com/GenAI-Security-Project/agent-control-standard/issues/524)
+and fixed by [#526](https://github.com/GenAI-Security-Project/agent-control-standard/pull/526), which
+added `check_nonce` to the example Guardian and merged into `integration` on 2026-11-17.
 
 ## Reproduce the runs
 
