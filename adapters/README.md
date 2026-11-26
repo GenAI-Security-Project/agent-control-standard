@@ -1,6 +1,24 @@
 # ACS Adapters
 
-Reference implementations that wire popular agent frameworks to an ACS Guardian. The goal: a framework adopts ACS through **configuration only**, with no agent code changes.
+Govern an agent you didn't write, without changing its code. This directory holds the Python side of ACS release 0.1.5: hook adapters that wire Claude Code, Cursor and NVIDIA NAT to a Guardian through **configuration only**, a teaching Guardian to run them against, a gateway that governs an unmodified OpenAI Responses API client, and the tools that check the result. Everything here speaks the ACS wire contract of specification v0.1.0.
+
+## What ships here
+
+Pick the row that matches what you want to do. Each one links the page that owns the detail.
+
+| Piece | What it does | How you run it | Read more |
+|---|---|---|---|
+| Hook adapters | Turn a host's hook event into a signed ACS request, and the Guardian's answer back into the host's own allow or block. Claude Code and Cursor run a hook process per event, and NAT runs middleware inside the agent. A step with no usable answer is denied by default. | `acs-claude-code-wire`, `acs-cursor-wire` or `acs-nat-wire` writes the host's own config | [Claude Code](docs/claude_code/README.md), [Cursor](docs/cursor/README.md), [NAT](docs/nat/README.md) |
+| Protocol library | `acs.core` builds, signs and checks envelopes with no I/O. `acs.client` runs the handshake, the round trip, the fail posture and the audit lines. Every other piece here uses the two. | Imported | [Directory layout](#directory-layout), [signing.md](docs/signing.md) |
+| Example Guardian | A small Guardian with a toy deterministic policy, for local runs and tests. Not for production. | `acs-example-guardian` | [Example Guardian](docs/guardian/README.md) |
+| OPA backend | Opt-in. The example Guardian hands `steps/toolCallRequest` and `steps/toolCallResult` to an [Open Policy Agent](https://www.openpolicyagent.org/) server, and every OPA failure denies. A lab convention, off by default. | `ACS_POLICY_BACKEND=opa` and `ACS_OPA_URL` | [OPA backend](docs/guardian/README.md#opa-backend-lab-convention) |
+| ML-DSA-65 decision signing | Opt-in and experimental. The example Guardian signs each answer with its own ML-DSA-65 key and serves the public key document at `GET /keys`, so someone holding only the shared HMAC secret can't forge a decision. Needs the `pqc` extra. Off by default, and it makes no ACS-Crypto claim. | `python -m acs.guardian.decision_keys` writes a key, then `ACS_RESPONSE_SIGNING=ML-DSA-65` | [Decision signing](docs/guardian/README.md#decision-signing-lab-convention), [signing.md](docs/signing.md) |
+| Gateway, `acs-gateway` | Point an OpenAI Responses API client's `OPENAI_BASE_URL` at it, and every tool call and tool result passes the Guardian first. Off, shadow and enforce modes. It always fails closed. Its own uv project in `gateway/`. | `cd gateway && uv run acs-gateway`, configured by environment variables only | [Gateway README](gateway/README.md) |
+| `acs-verify` | Checks a gateway transcript offline: the audit chain, every decision signature, each answer's binding to its request, and the key's validity. | `python -m acs.testing.verify` | [acs-verify](docs/acs-verify.md) |
+| Signature benchmark | Measures signature size and signing and verification time for HMAC-SHA256, ML-DSA-65 and ECDSA-P256, through the same library calls an adapter makes. | `uv run --extra pqc python -m benchmarks.signatures` | [Signature benchmark](../docs/topics/signature-benchmark.md) |
+| Test and conformance suites | `run_conformance.py` runs the emission-conformance check, and separate suites cover the Guardian, the Go interop check and the gateway. | `uv run python run_conformance.py claude` | [Run the checks](#run-the-checks) |
+
+Two more Guardians live in [`reference-implementations/`](../reference-implementations/README.md): a TypeScript Guardian and a Go Guardian, both evaluating AGT policy. The adapters here also work with the Go Guardian, as its [adapter guide](../reference-implementations/agt-go/docs/adapters.md) shows. They don't work with the TypeScript Guardian, which doesn't sign its answers, because the adapters deny every unsigned answer.
 
 ## What is a Guardian?
 
@@ -9,19 +27,71 @@ The **Guardian** is the policy enforcement point: a long-running HTTP service th
 Two roles in any deployment:
 
 - **Production Guardian** — your real policy engine. Typically OPA/Rego, Cedar, or a vendor SDK plugged in behind an HTTP server that speaks the ACS wire protocol. The adapter doesn't care what's inside; only the wire contract matters.
-- **`acs.guardian.example_guardian`** (the `acs-example-guardian` command) in this repo — a teaching artifact and test substrate. Implements the full wire protocol (handshake, envelope schema validation, HMAC signing, rolling chain, replay protection, skew rejection, dispositions, `system/ping`) but with a deliberately tiny deterministic policy: denies a short list of destructive shell commands, writes to system paths, subagent spawns (unless `ACS_ALLOW_SUBAGENT=1`) and unknown methods, and allows the rest. Useful for local testing; **not for production**.
+- **`acs.guardian.example_guardian`** (the `acs-example-guardian` command) in this repo. A teaching artifact and test substrate. Implements the full wire protocol (handshake, envelope schema validation, HMAC signing, rolling chain, replay protection, skew rejection, dispositions, `system/ping`) but with a deliberately tiny deterministic policy: denies a short list of destructive shell commands, writes to system paths, subagent spawns (unless `ACS_ALLOW_SUBAGENT=1`) and unknown methods, and allows the rest. Two opt-in lab modes sit on top: the OPA backend hands tool calls and tool results to an OPA server, and ML-DSA-65 decision signing signs every answer with the Guardian's own key. Useful for local testing. **not for production**.
 
 Production deployments swap the policy code in the example Guardian's `evaluate_step(method, params, request_id, chain_hash)` function with their real engine and keep the wire-protocol scaffolding.
 
-Running the Guardian — terminal window, `launchd`, `systemd`, container — is the operator's responsibility. The adapter expects it to be reachable at `$ACS_GUARDIAN_URL`; if it isn't, the §6.4 fail posture applies and an `ACS_AUDIT` event is emitted.
+Running the Guardian, in a terminal window, under `launchd` or `systemd`, or in a container, is the operator's responsibility. The adapter expects it to be reachable at `$ACS_GUARDIAN_URL`. If it isn't, the §6.4 fail posture applies, which denies the step by default, and an `ACS_AUDIT` event is emitted. The specification text still names `proceed` as the default posture. The shipped code denies, as [D-036](../docs/decisions/index.md#d-036-default-the-failure-posture-to-deny) decided, and only the hook's own environment can opt into proceed ([D-045](../docs/decisions/index.md#d-045-only-the-observed-agents-own-configuration-can-opt-into-proceed)).
 
-## ACS v0.1.0 emission-conformance check
+## Windows: the secret-file check
 
-**What this proves — and what it does not.** This suite proves **emission conformance**: the reference adapters, driven through their real production entry points, emit schema-valid, signed ACS v0.1.0 Core traffic and honor the decisions it tests. It is **not** a requirement-by-requirement audit of every ACS-Core MUST — `docs/spec/conformance.md` and the sections it cites contain far more normative requirements (handshake/negotiation edge cases, full decision semantics, two-sided live payload validation, hook-completeness, Wrapped MCP) than are checked here. A full ACS-Core deployment-conformance claim also spans the Guardian, the framework wiring, and production configuration — not the adapter alone. That larger program is tracked in issue #33 (requirement ledger + behavioral tests); do not read a green run here as "ACS-Core conformant."
+The secret-file permission check is shared client code, so on Windows it stops **every adapter** — Claude Code, Cursor, and the example Guardian — by default: `stat()` reports 0o666 for every ordinary file there, so the 0600 rule cannot run and the check fails closed. Restrict the key file's NTFS ACL first, then opt in:
 
-Known limitations kept in view: Cursor's real-framework wiring is a manual GUI procedure, and Wrapped MCP is validated for namespace shape only, not full wrapping. ACS-Core requires `protocols/MCP/*` for any session that involves MCP and lets only MCP `tools/call` collapse into the generic tool hooks. These adapters perform that collapse and wrap no other MCP surface, so a session that uses MCP falls short of ACS-Core there. Issue #33 tracks the reference-stack side. The adapters also emit no Trace events and do not claim ACS-Trace: `ACS_AUDIT` lines are local audit records, not OpenTelemetry or OCSF output.
+```bat
+icacls "%ACS_HMAC_SECRET_FILE%" /inheritance:r /grant:r "%USERNAME%:R"
+```
 
-One authoritative command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. At least one platform is required; there is no implicit run-all default. Name one, two, or all three platforms in any order:
+```powershell
+icacls $env:ACS_HMAC_SECRET_FILE /inheritance:r /grant:r "${env:USERNAME}:R"
+```
+
+Then set `ACS_ALLOW_UNCHECKED_KEY_PERMS=1` in the same environment. Every process that starts with the opt-in set prints a warning to stderr; the refusal stays the default.
+
+## Secret and trusted files
+
+`acs.client.read_trusted_file` is the one reader for every secret or trusted file: `ACS_HMAC_SECRET_FILE`, the example Guardian's ML-DSA-65 seed (`ACS_GUARDIAN_SIGNING_KEY_FILE`), and its key document (`ACS_GUARDIAN_KEYS`). It opens the file's directory once and the file inside it, without following a symlink and without blocking on a FIFO, and checks those descriptors, never the path a second time.
+
+- It must be a regular file.
+- For a secret, the file and its directory must be owned by the user the process runs as, or by root. The key document follows the same owner rule unless `ACS_GUARDIAN_KEY_FINGERPRINT` pins its key. With the pin set, a client running as another user, as in a container that reads the Guardian's document, may read a document it doesn't own, since the pin already catches a swapped key. Without either, the client refuses to start and names both fixes.
+- Its directory must not be world-writable, unless the directory is sticky, as `/tmp` is. A group-writable directory is fine, since `mkdir` under the common umask 002 gives 0775. Directories above it aren't checked.
+- A secret must be owner-only (0600 or 0400). A key document may be readable by anyone, but no group or other may write it.
+- The HMAC secret is read up to 64 KiB, the seed up to 128 bytes, and the key document up to 1 MiB. The seed must then hold exactly 64 lowercase hex characters and at most one newline. A larger file is refused as unreadable, and for the HMAC secret that is audited like a file that can't be opened.
+
+If you set up a secret before this release, the reader now also checks the file's directory, which it didn't before. A secret in a directory another user owns is refused. A world-writable directory without the sticky bit is refused. A directory the process can't open for reading, such as a root-owned directory with mode 0711, is refused as unreadable, since the reader opens the directory before the file. The file itself must now be a regular file, so a FIFO is refused, and a file larger than its cap is refused as unreadable. A root-owned secret is now accepted. Move a refused secret into a directory you own, for example one made with `mkdir -p -m 700 ~/.acs`.
+
+Windows has no owner, group, or other bits, so only the symlink and regular-file checks run there, and a secret also needs the opt-in below.
+
+## ML-DSA-65 signing: the `pqc` extra
+
+ML-DSA-65 signing and keyring verification live behind the `pqc` extra, which installs `cryptography` 50. Nothing installs or imports it by default, so an install without the extra signs and verifies HMAC-SHA256 exactly as before. [`docs/signing.md`](docs/signing.md) covers the API, the ML-DSA variant, and the context string.
+
+```bash
+uv sync --locked --extra pqc --group test
+```
+
+The `pqc` and `nat` extras can't be installed together, and that is a lab convention. `nvidia-nat-core` pins `cryptography` below 47, and ML-DSA-65 needs a newer release, so `pyproject.toml` declares the two extras as conflicting. A NAT deployment therefore signs with HMAC-SHA256 only. A move from NAT to NVIDIA NeMo Relay is planned, and it would remove the conflict. CI tests the extra in its own `tests-pqc` job.
+
+## Run the checks
+
+CI runs each of these checks in `.github/workflows/adapter_tests.yml`, and `run_conformance.py` runs only the first. Run the ones that cover what you changed before you open a pull request:
+
+| Check | Command, from `adapters/` unless noted | What it covers |
+|---|---|---|
+| Emission conformance | `uv sync --locked --group test`, then `uv run python run_conformance.py claude cursor` (add `--extra nat` to the sync and `nat` to the command for NAT) | The shared Guardian, library and package checks and the adapter suites you name, described below |
+| Example Guardian | `uv run pytest tests/guardian -q` | The OPA backend, decision signing, the `GET /keys` route and `acs-verify` |
+| Import boundaries | `uv run lint-imports` | `integrations` imports `client`, which imports `core`, and none of them imports `guardian`, `examples` or `testing` |
+| ML-DSA-65 and Go interop | `uv sync --locked --extra pqc --group test`, then `ACS_REQUIRE_GO_INTEROP=1 uv run --extra pqc python -m pytest tests/interop -q` | Go's own `crypto/mldsa` verifies the library's signatures. Needs Go 1.27 or later. See [signing.md](docs/signing.md) |
+| Gateway | `cd gateway && uv sync --locked && uv run pytest -v && uv run lint-imports` | The gateway's own suite, against an example Guardian and a fake model upstream on free localhost ports |
+
+CI also builds the wheel and checks it outside the repository with `scripts/check_wheel.py`.
+
+### The ACS v0.1.0 emission-conformance check
+
+**What this proves, and what it does not.** This suite proves **emission conformance**: the reference adapters, driven through their real production entry points, emit schema-valid, signed ACS v0.1.0 Core traffic and honor the decisions it tests. It is **not** a requirement-by-requirement audit of every ACS-Core MUST :  `docs/spec/conformance.md` and the sections it cites contain far more normative requirements (handshake/negotiation edge cases, full decision semantics, two-sided live payload validation, hook-completeness, Wrapped MCP) than are checked here. A full ACS-Core deployment-conformance claim also spans the Guardian, the framework wiring, and production configuration. Not the adapter alone. No requirement-by-requirement ledger or behavioral test suite for that larger program exists yet. Do not read a green run here as "ACS-Core conformant."
+
+Known limitations kept in view: Cursor's real-framework wiring is a manual GUI procedure, and Wrapped MCP is validated for namespace shape only, not full wrapping. ACS-Core requires `protocols/MCP/*` for any session that involves MCP and lets only MCP `tools/call` collapse into the generic tool hooks. These adapters perform that collapse and wrap no other MCP surface, so a session that uses MCP falls short of ACS-Core there. The adapters also emit no Trace events and do not claim ACS-Trace: `ACS_AUDIT` lines are local audit records, not OpenTelemetry or OCSF output.
+
+One command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. It is the conformance gate, not every test: the table above lists the suites it leaves out. At least one platform is required, and there is no implicit run-all default. Name one, two, or all three platforms in any order:
 
 ```bash
 cd adapters
@@ -38,17 +108,17 @@ uv run python run_conformance.py claude cursor
 uv run python run_conformance.py claude cursor nat
 ```
 
-`claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client` and `package` checks run once for every command, regardless of the platform selection.
+`claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client`, `package` and `benchmarks` checks run once for every command, regardless of the platform selection.
 
-It prints every skip by name + reason and fails on any failure **or any _unexpected_ skip** — a skip not on the exact allowlist. The allowlist tolerates only the manual Cursor GUI procedure and the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`; a dependency-gated test (NAT when `nvidia-nat-core` is installed) that silently skips is a failure, never green. `--strict` additionally fails on the allowlisted skips too, for a fully-provisioned gate.
+It prints every skip by name and reason. It fails on any failure and on any skip that isn't on the exact allowlist. The allowlist names three kinds of skip. The first is the manual Cursor GUI procedure. The second is the live Claude Code tests, which call the real `claude` CLI and run only with `ACS_LIVE_CLAUDE=1`. The third is the five test modules that need the `pqc` extra: `core.test_pqc_signing`, `client.test_pqc_verification`, `client.test_key_document`, `client.test_response_keys` and `benchmarks.test_signature_benchmark`. Each skips as a whole without the extra, so all five always skip in the nat environment. A dependency-gated test that skips anywhere else is a failure, never a pass. NAT is the example: with `nvidia-nat-core` installed, a skipped NAT test fails the run. `--strict` also fails on the allowlisted skips, for a fully provisioned gate.
 
 Under the hood it drives two complementary layers:
 
 **Scope of the single-file Core suite:** `test_acs_core_conformance.py` drives the **claude-code and cursor** adapters end-to-end (its live-disposition and prompt-gate classes spawn those two subprocesses). **NAT is covered separately**: its conformance evidence lives in `adapters/tests/integrations/nat/` (emission, live dispositions, lifecycle, security, run against the real `nvidia-nat-core`) and runs in CI's `tests` job, which installs the NAT extra. Adding NAT to the single-file Core suite is a tracked follow-up: it needs in-process middleware harnessing where the suite today drives shell subprocesses.
 
-**1. Guardian checks** — `uv run python -m unittest tests.conformance.test_acs_core_conformance` exercises the Core requirements enumerated in `docs/spec/conformance.md`'s summary (handshake incl. forward-compat + malformed-ClientHello refusal, envelope shape, the minimum hook set, dispositions, rolling chain, replay + skew rejection, HMAC-SHA256 baseline incl. signed errors, decision honoring + fail-open audit + audit-cause differentiation) **plus reference-stack coverage of SHOULD/conditional items** (MODIFY, system/ping, the `protocols/MCP/*` namespace shape). These are the summary-level Core checks, **not** an enumeration of all normative MUST occurrences in the linked sections — the requirement-by-requirement ledger is tracked in issue #33. A deployment that legitimately omits a SHOULD/conditional item is not non-conformant for failing those specific tests. Each test docstring quotes the spec line it falsifies. A `CitationGuard` class checks that the ten ACS-Core bullet names the tests cite are still in `conformance.md`, in order, so a renamed, added or removed requirement turns the suite red; it does not compare wording, so when a requirement's text changes, a person re-reads the tests that cite it.
+**1. Guardian checks.** `uv run python -m unittest tests.conformance.test_acs_core_conformance` exercises the Core requirements enumerated in `docs/spec/conformance.md`'s summary (handshake incl. forward-compat + malformed-ClientHello refusal, envelope shape, the minimum hook set, dispositions, rolling chain, replay + skew rejection, HMAC-SHA256 baseline incl. signed errors, decision honoring + fail-open audit + audit-cause differentiation) **plus reference-stack coverage of SHOULD/conditional items** (MODIFY, system/ping, the `protocols/MCP/*` namespace shape). These are the summary-level Core checks, **not** an enumeration of all normative MUST occurrences in the linked sections. No requirement-by-requirement ledger exists yet. A deployment that legitimately omits a SHOULD/conditional item is not non-conformant for failing those specific tests. Each test docstring quotes the spec line it falsifies. A `CitationGuard` class checks that the ten ACS-Core bullet names the tests cite are still in `conformance.md`, in order, so a renamed, added or removed requirement turns the suite red. It does not compare wording, so when a requirement's text changes, a person re-reads the tests that cite it.
 
-**2. Emission conformance** — each adapter's `tests/integrations/<framework>/test_emission.py` runs the **production adapter** (the real subprocess for Claude Code / Cursor; the real `pre_invoke` / `post_invoke` / lifecycle-observer middleware for NAT) against a validating **CaptureGuardian** and asserts the *exact bytes it sends* pass the canonical schemas. Two layers of checks:
+**2. Emission conformance.** Each adapter's `tests/integrations/<framework>/test_emission.py` runs the **production adapter** (the real subprocess for Claude Code / Cursor. The real `pre_invoke` / `post_invoke` / lifecycle-observer middleware for NAT) against a validating **CaptureGuardian** and asserts the *exact bytes it sends* pass the canonical schemas. Two layers of checks:
 
 - *Per-event:* each Core method is emitted exactly once, envelope + payload validate against the canonical schemas, and per-envelope invariants hold — UUID `request_id`, RFC 3339 `timestamp`, `agent_id`/`session_id`/`platform` metadata, the `{value: …}` argument wrapper, and an **independently-recomputed** HMAC-SHA256 signature (a from-scratch HKDF+HMAC+JCS verifier in `acs/testing/capture_guardian.py`, *not* the adapters' own `acs.core` signing code, so a shared signing+verifying bug can't pass both sides; pinned by a frozen known-answer vector).
 - *Per-session* (`*SequentialSession`, one Guardian + one handshake cache across an ordered sequence): the handshake fires exactly once, all `request_id`s are unique, `toolCallResult.request_id_ref` links back to its `toolCallRequest`, and — the real honesty check — the handshake's advertised `methods_implemented` **equals** the set of methods **actually emitted in the run** (equality, not just subset: catches over- *and* under-advertising), not merely methods that happen to have a schema.
@@ -57,7 +127,7 @@ Breaking any adapter's method mapping, envelope/payload field, or signing turns 
 
 **Where each adapter's emission is actually exercised:** Claude Code and Cursor run headless here and in CI (real subprocess). NAT's emission tests drive the real middleware and require `nvidia-nat-core`; they run in the CI `tests` job (which installs the NAT extra) and `skipUnless` it locally — a skip is never counted as a pass (`run_conformance.py nat` and the CI job both fail on an unexpected NAT skip). Cursor's *end-to-end framework* wiring (real Cursor GUI in the loop) remains a manual procedure in `docs/cursor/live_verification.md`; the emission suite proves the adapter, the manual test proves the wiring.
 
-**Wrapped MCP caveat.** The suite verifies the wire-format *shape* of `protocols/MCP/*` only (a harness-built envelope validates, the Guardian returns a structured response, no crash). Nothing here demonstrates real MCP **wrapping**: the adapters flatten MCP onto `steps/toolCallRequest`/`Result` (Cursor's `beforeMCPExecution`, Claude's `mcp__*` tools) rather than emitting the wrapped `protocols/MCP/*` form, and the reference Guardian does not implement intact wrapping, version negotiation, or request/result correlation for it. **Do not read any of this as "we wrap MCP."** ACS-Core states the requirement directly. Deployments whose sessions involve MCP at any point MUST implement `protocols/MCP/*`. MCP `tools/call` MAY instead flow through `steps/toolCallRequest` and `steps/toolCallResult` when tool-level policy suffices, but capability negotiation, prompt fetches, resource reads, and notifications MUST be wrapped. These adapters cover the `tools/call` case only: they flatten MCP tool calls onto `steps/toolCallRequest` and `steps/toolCallResult` and send nothing for the other MCP surfaces. A Claude Code or Cursor session that uses MCP therefore falls short of ACS-Core on those surfaces, a known limitation. Issue #33 tracks the reference-stack side. See `test_acs_core_conformance.py::Core10_WrappedMcp`.
+**Wrapped MCP caveat.** The suite verifies the wire-format *shape* of `protocols/MCP/*` only (a harness-built envelope validates, the Guardian returns a structured response, no crash). Nothing here demonstrates real MCP **wrapping**: the adapters flatten MCP onto `steps/toolCallRequest`/`Result` (Cursor's `beforeMCPExecution`, Claude's `mcp__*` tools) rather than emitting the wrapped `protocols/MCP/*` form, and the example Guardian does not implement intact wrapping, version negotiation, or request/result correlation for it. **Do not read any of this as "we wrap MCP."** ACS-Core states the requirement directly. Deployments whose sessions involve MCP at any point MUST implement `protocols/MCP/*`. MCP `tools/call` MAY instead flow through `steps/toolCallRequest` and `steps/toolCallResult` when tool-level policy suffices, but capability negotiation, prompt fetches, resource reads, and notifications MUST be wrapped. These adapters cover the `tools/call` case only: they flatten MCP tool calls onto `steps/toolCallRequest` and `steps/toolCallResult` and send nothing for the other MCP surfaces. A Claude Code or Cursor session that uses MCP therefore falls short of ACS-Core on those surfaces, a known limitation. See `test_acs_core_conformance.py::Core10_WrappedMcp`.
 
 ## How adapters work
 
@@ -67,34 +137,33 @@ The adapters are **translators**. Each one speaks its framework's hook protocol 
 
 For each event the framework fires:
 
-```
-   framework                  adapter                   Guardian
-      │                          │                         │
-      │  hook event (framework   │                         │
-      │  native JSON / call)     │                         │
-      │ ───────────────────────► │                         │
-      │                          │  ACS JSON-RPC request   │
-      │                          │ ──────────────────────► │
-      │                          │                         │   evaluate
-      │                          │                         │   policy
-      │                          │  ACS decision           │
-      │                          │ ◄────────────────────── │
-      │   decision (framework    │                         │
-      │   native response shape) │                         │
-      │ ◄─────────────────────── │                         │
-      │                          │                         │
-      ▼                          ▼                         ▼
-   applies the                                          appends
-   decision                                           audit chain
+```mermaid
+sequenceDiagram
+    participant F as Framework
+    participant A as Adapter
+    participant G as Guardian
+    F->>A: hook event, in the framework's own JSON or call
+    A->>G: signed ACS JSON-RPC request
+    Note over G: evaluate policy, append to the audit chain
+    alt a usable answer arrives
+        G-->>A: signed ACS decision
+        Note over A: verify the signature and the binding to the request
+        A-->>F: the decision, in the framework's own response shape
+        Note over F: applies the decision
+    else a refusal, or an answer that fails verification
+        A-->>F: deny under any posture, plus an ACS_AUDIT line on stderr
+    else no usable answer (timeout, transport error)
+        A-->>F: deny by default, plus an ACS_AUDIT line on stderr
+    end
 ```
 
 Six steps:
 
 1. Framework fires its hook with a payload in its own format.
-2. Adapter receives that payload, translates to an ACS JSON-RPC request.
+2. Adapter receives that payload, translates to an ACS JSON-RPC request, and signs it.
 3. Adapter POSTs to the Guardian endpoint.
-4. Guardian evaluates against policy, returns an ACS decision (`allow` / `deny` / `modify` / `ask` / `defer`).
-5. Adapter translates that decision back to whatever the framework expects to receive.
+4. Guardian evaluates against policy, returns a signed ACS decision (`allow` / `deny` / `modify` / `ask` / `defer`).
+5. Adapter verifies the answer's signature and that it answers this request, then translates the decision back to whatever the framework expects to receive. An answer that fails verification, or a Guardian refusal, denies the step under any posture. No answer at all denies it by default. Either way the adapter writes an `ACS_AUDIT` line.
 6. Framework applies the decision (run / block / modify the action).
 
 ### Concrete walkthrough: Claude Code, ALLOW path
@@ -215,30 +284,43 @@ The framework's agent code is untouched. The Guardian's policy code is untouched
 
 ## Directory layout
 
-The adapters are one Python package, `acs`, distributed as `acs-adapters`:
+The adapters, the example Guardian and the checking tools are one Python package, `acs`, distributed as `acs-adapters`. The gateway is a second package in its own uv project:
 
 ```
 adapters/
-├── pyproject.toml                  # distribution, extras, console scripts, entry points
+├── pyproject.toml                  # distribution, extras (nat, pqc), console scripts, entry points
 ├── uv.lock                         # exact dependency versions, with hashes
+├── run_conformance.py              # the emission-conformance gate
 ├── src/acs/
-│   ├── core/                       # no I/O: envelopes, signing, decisions, error codes, bundled schemas
-│   ├── client/                     # I/O: settings and fail posture, the secret, the handshake, the round trip, session state and turns, audit
+│   ├── core/                       # no I/O: envelopes, HMAC and ML-DSA-65 signing, the keyring, decisions, error codes, bundled schemas
+│   ├── client/                     # I/O: settings and fail posture, the trusted-file reader, the handshake, the round trip, key documents, session state and turns, audit
 │   ├── integrations/<framework>/
 │   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
 │   │   └── wire.py                 # writes the framework's own config
-│   ├── guardian/example_guardian.py  # the example Guardian: wire handling, replay, skew and the session chain
+│   ├── guardian/
+│   │   ├── example_guardian.py     # the example Guardian: wire handling, replay, skew, the session chain, GET /keys
+│   │   ├── opa_backend.py          # the opt-in OPA backend
+│   │   ├── decision_keys.py        # writes and loads the ML-DSA-65 decision key and its key document
+│   │   └── _response_signing.py    # reads ACS_RESPONSE_SIGNING, the setting that turns ML-DSA-65 answers on
 │   ├── examples/destructive_bash.py  # the example Guardian's toy policy
-│   └── testing/                    # CaptureGuardian and the shared test harness
-├── tests/                          # common/, core/, client/, package/, conformance/, integrations/<framework>/
+│   └── testing/
+│       ├── capture_guardian.py     # CaptureGuardian, the independent oracle for the emission check
+│       ├── harness.py, e2e_report.py  # the shared test harness and the e2e_check output helpers
+│       └── verify.py               # acs-verify
+├── benchmarks/signatures/          # the signature benchmark and its committed results
+├── tests/                          # common/, core/, client/, package/, benchmarks/, conformance/, guardian/, integrations/<framework>/, interop/ (Go ML-DSA check)
 ├── docs/<framework>/               # README, mapping.md, example config, example payloads
-└── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
+├── docs/guardian/README.md         # the example Guardian, its OPA backend and decision signing
+├── docs/signing.md                 # ML-DSA-65 signing, the keyring, the variant and the context
+├── docs/acs-verify.md              # checking a transcript offline
+├── scripts/check_wheel.py          # installs a built wheel outside the repo and checks it
+└── gateway/                        # acs-gateway, its own pyproject.toml, uv.lock, src/acs_gateway/ and tests/
 ```
 
 Imports flow `integrations → client → core`, and none of the three imports `guardian`, `examples` or `testing`; `uv run lint-imports` checks both rules in CI.
 
-Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`); NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point.
+Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`). NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point. Two more tools run as modules, with no command of their own: `python -m acs.testing.verify` is `acs-verify`, and `python -m acs.guardian.decision_keys` writes the ML-DSA-65 decision key, which needs the `pqc` extra. The gateway's `acs-gateway` command comes from its own project: run `uv sync --locked` in `adapters/gateway/`.
 
 ---
 
@@ -249,7 +331,7 @@ Installing the package (`uv tool install ./adapters`, or `pip install ./adapters
 3. For a hook command, add a standard-library-only `hook.py` that calls `acs.integrations._bootstrap.run_hook` (see `claude_code/hook.py`), and install that as the command, so an adapter whose dependencies fail to import still writes an audit record and denies the step unless the hook sets both `ACS_DEFAULT_DENY=0` and `ACS_STARTUP_POSTURE=proceed`.
 4. Register it in `pyproject.toml`: an entry in the `acs.integrations` entry-point group, and its commands under `[project.scripts]`. An integration in another distribution registers in the same group.
 5. Add its suite to `PLATFORM_SUITES` in `run_conformance.py`, so `run_conformance.py <framework>` runs it.
-6. Open a PR against `GenAI-Security-Project/agent-control-standard`.
+6. Open a pull request against the `integration` branch of `GenAI-Security-Project/agent-control-standard`, as [CONTRIBUTING.md](../CONTRIBUTING.md) describes.
 
 Keep module-level state constant or set once at startup. Read `ACS_GUARDIAN_URL`, `ACS_DEFAULT_DENY`, `ACS_STARTUP_POSTURE`, `ACS_REQUIRE_PROFILES`, `ACS_HANDSHAKE` and `ACS_DISABLED` once with `acs.client.Config.from_env` at the entry point, pass the `Config` and `FailPosture` down, gate each step on `Config.gate(open_session(...))`, build envelopes with `acs.core.request_envelope` and send them unsigned to `acs.client.round_trip`, which signs as the last step and returns either the decision or the `FailPosture.resolve` resolution to write in the host's shape, and keep the open turn with `acs.client.open_turn` / `current_turn` / `close_turn`.
 

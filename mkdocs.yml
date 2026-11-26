@@ -1,4 +1,4 @@
-site_name: OWASP Agent Control Standard
+site_name: OWASP GenAI Security Project Agent Control Standard
 site_url: !ENV GITHUB_PAGES_URL
 site_description: >-
   An industry standard for building trustworthy AI agents - instrumentable, traceable and inspectable
@@ -7,7 +7,8 @@ site_description: >-
 # Repository
 repo_name: GenAI-Security-Project/agent-control-standard
 repo_url: https://github.com/GenAI-Security-Project/agent-control-standard
-edit_uri: edit/main/docs/
+# Pull requests target integration (D-015), so the edit button opens an edit there.
+edit_uri: edit/integration/docs/
 
 # Copyright
 copyright: Copyright &copy; 2025-2026 The OWASP GenAI Security Project and the ACS contributors. Documentation licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.
@@ -65,10 +66,12 @@ extra:
     external_resources:
       - {title: GitHub, url: "https://github.com/GenAI-Security-Project/agent-control-standard"}
       - {title: Roadmap, url: "https://github.com/GenAI-Security-Project/agent-control-standard/milestones"}
-      - {title: Slack, url: "https://owasp.slack.com"}
+      - {title: Slack, url: "https://owasp.org/slack/invite"}
     # Pages that exist in the build but stay out of nav: on purpose.
     out_of_nav_prefixes:
       - spec/instrument/a2a/hooks/
+      # The CycloneDX mapping page links to this standalone viewer.
+      - spec/inspect/agbom-viewer/
 
 nav:
   - Trustworthy Agents: README.md
@@ -77,6 +80,11 @@ nav:
   - Topics:
     - Core concepts: topics/core_concepts.md
     - ACS in Action: topics/ACS_in_action_example.md
+    - Run a Guardian: topics/reference-implementations.md
+    - Govern an unmodified agent: topics/gateway.md
+    - Sign and verify decisions: topics/signed-decisions.md
+    - Signature benchmark: topics/signature-benchmark.md
+    - Decision Log: decisions/index.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md
@@ -108,6 +116,7 @@ nav:
     - Inspect:
       - Overview: spec/inspect/README.md
       - AgBOM with CycloneDX: spec/inspect/extend_cyclonedx.md
+      - Inspect Local BOMs: spec/inspect/agbom_viewer_local.md
       - AgBOM with SPDX: spec/inspect/extend_spdx.md
       - AgBOM with SWID: spec/inspect/extend_swid.md
   - About: about.md
@@ -129,6 +138,7 @@ extra_css:
 extra_javascript:
   - assets/javascripts/mermaid.min.js
   - assets/javascripts/mermaid-init.js
+  - assets/javascripts/a11y.js
 
 markdown_extensions:
   # Emojis
@@ -142,14 +152,15 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.snippets
+  - pymdownx.snippets:
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         # The class is deliberately NOT `mermaid`. mkdocs-material scans for that
         # class, and finding it does two unwanted things: it fetches the mermaid
         # library from https://unpkg.com at runtime, and its own rendering pass empties
-        # the block before drawing anything, which is why the one diagram already in
-        # this documentation has never rendered on the published site. Naming the class
+        # the block before drawing anything, so a diagram would never render on the
+        # published site. Naming the class
         # something the theme does not recognise leaves both to
         # assets/javascripts/mermaid-init.js, which renders from the copy of the library
         # this repository serves. Authors still write ```mermaid fences.

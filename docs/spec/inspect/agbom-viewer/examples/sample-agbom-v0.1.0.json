@@ -1,0 +1,184 @@
+{
+  "agbom_version": "0.1.0",
+  "agent": {
+    "agent_id": "agent-id",
+    "name": "Agent name",
+    "version": "5",
+    "vendor": "agent-vendor",
+    "description": "Agent description"
+  },
+  "components": [
+    {
+      "id": "model-1",
+      "type": "model",
+      "name": "Model name",
+      "version": "1",
+      "provider": "model-provider",
+      "endpoint": "https://models.example.com",
+      "registration_provenance": {
+        "provenance_id": "p-model",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "model_fields": {
+        "context_window": 64000,
+        "args": {
+          "seed": 8,
+          "flags": [
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "id": "mcp_server-2",
+      "type": "mcp_server",
+      "name": "MCP server name",
+      "version": "3",
+      "endpoint": "https://example.org/mcp",
+      "registration_provenance": {
+        "provenance_id": "p-server",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "mcp_server_fields": {
+        "tools": [
+          "tool-3",
+          "tool-4"
+        ]
+      }
+    },
+    {
+      "id": "tool-3",
+      "type": "tool",
+      "name": "Tool name",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-tool",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "tool_fields": {
+        "capability": "example.read"
+      }
+    },
+    {
+      "id": "tool-4",
+      "type": "tool",
+      "name": "Second tool",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-new",
+        "origin": "tool_output",
+        "source_id": "mcp-list-result",
+        "derived_from": [
+          "p-server"
+        ]
+      },
+      "tool_fields": {
+        "capability": "example.search"
+      }
+    },
+    {
+      "id": "a2a_peer-5",
+      "type": "a2a_peer",
+      "endpoint": "https://peer.example.com",
+      "a2a_peer_fields": {
+        "protocol_version": "0.3",
+        "agent_card_ref": "https://peer.example.com/card"
+      }
+    },
+    {
+      "id": "knowledge_source-6",
+      "type": "knowledge_source",
+      "name": "Knowledge source name",
+      "endpoint": "https://kb.example.com",
+      "knowledge_source_fields": {
+        "source_type": "vector_db",
+        "schema_ref": "https://kb.example.com/schema"
+      }
+    },
+    {
+      "id": "memory_store-7",
+      "type": "memory_store",
+      "name": "Memory store name",
+      "memory_store_fields": {
+        "scope": "tenant",
+        "store_type": "kv",
+        "path": "file:///memory",
+        "window_size": 0
+      }
+    },
+    {
+      "id": "agent_capability-8",
+      "type": "agent_capability",
+      "name": "Capability name",
+      "agent_capability_fields": {
+        "description": "Skill description",
+        "tools": [
+          "tool-3"
+        ],
+        "mcp_servers": [
+          "mcp_server-2"
+        ],
+        "a2a_peers": [
+          "a2a_peer-5"
+        ]
+      }
+    },
+    {
+      "id": "skill-9",
+      "type": "skill",
+      "name": "Skill description",
+      "skill_fields": {
+        "description": "Skill instructions",
+        "definition": {
+          "ref": "https://skills.example.com/report.zip",
+          "digest": {
+            "algorithm": "sha-256",
+            "value": "4013ccde235bf7afa5787c29b947ae18eb88f9100f625d46b74f4ee184b78ac7"
+          }
+        },
+        "declared_capabilities": [
+          "example.read"
+        ],
+        "tools": [
+          "tool-3"
+        ],
+        "mcp_servers": [
+          "mcp_server-2"
+        ],
+        "a2a_peers": [
+          "a2a_peer-5"
+        ],
+        "models": [
+          "model-1"
+        ],
+        "composed_skills": [
+          "skill-10"
+        ]
+      }
+    },
+    {
+      "id": "skill-10",
+      "type": "skill",
+      "name": "Second skill",
+      "skill_fields": {
+        "description": "Additional instructions",
+        "definition": {
+          "ref": "file:///helper.zip",
+          "digest": {
+            "algorithm": "sha-512",
+            "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "tools": []
+      }
+    }
+  ],
+  "generated_at": "2026-11-23T12:01:00Z",
+  "agbom_hash": "33a0517cc85efa4d53374b13c96289690558163b29724feffe4ccdb6e580af0f"
+}

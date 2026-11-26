@@ -15,7 +15,7 @@ ACS is an OWASP project. This file records who leads the work, which workstream 
 Each workstream owns a slice of the standard and runs its own review. Two leads per
 workstream keeps decisions moving when one is unavailable.
 
-Reference Implementation and Documentation run with one lead each so far. The work in each
+AgBOM, Reference Implementation, and Documentation run with one lead each so far. The work in each
 continues, but it carries a single point of failure until somebody takes the second seat.
 
 There is no Testing and Validation workstream for now. Whoever reviews a change checks it
@@ -23,6 +23,7 @@ against the conformance requirements it touches.
 
 | Workstream | Leads |
 | --- | --- |
+| AgBOM | Helen Oakley ([@e2hln](https://github.com/e2hln)) |
 | Coding Agents | Almog Langleben ([@almogbhl](https://github.com/almogbhl)), Stefano Amorelli ([@stefanoamorelli](https://github.com/stefanoamorelli)) |
 | Development (SDK) | Kyriakos Lambros (Rock) ([@rocklambros](https://github.com/rocklambros)), Fred Wilmot ([@fewdisc](https://github.com/fewdisc)) |
 | Documentation | Lance Dye ([@Lrd0036](https://github.com/Lrd0036)) |

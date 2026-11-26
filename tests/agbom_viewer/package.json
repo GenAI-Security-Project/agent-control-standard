@@ -1,0 +1,7 @@
+{
+  "name": "agbom-viewer-tests",
+  "private": true,
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
+}

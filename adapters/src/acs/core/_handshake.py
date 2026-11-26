@@ -30,6 +30,8 @@ def _strings(value: object) -> bool:
 
 def server_hello_problem(server_hello: Mapping[str, Any], offered: Mapping[str, Any]) -> str | None:
     """Why the ServerHello does not answer the ClientHello `offered`, or None."""
+    # An extra field, request_id included, is ignored, as spec section 4 requires. The required
+    # fields below are what keep a step answer from passing as a ServerHello.
     version = server_hello.get("negotiated_version")
     if not isinstance(version, str) or not _SEMVER.fullmatch(version):
         return "negotiated_version is not a semantic version"

@@ -1,8 +1,9 @@
-# Code owners for the OWASP Agent Control Standard.
+# Code owners for the OWASP GenAI Security Project Agent Control Standard.
 #
 # Owners listed here are required reviewers on the paths they own, enforced by
-# the ruleset on main. GitHub requires write access for an entry to take
-# effect, and fails the entry silently when the handle lacks it.
+# the rulesets on main, integration, and release branches. GitHub requires write
+# access for an entry to take effect, and fails the entry silently when the handle
+# lacks it.
 #
 # Keep this file in sync with repository collaborator roles and with the
 # leadership roster in GOVERNANCE.md. The project leads are @rocklambros,
@@ -11,20 +12,39 @@
 # @artmaro holds write access. @Lrd0036 accepted write access and his entries are live.
 # Workstream leads without write access stay in GOVERNANCE.md and are not listed
 # here, because an entry without write access does nothing.
+#
+# Two owner sets (D-053). The three project leads can approve anything. On every path
+# except the specification, @fewdisc, @artmaro, @Lrd0036, and @e2hln approve on the same
+# terms as the project leads. The specification (/specification/ and the normative pages
+# under /docs/spec/) stays with the three project leads, plus @e2hln on the AgBOM and
+# inspect paths she owns under D-044. The OWASP organization
+# owners @GangGreenTemperTatum, @mamicidal, and @sclintonowasp appear on every line
+# because they administer the organization.
 
-# Default owners for anything not matched below.
-*                       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+# Default owners for anything not matched below. Coding Agents leads @stefanoamorelli and
+# @almogbhl keep the paths they held before D-053.
+*                       @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp @stefanoamorelli @almogbhl
 
-/CLAUDE.md       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/.gitignore     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/STYLE.md        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/CONTRIBUTING.md @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/design/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/CLAUDE.md       @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/.gitignore     @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/STYLE.md        @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/CONTRIBUTING.md @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/design/         @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
-# The specification is the highest-blast-radius surface in the repository.
-# A schema change propagates to every downstream implementer.
-/specification/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
-/docs/spec/             @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @stefanoamorelli @almogbhl @bar-capsule @artmaro @Lrd0036
+# The specification is the highest-blast-radius surface in the repository. A schema
+# change propagates to every downstream implementer, so only the project leads own it.
+/specification/         @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+/docs/spec/             @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+# AgBOM workstream (D-044): the AgBOM lead keeps the inspect pages and the AgBOM and
+# inspect schemas, on top of the project leads. These follow the broader lines above
+# because the last matching pattern wins.
+/specification/v0.1.0/agbom/   @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
+/specification/v0.1.0/inspect/ @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
+/docs/spec/inspect/     @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
+# The AgBOM Viewer under /docs/spec/inspect/ is tooling, licensed Apache-2.0, not
+# specification text, so it takes the non-spec owner set. This line follows /docs/spec/
+# because the last matching pattern wins.
+/docs/spec/inspect/agbom-viewer/ @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # These generate and publish the public site, or feed the build that does. A change
 # here alters what the front door says, which is the same class of privilege the
@@ -33,46 +53,54 @@
 # the build renders into every page, which carries the same reach.
 # The docs stylesheet and asset directories render into every documentation page and
 # can reach a third party through url(), @font-face, or @import with no script at all.
-/tools/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/landing/       @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/GOVERNANCE.md  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
-/project.owasp.yaml @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
-/mkdocs.yml     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/pyproject.toml @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/uv.lock        @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/tests/         @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/overrides/     @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/docs/stylesheets/ @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule @Lrd0036
-/docs/assets/      @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/tools/         @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/landing/       @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/GOVERNANCE.md  @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/CODE_OF_CONDUCT.md @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/project.owasp.yaml @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/mkdocs.yml     @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/pyproject.toml @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp @almogbhl
+/uv.lock        @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp @almogbhl
+/tests/         @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp @almogbhl
+/overrides/     @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/docs/stylesheets/ @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/docs/assets/      @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # The roster files and the code that turns them into trust decide whose closes count as
-# delivered, so a project lead approves every change to them (decision 11). These lines
-# follow /tools/ because the last matching pattern wins.
-/tools/roadmap_model.py  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
-/tools/fetch_roadmap.py  @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
-/tools/closing_choice.py @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+# delivered. These lines follow /tools/ because the last matching pattern wins, so a
+# later narrowing of /tools/ does not reach them by accident.
+/tools/roadmap_model.py  @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/tools/fetch_roadmap.py  @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/tools/closing_choice.py @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # The reference implementation is runnable code that contributors install and wire
 # into their own development environments, which is a different risk class from the
 # rest of this repository. It arrived as roughly 41,000 lines from a single author, so
 # these entries exist to force a second reviewer on every later change rather than to
 # record who wrote it.
-/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @artmaro
+/reference-implementations/  @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # The reference adapters are installable code that hooks into an agent and decides
-# whether its tool calls run. Bar Kaduri owns them. The other two project leads are
-# listed too, because GitHub does not let an author approve her own pull request, and
-# with Bar as the only owner every change she makes here would need an admin bypass.
-/adapters/  @bar-capsule @rocklambros @afogel
+# whether its tool calls run. Bar Kaduri owns them, and the other owners are listed
+# because GitHub does not let an author approve her own pull request. Every handle here
+# holds write access, because GitHub silently ignores one that does not.
+/adapters/  @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp @almogbhl
+
+# Coding-agent instructions apply at every directory depth (Codex loads nested AGENTS.md
+# and gives AGENTS.override.md precedence). Placed after broader directory rules such as
+# /adapters/ and before /.github/ so a nested instruction file anywhere takes this owner
+# set, including one under /docs/spec/.
+AGENTS.md          @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+AGENTS.override.md @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # CI runs with write access to the repository, and this directory holds CODEOWNERS
-# itself. Changes here are a privilege-escalation surface, so a project lead
-# approves them (decision 11).
-/.github/               @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+# itself. Changes here are a privilege-escalation surface, so a code owner from the set
+# above approves every change.
+/.github/               @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
 
 # Licensing and security policy changes are governance decisions.
-/LICENSE                @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/LICENSE-DOCS           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/LICENSING.md           @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/NOTICE                 @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
-/SECURITY.md            @rocklambros @fewdisc @GangGreenTemperTatum @mamicidal @sclintonowasp @afogel @bar-capsule
+/LICENSE                @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/LICENSE-DOCS           @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/LICENSING.md           @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/NOTICE                 @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp
+/SECURITY.md            @rocklambros @afogel @bar-capsule @fewdisc @artmaro @Lrd0036 @e2hln @GangGreenTemperTatum @mamicidal @sclintonowasp

@@ -64,7 +64,7 @@ Every span also carries `acs.session.id`, and `acs.request_id` whenever the enve
 
 Every string attribute is cut at 4096 characters, a long `acs.reasoning` included, so one large request cannot grow the export queue without bound. The sampler and span limits are set in code, so `OTEL_TRACES_*`, `OTEL_SPAN_*`, `OTEL_ATTRIBUTE_*` and `OTEL_BSP_*` variables in the environment do not change what is exported, and the endpoint output is never compressed. `OTEL_EXPORTER_OTLP_*HEADERS` still add headers to the endpoint's requests, and a loopback endpoint is added to `NO_PROXY` so an `HTTP_PROXY` cannot route it.
 
-The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian sends it once PR #229 is merged.
+The decision rides on the span as an `acs.decision` event. The event always carries `acs.decision`, carries `acs.reasoning` when the response has one, and carries `acs.reason_codes`, `acs.policy.ids`, `acs.policy.versions`, `acs.policy.rule_ids`, `acs.cited_provenance_ids` and `acs.chain_hash` only when the response carries them. `acs.evaluator` appears when the Guardian's response carries `metadata.evaluator`. This Guardian doesn't send it.
 
 This Guardian does not send `chain_hash`, `cited_provenance_ids`, or `policy_version` on its responses yet. `acs.chain_hash` and `acs.cited_provenance_ids` are absent from its spans, and `acs.policy.versions` carries `""` for each policy reference. The three policy arrays always have the same length as `policy_references`, with `""` where a reference has no value. A valid `handshake/hello`, a valid request for a method this Guardian does not dispatch, and an unparseable body produce no span.
 
@@ -72,7 +72,7 @@ A step that got no decision is recorded as an `acs.decision.failure` event on th
 
 A request the Guardian cannot vouch for is recorded apart from the steps it governed, as a `guardian.rejected_request` span. Such a request can carry any session and request id, a genuine request's included. So the span carries no `acs.session.id`, `acs.request_id`, step attribute or `acs.decision` event. It records the ids the request claimed as `guardian.rejected.claimed_session_id` and `guardian.rejected.claimed_request_id`, with `guardian.rejected.reason` and, for an error answer, `guardian.rejected.error_code`. These names belong to this Guardian, not to the ACS mapping.
 
-The reasons are `envelope_invalid`, for an envelope that fails validation, and `signature_invalid`, `replay_detected` or `timestamp_out_of_window`, for a step answered with that error by whichever check produced it. The last is `guardian_fault`, for a request the Guardian could not check at all, a missing schema directory for example. The host got an error for that one, so its span also carries an `acs.decision.failure` with class `guardian_error`. This Guardian verifies no signature, replay or timestamp yet (PR #229), so a forged or replayed request that passes the schema is still recorded as a step.
+The reasons are `envelope_invalid`, for an envelope that fails validation, and `signature_invalid`, `replay_detected` or `timestamp_out_of_window`, for a step answered with that error by whichever check produced it. The last is `guardian_fault`, for a request the Guardian could not check at all, a missing schema directory for example. The host got an error for that one, so its span also carries an `acs.decision.failure` with class `guardian_error`. This Guardian verifies no signature, replay or timestamp, so a forged or replayed request that passes the schema is still recorded as a step.
 
 The file holds one OTLP `ExportTraceServiceRequest` per line, the shape the Collector's file exporter writes, with `service.name` set to `acs-reference-guardian` (the converter below uses `acs-reference-audit-converter`, and both are labels, not attribution). Spans are batched and flushed when the Guardian closes on SIGINT or SIGTERM. A SIGKILL loses the last batch, and so does an output that has not finished three seconds into shutdown: the Guardian reports it on stderr and exits instead of waiting. [`otel-collector.yaml`](../../otel-collector.yaml) at the root of this tree receives the endpoint output and writes the same file shape.
 
@@ -97,7 +97,7 @@ flowchart LR
 
 Each processor sends a batch about every five seconds. At shutdown, the exporter first ends any span still open with an `acs.decision.failure` event, then flushes both processors. An output that hasn't finished within three seconds is reported on stderr and its unexported spans are dropped.
 
-Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too ([issue #71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71)).
+Use synthetic sessions for lab runs. The envelope log holds raw envelopes before any redaction, a span's `acs.reasoning` repeats the Guardian's explanation of them, and `acs.provenance.source_id` goes out as the host sent it: by `provenance.json` it can be a URL or a file path, so a signed URL or a home-directory path would too.
 
 ### Convert the host audit log
 
@@ -128,7 +128,7 @@ It prints how many spans reached the file and exits non-zero when that is fewer 
 bun run sample:trace
 ```
 
-That command regenerates it. `test/sample-trace.test.ts` checks the sample against `otel-mapping.json` and fails when the exporter's output no longer matches it, so a change to the exporter or the mapping comes with a regenerated sample. The converted span has no `gen_ai.tool.name`, because the audit log does not record the tool (issue #274). Like the exporter, the sample covers two hook methods and is not an ACS-Trace conformance claim.
+That command regenerates it. `test/sample-trace.test.ts` checks the sample against `otel-mapping.json` and fails when the exporter's output no longer matches it, so a change to the exporter or the mapping comes with a regenerated sample. The converted span has no `gen_ai.tool.name`, because the audit log does not record the tool. Like the exporter, the sample covers two hook methods and is not an ACS-Trace conformance claim.
 
 ### Troubleshooting
 

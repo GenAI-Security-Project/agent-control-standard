@@ -1,0 +1,397 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0-dev",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "agent-id",
+        "type": "application",
+        "name": "Agent name",
+        "version": "5",
+        "description": "Agent description",
+        "properties": [
+          {
+            "name": "acs:vendor",
+            "value": "agent-vendor"
+          }
+        ]
+      },
+      "components": [
+        {
+          "refId": "model-1",
+          "type": "machine-learning-model",
+          "name": "Model name",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "model-provider"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://models.example.com"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-model"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "64000"
+            },
+            {
+              "name": "acs:model:args",
+              "value": "{\"flags\":[true,null],\"seed\":8}"
+            }
+          ],
+          "externalReferences": [
+            {
+              "type": "bom",
+              "url": "sample-model.aibom.json"
+            }
+          ]
+        },
+        {
+          "refId": "mcp_server-2",
+          "type": "service",
+          "name": "MCP server name",
+          "version": "3",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "mcp_server"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-server"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            }
+          ],
+          "endpoints": [
+            "https://example.org/mcp"
+          ]
+        },
+        {
+          "refId": "tool-3",
+          "type": "application",
+          "name": "Tool name",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-tool"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "example.read"
+            }
+          ]
+        },
+        {
+          "refId": "tool-4",
+          "type": "application",
+          "name": "Second tool",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-new"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "tool_output"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "mcp-list-result"
+            },
+            {
+              "name": "acs:provenance:derived_from",
+              "value": "[\"p-server\"]"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "example.search"
+            }
+          ]
+        },
+        {
+          "refId": "a2a_peer-5",
+          "type": "service",
+          "name": "a2a_peer-5",
+          "properties": [
+            {
+              "name": "acs:name-is-id",
+              "value": "true"
+            },
+            {
+              "name": "acs:kind",
+              "value": "a2a_peer"
+            },
+            {
+              "name": "acs:a2a_peer:protocol_version",
+              "value": "0.3"
+            },
+            {
+              "name": "acs:a2a_peer:agent_card_ref",
+              "value": "https://peer.example.com/card"
+            }
+          ],
+          "endpoints": [
+            "https://peer.example.com"
+          ]
+        },
+        {
+          "refId": "knowledge_source-6",
+          "type": "service",
+          "name": "Knowledge source name",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "knowledge_source"
+            },
+            {
+              "name": "acs:knowledge_source:source_type",
+              "value": "vector_db"
+            },
+            {
+              "name": "acs:knowledge_source:schema_ref",
+              "value": "https://kb.example.com/schema"
+            }
+          ],
+          "endpoints": [
+            "https://kb.example.com"
+          ]
+        },
+        {
+          "refId": "memory_store-7",
+          "type": "service",
+          "name": "Memory store name",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "memory_store"
+            },
+            {
+              "name": "acs:memory_store:scope",
+              "value": "tenant"
+            },
+            {
+              "name": "acs:memory_store:store_type",
+              "value": "kv"
+            },
+            {
+              "name": "acs:memory_store:path",
+              "value": "file:///memory"
+            },
+            {
+              "name": "acs:memory_store:window_size",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "refId": "agent_capability-8",
+          "type": "data",
+          "name": "Capability name",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "agent_capability"
+            }
+          ],
+          "description": "Skill description"
+        },
+        {
+          "refId": "skill-9",
+          "type": "application",
+          "name": "Skill description",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "skill"
+            },
+            {
+              "name": "acs:skill:declared_capabilities",
+              "value": "[\"example.read\"]"
+            }
+          ],
+          "description": "Skill instructions",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "https://skills.example.com/report.zip",
+              "hashes": [
+                {
+                  "alg": "SHA-256",
+                  "content": "4013ccde235bf7afa5787c29b947ae18eb88f9100f625d46b74f4ee184b78ac7"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "refId": "skill-10",
+          "type": "application",
+          "name": "Second skill",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "skill"
+            },
+            {
+              "name": "acs:empty:uses-tool",
+              "value": "true"
+            }
+          ],
+          "description": "Additional instructions",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "file:///helper.zip",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    },
+    {
+      "name": "acs:agbom_hash",
+      "value": "33a0517cc85efa4d53374b13c96289690558163b29724feffe4ccdb6e580af0f"
+    },
+    {
+      "name": "acs:generated_at",
+      "value": "2026-11-23T12:01:00Z"
+    }
+  ],
+  "blueprints": [
+    {
+      "name": "Observed composition",
+      "modelTypes": [
+        "operational"
+      ],
+      "relationships": [
+        {
+          "ref": "mcp_server-2",
+          "custom": [
+            {
+              "type": "acs:exposes-tool",
+              "targets": [
+                "tool-3",
+                "tool-4"
+              ]
+            }
+          ]
+        },
+        {
+          "ref": "agent_capability-8",
+          "custom": [
+            {
+              "type": "acs:uses-tool",
+              "targets": [
+                "tool-3"
+              ]
+            },
+            {
+              "type": "acs:uses-mcp-server",
+              "targets": [
+                "mcp_server-2"
+              ]
+            },
+            {
+              "type": "acs:uses-peer",
+              "targets": [
+                "a2a_peer-5"
+              ]
+            }
+          ]
+        },
+        {
+          "ref": "skill-9",
+          "custom": [
+            {
+              "type": "acs:uses-tool",
+              "targets": [
+                "tool-3"
+              ]
+            },
+            {
+              "type": "acs:uses-mcp-server",
+              "targets": [
+                "mcp_server-2"
+              ]
+            },
+            {
+              "type": "acs:uses-peer",
+              "targets": [
+                "a2a_peer-5"
+              ]
+            },
+            {
+              "type": "acs:bundles-model",
+              "targets": [
+                "model-1"
+              ]
+            },
+            {
+              "type": "acs:may-load-skill",
+              "targets": [
+                "skill-10"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

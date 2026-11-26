@@ -10,7 +10,7 @@ This page answers questions ACS gets from enterprise security teams, framework i
 
 ### What is ACS?
 
-ACS (OWASP Agent Control Standard) is a runtime governance specification for AI agents. It defines how an agent reports the actions it is about to take, how an external policy engine ("Guardian Agent") responds with a decision, what behavior the agent must exhibit in response, and what audit record the interaction leaves behind. The spec is organized into three pillars:
+ACS (OWASP GenAI Security Project Agent Control Standard) is a runtime governance specification for AI agents. It defines how an agent reports the actions it is about to take, how an external policy engine ("Guardian Agent") responds with a decision, what behavior the agent must exhibit in response, and what audit record the interaction leaves behind. The spec is organized into three pillars:
 
 ```
    ┌──────────────────────────────────┐  ┌──────────────────────────────────┐  ┌──────────────────────────────────┐
@@ -92,11 +92,11 @@ No. Agent frameworks and ACS sit at different layers. A framework builds the age
 
 ### Does ACS replace MCP or A2A?
 
-No. ACS wraps them. MCP traffic reaches the Guardian through ACS hooks, either the `protocols/MCP/*` methods or, for tool calls, the generic tool hooks, so the same Guardian can govern an MCP tool call as a native tool call. A2A wrapping arrives in v0.2 ([Specification §extend_a2a](../spec/instrument/a2a/extend_a2a.md)). The composition rule: every protocol-spanning message crosses an ACS hook on the way out and on the way back.
+No. ACS wraps them. MCP traffic reaches the Guardian through ACS hooks, either the `protocols/MCP/*` methods or, for tool calls, the generic tool hooks, so the same Guardian can govern an MCP tool call as a native tool call. A2A wrapping arrives in v0.2.0 ([Specification §extend_a2a](../spec/instrument/a2a/extend_a2a.md)). The composition rule: every protocol-spanning message crosses an ACS hook on the way out and on the way back.
 
 ### Does ACS define what policies to enforce?
 
-No. ACS defines the contract for asking the policy and honoring its answer. The policy itself is the deployment's choice: deterministic rules in OPA/Rego, a Cedar policy bundle, an LLM-backed reasoner under the Agent layer, or any combination. v0.1 leaves the policy language unconstrained and the policy library to the deployment.
+No. ACS defines the contract for asking the policy and honoring its answer. The policy itself is the deployment's choice: deterministic rules in OPA/Rego, a Cedar policy bundle, an LLM-backed reasoner under the Agent layer, or any combination. v0.1.0 leaves the policy language unconstrained and the policy library to the deployment.
 
 ### Is ACS just observability?
 
@@ -108,7 +108,7 @@ Observability is now one of three pillars. Trace records what happened, Instrume
 
 No, and no runtime mechanism can. Current research finds essentially every production LLM remains vulnerable to some form of prompt injection. What ACS adds is that the agent acting on injected reasoning becomes visible and gateable, rather than silent.
 
-One caveat belongs here rather than buried further down. The default failure posture is fail-open with a mandatory audit record, so an attacker who can stall or break the Guardian channel converts enforcement into audit. Deployments that will not accept that trade set `on_decision_failure: deny`, and set the startup posture to `refuse` so a failed handshake stops the session instead of starting it unguarded. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
+One caveat belongs here rather than buried further down. Under a fail-open posture, an attacker who can stall or break the Guardian channel converts enforcement into audit. The specification text still makes fail-open the default, but the project has decided to make deny the default ([D-036](../decisions/index.md#d-036-default-the-failure-posture-to-deny)), and the adapters and gateway in release 0.1.5 already deny by default. A deployment on a component that still proceeds sets `on_decision_failure: deny`, and sets the startup posture to `refuse` so a failed handshake stops the session instead of starting it unguarded. See [what happens when the Guardian fails](#what-happens-when-the-guardian-fails).
 
 The mechanism is **deviation detection**. ACS lets the agent declare what it is doing this session (its intent) and requires it to send each proposed action through a Guardian before executing it. The Guardian compares the action against the declared intent when the deployment uses one, the policy library, and the trust basis of the data driving the action. An injected agent generally deviates on at least one of those, and the Guardian denies, modifies, or escalates the action before it runs.
 
@@ -131,7 +131,7 @@ You are building ten things:
 - **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
-- **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default, which is fail-open) and record every decision failure as an audit event, fail-open or fail-closed.
+- **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default in the specification text today, which is fail-open, with deny decided as the new default) and record every decision failure as an audit event, fail-open or fail-closed.
 - **Liveness.** A way to notice that the Guardian has stopped answering.
 - **MCP coverage.** The `protocols/MCP/*` methods for MCP traffic.
 
@@ -173,8 +173,8 @@ The conformance line is between *not having the surface* and *suppressing the ho
 
 No, same principle for all three: ACS specifies the category (you need a transport, you need signed envelopes, you need an identity scheme) and catalogs the options the spec defines; the deployment picks which.
 
-- **Transport.** v0.1 defines HTTP(S) (for SaaS, on-prem, multi-tenant Guardians) and stdio (for IDE-embedded Guardians); gRPC and unix sockets come in a later version ([Specification §16](../spec/instrument/specification.md#16-roadmap)). The handshake declares which is in use, and the envelope and method semantics are transport-agnostic.
-- **Cryptography.** ACS-Core's baseline is HMAC-SHA256, which any deployment can satisfy without infrastructure investment. ACS-Crypto adds asymmetric and post-quantum algorithms (ML-DSA-65 primary, SLH-DSA-128s backup, hybrid composites for transitional deployments) for deployments that need non-repudiation or PQC readiness.
+- **Transport.** Specification v0.1.0 defines HTTP(S) (for SaaS, on-prem, multi-tenant Guardians) and stdio (for IDE-embedded Guardians). Every integration release 0.1.5 ships uses HTTP, including the IDE ones, which reach a local Guardian. gRPC and unix sockets come in a later version ([Specification §16](../spec/instrument/specification.md#16-roadmap)). The handshake declares which is in use, and the envelope and method semantics are transport-agnostic.
+- **Cryptography.** ACS-Core's baseline is HMAC-SHA256, which any deployment can satisfy without infrastructure investment. ACS-Crypto adds asymmetric and post-quantum algorithms (ML-DSA-65 primary, SLH-DSA-128s backup, hybrid composites for transitional deployments) for deployments that need non-repudiation or PQC readiness. Release 0.1.5 ships experimental ML-DSA-65 decision signing only, off by default, with no hybrid and no ACS-Crypto claim. [Sign and verify decisions](./signed-decisions.md) explains what it covers.
 - **Identity.** SPIFFE, OIDC, mTLS, and organizational PKI are all deployment choices; ACS reserves `policy_references[].policy_version` as a stable pointer so audit replay works regardless of the scheme.
 
 **ACS catalogs what exists; the deployment picks what to use.**
@@ -191,18 +191,18 @@ JSON Schemas for every envelope and hook payload are under [`specification/v0.1.
 
 Four steps:
 
-1. **Pick or build a Guardian.** Options: in-house implementation, vendor product, or the open-source [reference implementations](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/reference-implementations).
+1. **Pick or build a Guardian.** Options: in-house implementation, vendor product, or one of the three open-source reference Guardians that [Run a Guardian](./reference-implementations.md#pick-a-guardian) compares.
 2. **Deploy the Guardian in your security perimeter** — the same place you put other policy enforcement infrastructure (VPC, behind your auth boundary).
-3. **Configure each agent platform to point its hook surface at the Guardian** — over HTTP(S) for SaaS, on-prem, and multi-tenant deployments; over stdio for IDE-embedded ones.
+3. **Configure each agent platform to point its hook surface at the Guardian.** The reference adapters do this for Claude Code, Cursor, and NVIDIA NAT through each host's own configuration, and the gateway does it for an OpenAI Responses API client you can't modify. [Connect your agent](./reference-implementations.md#connect-your-agent) lists each one. All of them use HTTP(S).
 4. **Populate the Guardian's policy library and declare your profiles in the handshake** — `acs-core` is mandatory; add `acs-trace`, `acs-inspect`, `acs-provenance`, `acs-crypto`, and `acs-audit` as your deployment needs.
 
 ### Does ACS work in IDE, SaaS, and on-prem deployments?
 
-Yes. The IDE case (coding assistants and IDE copilots) uses stdio transport. The SaaS case uses HTTP(S). The on-prem case can use either, depending on whether the Guardian is in the same process tree or accessed over the network. The handshake negotiates the transport and the profiles. How the transport is authenticated, for example mTLS or bearer tokens over HTTP(S), is the deployment's choice in v0.1, and transport authentication is planned work for v0.2.
+Yes. Specification v0.1.0 allows stdio for the IDE case (coding assistants and IDE copilots), but the IDE integrations release 0.1.5 ships use HTTP to a Guardian on the same machine. The SaaS case uses HTTP(S). The on-prem case can use either, depending on whether the Guardian is in the same process tree or accessed over the network. The handshake negotiates the transport and the profiles. How the transport is authenticated, for example mTLS or bearer tokens over HTTP(S), is the deployment's choice in specification v0.1.0, and transport authentication is planned work for v0.2.0.
 
 ### What is the operational overhead?
 
-Depends on the implementation, and the project has published no benchmark, so this answer describes the shape of the cost rather than quoting numbers.
+Depends on the implementation. The project publishes a [signature benchmark](./signature-benchmark.md) that measures signing alone, and no end-to-end benchmark, so this answer describes the shape of the cost rather than quoting numbers.
 
 Each gated action costs one Guardian round trip. Hooks fire on actions that cross out into the real world (tool calls, memory writes, external messages), so the count scales with action volume rather than token volume. A deterministic Guardian on Cedar or Rego, co-located with the agent, is the cheap case. Latency then depends on where the Guardian runs, how the transport is configured, and how much policy it evaluates, which is why the honest answer is to measure your own deployment rather than trust a range quoted here.
 
@@ -210,35 +210,45 @@ Two costs are easy to miss when estimating. Where the adapter spawns a process p
 
 ### What happens when the Guardian fails?
 
-The default is fail-open with mandatory audit: if the Guardian times out, the transport fails, or the Guardian returns an error, the action proceeds and the bypass is recorded as an audit event. Deployments that prefer fail-closed set `on_decision_failure: deny` in the handshake, and the blocked step is recorded the same way. At session end, the agent should also report how many failures of each kind it recorded. A session that ends without that count reads as unmeasurable. That field governs a session once the handshake succeeds. If the handshake itself fails (the Guardian is unreachable, silent past the connection timeout, or errors without a ServerHello), the out-of-band startup posture applies instead, and it also defaults to `proceed`, so a fail-closed deployment sets it to `refuse` too. A Guardian that explicitly refuses the session has decided, and the refusal is honored. One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. Silence fails open; expressed-but-unresolved concerns fail closed. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative) and [§4.1](../spec/instrument/specification.md#41-handshake-failure-normative).
+A step ends one of three ways. A verified decision is applied. A step that gets no usable answer, because the Guardian timed out, the transport failed, or an error arrived with no decision, follows the failure posture. A refusal or an integrity failure, such as a bad signature or a mismatched id, blocks the step whatever the posture says ([D-040](../decisions/index.md#d-040-split-decision-failures-from-refusals)). The project also decided that an HTTP 429 from the Guardian counts as a refusal ([D-046](../decisions/index.md#d-046-treat-http-429-as-a-refusal)). In release 0.1.5 the gateway follows that decision. The Claude Code, Cursor and NAT adapters treat a 429 with no JSON-RPC body as a decision failure, so it follows the posture. Every decision failure is recorded as an audit event under either posture, and at session end the agent should also report how many failures of each kind it recorded. A session that ends without that count reads as unmeasurable.
+
+The specification text still makes `proceed` the default, which is fail-open. The project leads have decided that the default becomes deny ([D-036](../decisions/index.md#d-036-default-the-failure-posture-to-deny)), and that only the agent's own configuration can opt into `proceed`, because a Guardian can only make the posture stricter ([D-045](../decisions/index.md#d-045-only-the-observed-agents-own-configuration-can-opt-into-proceed)). The specification text does not reflect either decision yet. The adapters and gateway in release 0.1.5 already follow them, and [Run a Guardian](./reference-implementations.md#know-what-happens-when-the-guardian-fails) lists the posture each shipped component uses.
+
+The posture field governs a session once the handshake succeeds. If the handshake itself fails (the Guardian is unreachable, silent past the connection timeout, or errors without a ServerHello), the out-of-band startup posture applies instead. A Guardian that explicitly refuses the session has decided, and the refusal is honored. One subtlety: when the Guardian responds with DEFER and the resolution itself times out, that fails closed by default. See [Specification §6.4](../spec/instrument/specification.md#64-honoring-decisions-normative) and [§4.1](../spec/instrument/specification.md#41-handshake-failure-normative).
 
 ```
-              ┌────────────────┐
-              │ Hook submitted │
-              └────────────────┘
-                       │
-                       ▼
-              ┌────────────────┐
-              │   Guardian     │
-              └────────────────┘
-                │            │
-       responds │            │  no response in time
-       in time  │            │  (timeout / error / silence)
-                ▼            ▼
-   ┌──────────────────┐  ┌──────────────────────────────┐
-   │  Apply decision  │  │  Decision failure            │
-   │                  │  │                              │
-   │  allow / deny /  │  │  default:  proceed           │
-   │  modify / ask /  │  │            + audit event     │
-   │  defer           │  │                              │
-   │                  │  │  opt-in:   deny  (blocked)   │
-   │                  │  │            + audit event     │
-   └──────────────────┘  └──────────────────────────────┘
+                         ┌────────────────┐
+                         │ Hook submitted │
+                         └────────────────┘
+                                  │
+                                  ▼
+                         ┌────────────────┐
+                         │   Guardian     │
+                         └────────────────┘
+                                  │
+          ┌───────────────────────┼─────────────────────────┐
+          │                       │                         │
+ verified │      no usable answer │                         │ refusal or
+ decision │  (timeout / transport │                         │ integrity failure
+          │   failure / error,    │                         │ (bad signature,
+          │  adapters: bare 429)  │                         │  mismatched id,
+          ▼                       ▼                         ▼  gateway: 429)
+┌──────────────────┐  ┌──────────────────────────────┐  ┌──────────────────────┐
+│  Apply decision  │  │  Decision failure            │  │  Blocked             │
+│                  │  │                              │  │  + audit event       │
+│  allow / deny /  │  │  deny (decided default,      │  │                      │
+│  modify / ask /  │  │  not yet in the spec text)   │  │  whatever the        │
+│  defer           │  │                              │  │  posture says        │
+│                  │  │  proceed only when the       │  │                      │
+│                  │  │  agent's own config says so  │  │                      │
+│                  │  │                              │  │                      │
+│                  │  │  + audit event either way    │  │                      │
+└──────────────────┘  └──────────────────────────────┘  └──────────────────────┘
 ```
 
 ### Does ACS handle multi-tenancy?
 
-The wire reserves an optional `tenant_id` field in v0.1. Detailed multi-tenant isolation (per-tenant policy scoping, SessionContext isolation, cross-tenant A2A rules) is deferred to v0.2 when SaaS Guardian providers need it. The v0.1 commitment is the field, so deployments adopting ACS today do not face a breaking-change migration when isolation rules ship.
+The wire reserves an optional `tenant_id` field in v0.1.0. Detailed multi-tenant isolation (per-tenant policy scoping, SessionContext isolation, cross-tenant A2A rules) is deferred to v0.2.0 when SaaS Guardian providers need it. The v0.1.0 commitment is the field, so deployments adopting ACS today do not face a breaking-change migration when isolation rules ship.
 
 ### How does ACS integrate with my existing security stack?
 
@@ -257,8 +267,8 @@ ACS exposes control points and audit surface; the deployment's policy library de
 | ASI03 Identity & Privilege Abuse | Core hook envelopes carry replay protection and a signature using a per-session HKDF-derived key; `subagentStart.intent_derivation` lets policy deny delegation that would widen the parent's authority |
 | ASI04 Agentic Supply Chain Vulnerabilities | AgBOM inventories components and `agbom/changed` is decision-eligible on mutation; `skillRegister` exposes the definition, `declared_capabilities`, digest, and `registration_provenance` for vetting before any action runs, and `skillLoad` correlates each activation to an approved `(skill_id, digest)` |
 | ASI05 Unexpected Code Execution (RCE) | Process, code, and shell actions that escape the agent's reasoning context cross `toolCallRequest` before execution, so policy sees the exact command or code proposed |
-| ASI06 Memory & Context Poisoning | `memoryStore` and `memoryContextRetrieval` gate memory writes and reads; with ACS-Provenance, lineage travels with stored content and `preCompact` / `postCompact` bind a summary to the entries it compacts |
-| ASI07 Insecure Inter-Agent Communication | In-process spawning crosses the decision-eligible `subagentStart`; `subagentStop` records termination when emitted. Core hook envelopes carry replay protection and a baseline signature; A2A wrapping (`protocols/A2A/*`) is reserved for v0.2 |
+| ASI06 Memory & Context Poisoning | `memoryStore` and `memoryContextRetrieval` gate memory writes and reads. With ACS-Provenance, lineage travels with stored content and `preCompact` / `postCompact` bind a summary to the entries it compacts |
+| ASI07 Insecure Inter-Agent Communication | In-process spawning crosses the decision-eligible `subagentStart`. `subagentStop` records termination when emitted. Core hook envelopes carry replay protection and a baseline signature. A2A wrapping (`protocols/A2A/*`) is reserved for v0.2.0 |
 | ASI08 Cascading Failures | A Guardian `deny` at `subagentStart` stops a spawn cascade at the boundary; parent and child session references preserve the propagation path in the audit record |
 | ASI09 Human-Agent Trust Exploitation | ASK routes decisions to a human approver as a wire-level primitive; `agentResponse` gates agent output before delivery and records the proposed response together with the Guardian's decision |
 | ASI10 Rogue Agents | Handshake identity and, with ACS-Inspect, an AgBOM baseline of the agent's composition; continuous hook traffic makes behavior observable, and the Guardian can deny at any decision-eligible hook |
@@ -321,7 +331,7 @@ The composition story is the practical payoff: one Guardian can run FIDES, IBAC,
 
 ### Where do I plug in a new paradigm?
 
-ACS is intentionally extensible without wire surgery. A new paradigm names itself a key in `policy_data` (conventionally lowercase, e.g. `"my-paradigm": { ... }`), defines its `reason_codes` vocabulary, optionally proposes a conformance profile if it needs a declarable capability tier, and writes a binding to one of the reference policy engines (OPA/Rego is the v0.1 reference). The wire contract stays neutral. See [Spec Review Principle 4](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SPEC_REVIEW_PRINCIPLES.md#4-the-wire-is-paradigm-neutral-new-paradigms-ride-existing-elements-first).
+ACS is intentionally extensible without wire surgery. A new paradigm names itself a key in `policy_data` (conventionally lowercase, e.g. `"my-paradigm": { ... }`), defines its `reason_codes` vocabulary, optionally proposes a conformance profile if it needs a declarable capability tier, and writes a binding to one of the reference policy engines (OPA/Rego is the v0.1.0 reference). The wire contract stays neutral. See [Spec Review Principle 4](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SPEC_REVIEW_PRINCIPLES.md#4-the-wire-is-paradigm-neutral-new-paradigms-ride-existing-elements-first).
 
 ### Will ACS adopt my paradigm into the core spec?
 
@@ -337,12 +347,12 @@ When a paradigm needs a wire signal that no existing field can carry, yes. That 
 
 ACS-Core (mandatory), and six optional profiles: ACS-Trace, ACS-Inspect, ACS-Inspect-Dynamic, ACS-Provenance, ACS-Crypto, ACS-Audit. Full content lock and the design record are in [Conformance Profiles](../spec/conformance.md) and the [v0.1.0 schemas](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0).
 
-### What is coming in v0.2?
+### What is coming in v0.2.0?
 
-[Specification §16](../spec/instrument/specification.md#16-roadmap) and the [v0.2.0 milestone](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/15) are the live list. The highlights: streaming and batching semantics, A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1), multi-tenant isolation, the sensitivity-tier timeout model, recursive ASK and quorum, a policy-author attestation profile, and a Cedar binding.
+[Specification §16](../spec/instrument/specification.md#16-roadmap) and the [v0.2.0 milestone](https://github.com/GenAI-Security-Project/agent-control-standard/milestone/15) are the live list. The highlights: streaming and batching semantics, A2A wrapping (the `protocols/A2A/*` namespace is reserved in v0.1.0), multi-tenant isolation, the sensitivity-tier timeout model, recursive ASK and quorum, a policy-author attestation profile, and a Cedar binding.
 
-Conformance work is already underway in the open milestones: bringing the reference Guardian to ACS-Core conformance and the AGT interoperability benchmark. The one-page [conformance claim template](../spec/conformance-claim-template.md) is available for implementers to fill in.
+Release 0.1.5 already ships three test suites with the reference implementations: the adapters' emission-conformance check, the AGT conformance harness, and the Go Guardian's conformance map. Each proves something narrower than an ACS-Core claim, as [Run a Guardian](./reference-implementations.md#check-what-the-test-suites-prove) explains. The one-page [conformance claim template](../spec/conformance-claim-template.md) is available for implementers to fill in.
 
 ### How do I follow or contribute?
 
-The repo is [GenAI-Security-Project/agent-control-standard](https://github.com/GenAI-Security-Project/agent-control-standard). Questions and design conversation happen in [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions) and on Slack (`#team-genai-asi-acs-general` on owasp.slack.com). Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md). Issues are open across all three pillars.
+The repo is [GenAI-Security-Project/agent-control-standard](https://github.com/GenAI-Security-Project/agent-control-standard). Questions and design conversation happen in [GitHub Discussions](https://github.com/GenAI-Security-Project/agent-control-standard/discussions) and on Slack (`#team-genai-asi-acs-general` on owasp.slack.com). Contribution guidance is in [CONTRIBUTING.md](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md). The [Decision Log](../decisions/index.md) records what the project has decided and why, including decisions that the specification text does not reflect yet. Issues are open across all three pillars.

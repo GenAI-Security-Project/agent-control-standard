@@ -134,10 +134,10 @@ hooks:
     # Claude Code's id for this one tool call, the same on PreToolUse and
     # PostToolUse, so the result can name the request it answers.
     call_id: $.tool_use_id
-    # THIS GATE'S MATCHER STAYS SINGLE-TOOL WHILE `outputs.from` IS A SINGLE
-    # PATH, and that is the fact to read before widening `^Bash$` in
-    # settings.json to match the request gate's `^(Bash|WebFetch)$`. JSON
-    # cannot carry a comment, so this entry is the only place it can be
+    # THIS GATE'S MATCHER NAMES ONLY THE TOOLS `outputs` HAS A PATH FOR, and
+    # that is the fact to read before widening `^(Bash|Read)$` in
+    # settings.json to match the request gate's `^(Bash|WebFetch|Read)$`.
+    # JSON cannot carry a comment, so this entry is the only place it can be
     # written down.
     #
     # Measured end to end: a `WebFetch` result carries no `stdout`, so
@@ -151,9 +151,12 @@ hooks:
     #
     # So widening this matcher costs a fail-open on every fetch result and buys
     # nothing: no gate in the pinned bundle reads a tool's output for a fetch.
-    # A second tool shape belongs here once `outputs` can name a path per tool,
-    # the way `mapping.yaml` already names the policy-target argument per tool
-    # for the request gate -- not before.
+    # A second tool shape goes under `outputs.by_tool`, the way `mapping.yaml`
+    # names the policy-target argument per tool for the request gate: `from`
+    # and `within` above are the default, and a tool listed under `by_tool`
+    # uses its own pair instead. An entry there holds exactly `from` and
+    # `within` and inherits nothing from the default, so a path written for
+    # Bash's result never applies to a tool whose result does not have it.
     outputs:
       from: $.tool_response.stdout
       within: $.tool_response
@@ -162,6 +165,27 @@ hooks:
       # produced, because the policy evaluates stdout alone.
       companions:
         - $.tool_response.stderr
+      by_tool:
+        # Read's result on a text file, captured with a PostToolUse probe hook
+        # on Claude Code 2.1.316 and 2.1.325: {type, file: {filePath, content,
+        # numLines, startLine, totalLines}}. `within` is the whole object, so a
+        # replacement keeps `type` and every `file` field. Claude Code drops a
+        # replacement in any other shape and delivers the original (#330).
+        #
+        # TEXT ONLY. Read on an image or a PDF returns `file.base64`, and on a
+        # notebook `file.cells`. Neither carries `file.content`, so the payload
+        # builder throws and the session's posture decides. Measured on 2.1.325
+        # with this settings.json:
+        #   - `proceed`: the output reaches the model, and the audit log
+        #     records a `host_configuration` fail-open.
+        #   - `deny`: the hook exits 2. Claude Code does not treat that as a
+        #     block at PostToolUse (#375), so the output still reaches the
+        #     model while the audit log records it as blocked.
+        # Governing these types needs a replacement in each type's own shape,
+        # and is #568, the follow-up to #330.
+        Read:
+          from: $.tool_response.file.content
+          within: $.tool_response
     # Claude Code fires a SEPARATE PostToolUseFailure event for the failing
     # case (present in 2.1.227's hook schema, not wired in this slice), so
     # this event genuinely means success. A literal, not a field read: the

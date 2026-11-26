@@ -17,7 +17,7 @@ A v0.1.0-conformant deployment implements **ACS-Core** (the Instrument baseline)
 - **Observed Agent**: the LLM-backed system being monitored. Sends hook traffic. Enforces decisions.
 - **Guardian Agent**: the policy enforcement point. Two internal layers:
     - **Deterministic layer** (OPA/Rego, Cedar): always runs first.
-    - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates. Optional in v0.1; deterministic-only deployments are fully conformant.
+    - **Agent layer** (LLM): invoked only when the deterministic layer's chain config delegates. Optional in v0.1.0. Deterministic-only deployments are fully conformant.
 
 ## Identity
 
@@ -37,7 +37,7 @@ Canonical definitions live in [Concepts › Session lifecycle](../concepts/sessi
 
 ## Provenance
 
-Every data-bearing field may carry a **Provenance** object (`provenance_id`, `origin`, `source_id`, `derived_from` (lineage)) populated by deterministic framework code at channel boundaries, never by the LLM. v0.1 keeps trust *classification* off the mandatory wire surface: Guardians derive it from `origin` + `source_id` against local policy.
+Every data-bearing field may carry a **Provenance** object (`provenance_id`, `origin`, `source_id`, `derived_from` (lineage)) populated by deterministic framework code at channel boundaries, never by the LLM. v0.1.0 keeps trust *classification* off the mandatory wire surface: Guardians derive it from `origin` + `source_id` against local policy.
 
 Field-level Provenance is required under the **ACS-Provenance** profile and load-bearing for FIDES, CaMeL, and AARM-style enforcement. See [Concepts › Provenance](../concepts/provenance.md) and [§7](../spec/instrument/specification.md#7-provenance).
 
@@ -61,11 +61,20 @@ Once an Intent is established, `Intent.parsed` is immutable to the runtime LLM a
 | OS Tools | OS calls or keyboard/mouse manipulation (CUA agents) | ✓ | ✗ | n/a |
 | LLM | Reasoning / sub-task model | ✓ | ✓ | n/a |
 
-![Agent environment](../assets/agent_env.png "Agent environment")
+```mermaid
+flowchart LR
+    U["User"] <--> OA["Observed Agent"]
+    PEER["Other agents"] <-->|"A2A"| OA
+    RC["Remote context<br/>tools, memory, knowledge, prompts"] <-->|"MCP"| OA
+    OA <--> LOCAL["Local tools, memory, knowledge"]
+    OA <-->|"ACS hooks and decisions"| GA["Guardian Agent"]
+    GA --> TR["Trace<br/>OpenTelemetry, OCSF"]
+    GA --> AB["AgBOM<br/>CycloneDX, SPDX, SWID"]
+```
 
 ## A2A and MCP
 
-ACS carries MCP and A2A intact. Wrapped MCP messages flow through `protocols/MCP/*` (e.g. `protocols/MCP/tools/call`). ACS also proposes security extensions for [MCP](../spec/instrument/extend_mcp.md) and [A2A](../spec/instrument/a2a/extend_a2a.md) for native observability support. The `protocols/A2A/*` namespace is reserved in v0.1; the wrapping specification arrives in v0.2.
+Specification v0.1.0 defines MCP wrapping through `protocols/MCP/*`, for example `protocols/MCP/tools/call`, and plans the same for A2A. ACS also proposes security extensions for [MCP](../spec/instrument/extend_mcp.md) and [A2A](../spec/instrument/a2a/extend_a2a.md) for native observability support. The `protocols/A2A/*` namespace is reserved in v0.1.0, and the wrapping specification is planned for v0.2.0. The reference adapters in release 0.1.5 send MCP tool calls through the generic tool hooks and wrap no other MCP traffic, as the [adapters README](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/adapters/README.md#the-acs-v010-emission-conformance-check) explains.
 
 ## Read Next
 

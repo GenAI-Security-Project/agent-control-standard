@@ -1,7 +1,7 @@
-# Makes every pull request into integration say, for each issue it names, whether it closes
-# the issue or contributes to it. Early feedback for contributors: the roadmap's delivery
-# verification is what stops a false claim, so this catches ordinary mistakes and does not
-# try to be airtight.
+# Makes every pull request into integration or a release branch say, for each issue it
+# names, whether it closes the issue or contributes to it. Early feedback for contributors:
+# the roadmap's delivery verification is what stops a false claim, so this catches ordinary
+# mistakes and does not try to be airtight.
 #
 # pull_request_target is used so a fork pull request gets the same answer. That trigger runs
 # with the base repository's token, so this job checks out main, never the pull request's
@@ -16,7 +16,7 @@ on:
   # zizmor flags every pull_request_target. The paragraph above is why this one is safe.
   pull_request_target: # zizmor: ignore[dangerous-triggers]
     types: [opened, edited, synchronize, reopened]
-    branches: [integration]
+    branches: [integration, "release/*"]
 
 permissions: {}
 

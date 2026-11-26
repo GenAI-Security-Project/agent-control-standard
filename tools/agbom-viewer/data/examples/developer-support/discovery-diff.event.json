@@ -1,0 +1,89 @@
+{
+  "diff": {
+    "added": [
+      {
+        "id": "internal-code-review-tool",
+        "type": "tool",
+        "name": "Review a code change",
+        "version": "2.3",
+        "provider": "Example Developer Productivity",
+        "registration_provenance": {
+          "provenance_id": "discovered-review-tool",
+          "origin": "tool_output",
+          "source_id": "mcp-review-list-tools",
+          "derived_from": [
+            "config-review-mcp"
+          ]
+        },
+        "tool_fields": {
+          "capability": "code.review"
+        }
+      },
+      {
+        "id": "code-review-backend",
+        "type": "model",
+        "name": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        "version": "2e1fd397",
+        "provider": "Example Model Hosting",
+        "endpoint": "https://coding.models.example.org/api",
+        "registration_provenance": {
+          "provenance_id": "registered-review-backend",
+          "origin": "system",
+          "source_id": "review-deployment-record",
+          "derived_from": [
+            "discovered-review-tool"
+          ]
+        },
+        "model_fields": {
+          "context_window": 32768
+        }
+      }
+    ],
+    "removed": [
+      {
+        "id": "bootstrap-handbook",
+        "type": "knowledge_source"
+      }
+    ],
+    "changed": [
+      {
+        "id": "internal-review-mcp",
+        "type": "mcp_server",
+        "before": {
+          "id": "internal-review-mcp",
+          "type": "mcp_server",
+          "name": "Internal Review MCP",
+          "version": "1.4",
+          "endpoint": "https://review.example.org/mcp",
+          "registration_provenance": {
+            "provenance_id": "config-review-mcp",
+            "origin": "system",
+            "source_id": "support-mcp.yaml"
+          },
+          "mcp_server_fields": {
+            "tools": []
+          }
+        },
+        "after": {
+          "id": "internal-review-mcp",
+          "type": "mcp_server",
+          "name": "Internal Review MCP",
+          "version": "1.4",
+          "endpoint": "https://review.example.org/mcp",
+          "registration_provenance": {
+            "provenance_id": "config-review-mcp",
+            "origin": "system",
+            "source_id": "support-mcp.yaml"
+          },
+          "mcp_server_fields": {
+            "tools": [
+              "internal-code-review-tool"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "reason": "discovery",
+  "trigger_step_id": "mcp-review-list-tools"
+}

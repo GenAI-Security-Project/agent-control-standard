@@ -1,0 +1,37 @@
+{
+  "associations": [
+    {
+      "inventory": "session-start.agbom.json",
+      "modelId": "support-triage-model",
+      "consumerId": "developer-support-assistant",
+      "relationship": "Agent-selectable triage model",
+      "recordType": "Illustrative configuration record",
+      "identifier": "Qwen/Qwen2.5-0.5B-Instruct",
+      "revision": "7ae55760",
+      "aibom": "aiboms/Qwen_Qwen2.5-0.5B-Instruct_aibom_1_7.json",
+      "aibomComponentRef": "pkg:huggingface/Qwen/Qwen2.5-0.5B-Instruct@7ae55760"
+    },
+    {
+      "inventory": "after-discovery.agbom.json",
+      "modelId": "support-triage-model",
+      "consumerId": "developer-support-assistant",
+      "relationship": "Agent-selectable triage model",
+      "recordType": "Illustrative configuration record",
+      "identifier": "Qwen/Qwen2.5-0.5B-Instruct",
+      "revision": "7ae55760",
+      "aibom": "aiboms/Qwen_Qwen2.5-0.5B-Instruct_aibom_1_7.json",
+      "aibomComponentRef": "pkg:huggingface/Qwen/Qwen2.5-0.5B-Instruct@7ae55760"
+    },
+    {
+      "inventory": "after-discovery.agbom.json",
+      "modelId": "code-review-backend",
+      "consumerId": "internal-code-review-tool",
+      "relationship": "Tool backend",
+      "recordType": "Illustrative deployment record",
+      "identifier": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+      "revision": "2e1fd397",
+      "aibom": "aiboms/Qwen_Qwen2.5-Coder-1.5B-Instruct_aibom_1_7.json",
+      "aibomComponentRef": "pkg:huggingface/Qwen/Qwen2.5-Coder-1.5B-Instruct@2e1fd397"
+    }
+  ]
+}

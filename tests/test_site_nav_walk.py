@@ -238,7 +238,7 @@ EXTERNAL_SECTION_ROW = """<li class="md-nav__item md-nav__item--section md-nav__
 
 # The landing pane in the shape the renderer emits.
 LANDING_PANE = """<nav id="site-nav" aria-label="Navigation"><ul>
-<li><details open><summary><a href="./" aria-current="page">Home</a></summary><ul>
+<li class="nav-home"><a href="./" aria-current="page">Home</a><details open><summary aria-label="Home sections"></summary><ul>
 <li><a href="#problem">The problem</a></li>
 <li><a href="#roadmap">Roadmap</a></li>
 </ul></details></li>
@@ -251,7 +251,7 @@ LANDING_PANE = """<nav id="site-nav" aria-label="Navigation"><ul>
 </ul></details></li>
 <li class="nav-section"><h2>External resources</h2><ul>
 <li><a href="https://github.com/GenAI-Security-Project/agent-control-standard">GitHub</a></li>
-<li><a href="https://owasp.slack.com">Slack</a></li>
+<li><a href="https://owasp.org/slack/invite">Slack</a></li>
 </ul></li>
 </ul></nav>
 """
@@ -319,12 +319,21 @@ def test_landing_walk_home_summary_link_is_one_group_row():
     assert [row for row in rows if row[1] == "Home"] == [rows[0]]
 
 
+def test_landing_walk_accepts_legacy_nested_home_summary_link():
+    """Keep verify_site_nav compatible with cached CDN copies during rollout."""
+    legacy = LANDING_PANE.replace(
+        '<li class="nav-home"><a href="./" aria-current="page">Home</a><details open><summary aria-label="Home sections"></summary>',
+        '<li><details open><summary><a href="./" aria-current="page">Home</a></summary>',
+    )
+    assert walk_landing(legacy, LANDING_ROOT) == walk_landing(LANDING_PANE, LANDING_ROOT)
+
+
 def test_landing_walk_section_row_from_heading():
     rows = walk_landing(LANDING_PANE, LANDING_ROOT)
     assert rows[-3:] == [
         (1, "External resources", None, False, True),
         (2, "GitHub", REPO_URL, False, False),
-        (2, "Slack", "https://owasp.slack.com", False, False),
+        (2, "Slack", "https://owasp.org/slack/invite", False, False),
     ]
 
 
@@ -402,10 +411,11 @@ def test_patterns_accept_the_pane_and_reject_markup_and_lookalike_hosts():
     for internal in ("README.md", "concepts/identity.md", "topics/faq.md"):
         assert not EXTERNAL.match(internal)
 
-    for good in (REPO_URL, REPO_URL + "/milestones", "https://owasp.slack.com", "https://github.com"):
+    for good in (REPO_URL, REPO_URL + "/milestones", "https://owasp.org/slack/invite", "https://github.com"):
         assert EXTERNAL_URL.match(good)
     for bad in ("http://github.com/x", "https://github.com.evil.example/", "https://evilgithub.com/",
-                "https://github.com@evil.example/", "https://owasp.slack.com.evil.example",
+                "https://github.com@evil.example/", "https://owasp.org.evil.example/slack/invite",
+                "https://owasp.org/", "https://owasp.org/slack/invitex", "https://owasp.slack.com",
                 "https://GITHUB.com/x", "https://example.org/", "https://github.com\n"):
         # A prefix pattern, so match() is the call. The \Z tail still refuses a newline.
         assert not EXTERNAL_URL.match(bad)

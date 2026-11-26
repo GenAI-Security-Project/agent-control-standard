@@ -1,6 +1,6 @@
 # ACS reference implementation with Microsoft's Agent Governance Toolkit
 
-This tree shows what Microsoft's [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (AGT) looks like when it talks to agent clients over the [OWASP Agent Control Standard](../../README.md) (ACS) wire contract.
+This tree shows what Microsoft's [Agent Governance Toolkit](https://github.com/microsoft/agent-governance-toolkit) (AGT) looks like when it talks to agent clients over the [OWASP GenAI Security Project Agent Control Standard](../../README.md) (ACS) wire contract.
 
 ### NOTE: This current work represents a Proof of Concept, not a production system
 
@@ -148,7 +148,7 @@ mkdir -p .claude
 cp hosts/claude-code/settings.json .claude/settings.json
 ```
 
-This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash` and `WebFetch` tools, before the tool runs. `PostToolUse` fires for the `Bash` tool, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The [Claude Code host README](hosts/claude-code/README.md) has the details.
+This registers `hosts/claude-code/acs-hook.ts` on two Claude Code hook events. `PreToolUse` fires for the `Bash`, `WebFetch` and `Read` tools, before the tool runs. `PostToolUse` fires for the `Bash` and `Read` tools, after the tool runs. Both matchers are anchored, so no other tool is intercepted. The shipped file names the hook through `$CLAUDE_PROJECT_DIR`, which resolves when the project is this tree. From any other project, replace that variable with this tree's absolute path. The `PreToolUse` entry sets `onFailure` to `block`. Claude Code v2.1.295 or later then denies the tool call when that hook fails or times out. An older client does not implement the field, and the tool runs. The [Claude Code host README](hosts/claude-code/README.md) has the details.
 
 2. Start Claude Code.
 
@@ -272,7 +272,7 @@ bun run packages/guardian/src/audit-to-otlp.ts .acs/audit.jsonl .acs/otel-audit.
 
 The converter prints how many spans it wrote. Its spans carry the same session and request ids as the Guardian's, so you can read both files as one trace.
 
-Run the converter after the agent session has ended. It refuses to write to a file that already exists, so it can't append into the audit log or the Guardian's trace. Delete `.acs/otel-audit.jsonl` first if you're running it again. If its summary shows a non-zero replay count, those were steps that proceeded without a decision that this trace doesn't show yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)).
+Run the converter after the agent session has ended. It refuses to write to a file that already exists, so it can't append into the audit log or the Guardian's trace. Delete `.acs/otel-audit.jsonl` first if you're running it again. If its summary shows a non-zero replay count, those were steps that proceeded without a decision that this trace doesn't show.
 
 **7. Check it with a real collector (optional).** If you want an independent check that the output is valid OTLP, install [otelcol-contrib](https://github.com/open-telemetry/opentelemetry-collector-releases/releases) 0.162.0, which the repository was tested with, and send the spans to it, not to a file. Check that nothing else is listening first: `lsof -nP -iTCP:4318 -sTCP:LISTEN` should print nothing.
 
@@ -302,7 +302,7 @@ Repeat step 3. The collector writes what it received to `.acs/otel-collector-tra
 
 Stop the collector with Ctrl-C or `docker stop acs-otelcol`, never `kill -9` or `docker kill`. A hard kill can leave half a line, and the next batch the restarted collector writes is joined onto it. The step 5 reader skips that combined line and tells you, but the spans in it are lost.
 
-The collector appends across restarts. Natively under `umask 077` the file is `0600`. In a container it's `0644`, and the `0700` `.acs` directory is what keeps other users out ([issue #71](https://github.com/GenAI-Security-Project/agent-control-standard/issues/71) tracks file modes).
+The collector appends across restarts. Natively under `umask 077` the file is `0600`. In a container it's `0644`, and the `0700` `.acs` directory is what keeps other users out.
 
 The `export` lines from step 1 keep the spans off any `HTTP_PROXY`, and so does the inline prefix on the Guardian's line above, because some Bun versions read these variables only when a process starts. The Guardian also adds a loopback endpoint to whichever of `NO_PROXY` and `no_proxy` you set, which takes effect on Bun 1.3.14 and later. When a proxy is set and loopback isn't exempt, it prints a warning on stderr when it starts. `OTEL_EXPORTER_OTLP_*HEADERS` variables still add headers to every send, so unset them if you don't mean them.
 
@@ -312,7 +312,7 @@ Verified on macOS (arm64): natively with otelcol-contrib 0.162.0, and with the D
 
 **Run it again.** Every output here except the converter's appends, so a second run on the same `.acs` doubles every count, and the converter refuses to run at all. Stop the Guardian and the collector first, with Ctrl-C or `docker stop acs-otelcol`. A process that is still running keeps writing into the deleted file, and its spans are lost without an error. Then delete it: `rm -rf .acs && mkdir -p .acs && chmod 700 .acs`.
 
-**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability`, because the shim doesn't send it yet ([issue #274](https://github.com/GenAI-Security-Project/agent-control-standard/issues/274)). They carry `acs.request_id_ref` on a result when the host supplied its call id. The committed sample drives the Guardian directly, so it carries `acs.capability`, and `acs.request_id_ref` on its results. Spans also lack `acs.evaluator` until the Guardian sends `metadata.evaluator` (PR #229).
+**What this is, and isn't.** The exporter covers the two hook methods this Guardian evaluates, `steps/toolCallRequest` and `steps/toolCallResult`. It isn't an ACS-Trace conformance claim. Traces driven through the shim also lack `acs.capability`, because the shim doesn't send it. They carry `acs.request_id_ref` on a result when the host supplied its call id. The committed sample drives the Guardian directly, so it carries `acs.capability`, and `acs.request_id_ref` on its results. Spans also lack `acs.evaluator`, because this Guardian doesn't send `metadata.evaluator`.
 
 The trace files, the audit log and the collector's port can be written by any process running as you, the observed agent included, and in a container by other containers on the same Docker network, so the output isn't tamper-evident. `service.name` (`acs-reference-guardian`, `acs-reference-audit-converter`) is a label each writer sets for itself, not authentication, and loopback isn't authentication either. These labels belong to the reference implementation, not to the ACS specification.
 
@@ -435,7 +435,10 @@ The audit log and the envelope log cannot be joined on `session_id`. The audit l
 
 ## The scenarios the tests check
 
-The suite has 68 test files. Most of them drive a real Guardian, the real host shim and the pinned policy bundle. The scenarios below are grouped by what they prove. The file names are the place to read the exact assertions.
+The suite has 69 test files. Most tests use a real Guardian, the host shim, and the pinned policy bundle.
+The scenarios below are grouped by the behavior under test. Read each test file for the exact assertions.
+
+The Go Guardian replays this Guardian's recorded answers. A change to a path in `DecidingPaths` (`../agt-go/internal/tscases/tscases.go`) needs a new recording: run `scripts/record-ts-cases.sh` in `../agt-go`. If the new answers differ, the Go Guardian is changed to match them, or `../agt-go/docs/differences.md` records the difference. Recording needs Go and Bun. A change to `agt_ref` in `agt.lock` also needs the same commit in `../agt-go/agt-native.lock`, where the Go build pins the AGT it compiles.
 
 **Policy decisions over the wire**
 
@@ -452,6 +455,7 @@ The suite has 68 test files. Most of them drive a real Guardian, the real host s
 - A modification the host cannot apply, or a `modified_content` replacement, is refused and the refusal withholds. (same file)
 - Each ACS decision renders to the exact `permissionDecision` shape Claude Code accepts. A `defer` renders as `deny`, because Claude Code has no deferral state. (`hosts/claude-code/test/wire-shape.test.ts`)
 - The shim exits with the blocking code on a payload it cannot parse, a missing session id, a traversal-shaped session id, or a hookmap that declares an output the host does not accept. (`hosts/claude-code/test/posture.test.ts`)
+- A `PreToolUse` hook that cannot start, crashes, exits unexpectedly, prints JSON that does not parse, or times out denies the tool call. The shipped settings set `onFailure` to `block`. The same outcomes proceed when that field is absent. (`hosts/claude-code/test/hook-failure.test.ts`)
 
 **Host behaviour, OpenCode**
 
@@ -495,11 +499,12 @@ These are known limits of the tree as it stands. None is fixed.
 - **Memory and disk grow without bound.** The Guardian's session store keeps at most 1024 sessions and evicts the least recently written one, but it bounds sessions, not the steps within one. The envelope log, the audit log and the session-context log have no rotation and no size cap. A long-lived Guardian grows until something else stops it.
 - **Log writes sit on the decision path.** The Guardian writes two synchronous file appends per request in a single-threaded server. A slow disk blocks every in-flight decision.
 - **The wire is unauthenticated.** See [What this project is, and is not](#what-this-project-is-and-is-not). Loopback by default is the only protection.
-- **A well-formed forgery is trusted.** The Guardian checks a request against the schema and nothing else, so a forged or replayed request that passes the schema is decided, recorded on the trace under the ids it carries, and appended to that session's hash chain. Signature, replay and timestamp checks arrive with PR #229. Until then, a trace's request pairs, and the chain, are only as trustworthy as access to the Guardian's port.
+- **A well-formed forgery is trusted.** The Guardian checks a request against the schema and nothing else, so a forged or replayed request that passes the schema is decided, recorded on the trace under the ids it carries, and appended to that session's hash chain. This Guardian has no signature, replay or timestamp checks, so a trace's request pairs, and the chain, are only as trustworthy as access to the Guardian's port.
 - **The egress gate has three measured soft spots.** A shell command whose destination the extractor cannot parse falls through to `allow`, not `deny`. With the shipped allowlist, any command whose text contains an off-list URL is denied, whether or not it reaches that URL. A `WebFetch` URL reaches AGT's gate with no parsing, so four userinfo-style URL shapes pass on the fetch route and fail on the shell route. Closing the last one means editing a `.rego` file, which this project does not do.
 - **An `ask` never carries `ask_details`.** The Guardian's decision type has no such field. Every `ask` fails the response schema. A `defer` would fail the same way if any AGT verdict mapped to it.
 - **The handshake is not negotiated.** The Guardian returns constants and never reads the ClientHello. Neither side declares ACS profiles.
-- **The result gate assumes one output shape per hook.** A `WebFetch` result has no `stdout`, so the result gate is not widened to it. Under the default posture, widening it would proceed on every fetch result with an audit entry. This is recorded and unassigned.
+- **The result gate reads only the output shapes the hookmap names.** `outputs.by_tool` gives `Read` its own path, `file.content`. A `WebFetch` result has neither `stdout` nor an entry there, so the result gate is not widened to it. Under the default posture, widening it would proceed on every fetch result with an audit entry. This is recorded and unassigned.
+- **`Read` is governed on text only.** An image or a PDF comes back as `file.base64` and a notebook as `file.cells`, with no `file.content`, so the result gate cannot build a request and the posture decides. Measured on Claude Code 2.1.325: under `proceed` the output reaches the model with a `host_configuration` audit entry. Under `deny` the hook exits 2, Claude Code still delivers the output, and the audit entry says it was blocked (#375). #568, the follow-up to #330, covers these types.
 - **`modified_content` has no builder.** The Guardian never emits it and both hosts refuse it.
 - **The audit sequence number can collide.** Two Claude Code hooks that run at the same time read the same log length and write the same `seq`.
 - **Session state is measured in pieces.** No single test drives a real Guardian over two steps against the real bundle and asserts the labels, because AGT propagates the labels it is given and originates none.
@@ -509,7 +514,7 @@ These are known limits of the tree as it stands. None is fixed.
 
 These findings are open on this tree. They are recorded here so a reader does not rediscover them.
 
-**From the last review in the standalone repository** ([afogel/ACS_reference_implementation#30](https://github.com/afogel/ACS_reference_implementation/pull/30)):
+**From the last review in the standalone repository, before the code moved here:**
 
 1. `annotateEgressDestination` in `packages/guardian/src/annotate-egress.ts` takes two parameters it never reads and a third typed `unknown`. The ask is a pure collaborator that takes `{ rawCommand, args }` and returns a typed answer, with a thin AGT-shaped adapter around it.
 2. The same module owns command-to-origin extraction and a hand-copied list of four destination paths that `egress.rego` also reads. The two lists can drift. The ask is to split the stand-down check out of the extractor.
@@ -541,7 +546,7 @@ bun run conformance   # prints the mapping table, the coverage matrix and the tr
 bun run watch:upstream # diffs AGT's eight contract surfaces against upstream main; needs network
 ```
 
-The suite reads this repository's own schemas. It expects `specification/v0.1.0/response-envelope.json` to accept a ServerHello as a result, which the envelope does from specification v0.1.2. On a tree whose envelope predates that change, exactly one test fails, in `packages/guardian/test/check-response.test.ts`, and every other test passes.
+The suite reads this repository's own schemas. It expects `specification/v0.1.0/response-envelope.json` to accept a ServerHello as a result, which the envelope does from release 0.1.2 (specification v0.1.0) on. On a tree whose envelope predates that change, exactly one test fails, in `packages/guardian/test/check-response.test.ts`, and every other test passes.
 
 `bun run verify:zero-diff` is also shipped. It measured, between two branches of the standalone repository, that adding the second host cost zero changed lines in the Guardian, the bridge or AGT. Its base branch does not exist in this repository, so here it exits 1 before it diffs anything.
 

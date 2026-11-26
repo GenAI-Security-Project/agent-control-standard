@@ -1,0 +1,189 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "developer-support-assistant",
+        "type": "application",
+        "name": "Developer Support Assistant",
+        "version": "1.2",
+        "description": "Triages developer requests and routes code-review work to an internal tool.",
+        "properties": [
+          {
+            "name": "acs:vendor",
+            "value": "Example Engineering"
+          }
+        ]
+      },
+      "components": [
+        {
+          "refId": "support-triage-model",
+          "type": "machine-learning-model",
+          "name": "Qwen/Qwen2.5-0.5B-Instruct",
+          "version": "7ae55760",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "Example Engineering"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://triage.models.example.org/api"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "config-triage-model"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "support-models.yaml"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "32768"
+            }
+          ]
+        },
+        {
+          "refId": "internal-review-mcp",
+          "type": "service",
+          "name": "Internal Review MCP",
+          "version": "1.4",
+          "endpoints": [
+            "https://review.example.org/mcp"
+          ],
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "mcp_server"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "config-review-mcp"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "support-mcp.yaml"
+            }
+          ]
+        },
+        {
+          "refId": "internal-code-review-tool",
+          "type": "application",
+          "name": "Review a code change",
+          "version": "2.3",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "Example Developer Productivity"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "discovered-review-tool"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "tool_output"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "mcp-review-list-tools"
+            },
+            {
+              "name": "acs:provenance:derived_from",
+              "value": "[\"config-review-mcp\"]"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "code.review"
+            }
+          ]
+        },
+        {
+          "refId": "code-review-backend",
+          "type": "machine-learning-model",
+          "name": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+          "version": "2e1fd397",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "Example Model Hosting"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://coding.models.example.org/api"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "registered-review-backend"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "review-deployment-record"
+            },
+            {
+              "name": "acs:provenance:derived_from",
+              "value": "[\"discovered-review-tool\"]"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "32768"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    },
+    {
+      "name": "acs:generated_at",
+      "value": "2026-11-24T15:04:00Z"
+    },
+    {
+      "name": "acs:agbom_hash",
+      "value": "3e0eb17a5052b8723d7b3adc23c9cc5267084471dd718da029df4b210ca0a46f"
+    }
+  ],
+  "blueprints": [
+    {
+      "name": "Observed composition",
+      "modelTypes": [
+        "operational"
+      ],
+      "relationships": [
+        {
+          "ref": "internal-review-mcp",
+          "custom": [
+            {
+              "type": "acs:exposes-tool",
+              "targets": [
+                "internal-code-review-tool"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

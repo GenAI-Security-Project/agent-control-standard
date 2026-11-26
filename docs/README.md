@@ -1,14 +1,16 @@
 # Trustworthy Agents
 
-Everyone is moving with high urgency to adopt AI agents – capturing advancement in AI to transform our digital spaces.
+ACS is a wire contract for runtime control of AI agents. Before an agent acts, it asks a separate Guardian, which answers allow, deny, modify, ask or defer, and both sides leave an audit trail. Release 0.1.5 implements specification v0.1.0 and ships Guardians, adapters and a gateway you can run today. To see it work, start with [Run a Guardian](./topics/reference-implementations.md). To learn the model, read [Core Concepts](./topics/core_concepts.md). The rest of this page explains why the standard exists.
+
+Everyone is moving with high urgency to adopt AI agents, capturing advancement in AI to transform our digital spaces.
 Agents can act, plan, write and execute just-in-time apps to achieve their goals.
-The industry is rapidly standardizing around agent tooling and interoperability protocols, with [MCP](https://modelcontextprotocol.io) and [A2A](https://google.github.io/A2A/) respectively.
+The industry is rapidly standardizing around agent tooling and interoperability protocols, with [MCP](https://modelcontextprotocol.io) and [A2A](https://a2a-protocol.org/) respectively.
 We can build more complex agents, in higher quantities, and allow them to easily communicate.
 
-But we cannot trust any of them – the biggest inhibitor to their adoption. 
+But we cannot trust any of them, and that is the biggest inhibitor to their adoption. 
 LLMs are an opaque technology from the get go. 
 Planning, reasoning and long-term memories make agents even more of a black box. 
-Agents invent, but not always like we want them to — ignoring instructions and following other goals.
+Agents invent, but not always like we want them to. They ignore instructions and follow other goals.
 Goals can be baked-in inadvertently by the training process, or forced by an attacker exploiting the agent's gullibility.
 
 Understanding what and why an agent performed an action is a big challenge. 
@@ -53,5 +55,6 @@ Early standardization provides a unique opportunity to build trustworthiness int
 
 ## Read Next
 
+- [Run a Guardian](./topics/reference-implementations.md)
 - [ACS](./acs.md)
 - [Core Concepts](./topics/core_concepts.md)

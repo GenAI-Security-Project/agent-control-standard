@@ -1,5 +1,8 @@
 ###  Send Message Request (Client)
 
+!!! note "Planned for specification v0.2.0"
+    A2A wrapping is not part of specification v0.1.0. The `protocols/A2A/*` namespace is reserved, and the wrapping rules are planned for specification v0.2.0 ([D-008](../../../../decisions/index.md#d-008-defer-the-hardest-protocol-features-past-v01)). This page shows the intended design. Nothing on it is normative yet, including the lines that say "must", and its message shapes predate the v0.1.0 envelope schemas. [Instrument A2A](../extend_a2a.md) explains the planned flow.
+
 #### 1. Description
 This hook is called when the observed client agent sends a message to server agent to initiate a new interaction or to continue an existing one through A2A protocol.<br>
 This hook **must** be used before the observed agent sends the A2A-compliant message to server agent.
@@ -68,12 +71,12 @@ The response is a [response envelope](../../specification.md#6-disposition-vocab
                 "from": {
                     "agent": {
                         "name": "Cooking assistant",
-                        "url": "https://cooking-assistant.openai.com/api/v1",
+                        "url": "https://cooking-assistant.example.com/api/v1",
                         "instructions": "You are a helpful assistant that can answer questions and help with tasks related to cooking.",
                         "version": "1.0.0",
                         "provider": {
-                            "name": "OpenAI",
-                            "url": "https://openai.com"
+                            "name": "Example Model Provider",
+                            "url": "https://provider.example.com"
                         },
                         "identity": {
                             "signatures": [{
@@ -90,7 +93,7 @@ The response is a [response envelope](../../specification.md#6-disposition-vocab
                 },
                 "to": {
                     "agent": {
-                        "url": "https://api.cakebaker.com/v1",
+                        "url": "https://cakes.example.org/v1",
                         "name": "Cake Baker",
                         "version": "1.0.0",
                         "identity": {
@@ -179,7 +182,7 @@ The response is a [response envelope](../../specification.md#6-disposition-vocab
             "context": {
                 "from": {
                     "agent": {
-                        "url": "https://cooking-assistant.openai.com/api/v1",
+                        "url": "https://cooking-assistant.example.com/api/v1",
                         "name": "Cooking assistant",
                         "version": "1.0.0",
                         "identity": {
@@ -198,12 +201,12 @@ The response is a [response envelope](../../specification.md#6-disposition-vocab
                 "to": {
                     "agent": {
                         "name": "Cake Baker",
-                        "url": "https://api.cakebaker.com/v1",
+                        "url": "https://cakes.example.org/v1",
                         "instructions": "You are a helpful assistant that specializies in answering questions and tasks related to cake baking.",
                         "version": "1.0.0",
                         "provider": {
-                            "name": "AzureAIFoundry",
-                            "url": "https://ai.azure.com"
+                            "name": "Example Agent Platform",
+                            "url": "https://platform.example.net"
                         },
                         "identity": {
                             "signatures": [{

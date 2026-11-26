@@ -1,5 +1,6 @@
-# Tells a contributor why their pull request is waiting, and labels it so the queue is
-# visible. The check itself is tools/pr_intake.py. It blocks nothing.
+# Tells a contributor their pull request has no lead-assigned issue behind it, and labels
+# it so a lead can apply Part 2 of CODE_OF_CONDUCT.md. The check itself is
+# tools/pr_intake.py. It never fails the pull request and closes nothing on its own.
 #
 # pull_request_target is used deliberately: GITHUB_TOKEN is read-only on a pull_request
 # event from a fork, and every external contribution is a fork. That trigger runs with

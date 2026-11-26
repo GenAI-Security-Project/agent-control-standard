@@ -1,0 +1,88 @@
+{
+  "agbom_version": "0.1.0",
+  "agent": {
+    "agent_id": "agent",
+    "name": "Analyst",
+    "version": "5",
+    "vendor": "agent-vendor",
+    "description": "Answers ledger questions."
+  },
+  "components": [
+    {
+      "id": "m",
+      "type": "model",
+      "name": "Model",
+      "version": "1",
+      "provider": "model-provider",
+      "endpoint": "https://models.example.com",
+      "registration_provenance": {
+        "provenance_id": "p-model",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "model_fields": {
+        "context_window": 64000,
+        "args": {
+          "seed": 8,
+          "flags": [
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "id": "ledger-mcp-server",
+      "type": "mcp_server",
+      "name": "Ledger",
+      "version": "3",
+      "endpoint": "https://ledger.example.com/mcp",
+      "registration_provenance": {
+        "provenance_id": "p-server",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "mcp_server_fields": {
+        "tools": [
+          "balance-tool",
+          "search-tool"
+        ]
+      }
+    },
+    {
+      "id": "balance-tool",
+      "type": "tool",
+      "name": "Balance",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-tool",
+        "origin": "system",
+        "source_id": "config.yml"
+      },
+      "tool_fields": {
+        "capability": "ledger.read"
+      }
+    },
+    {
+      "id": "search-tool",
+      "type": "tool",
+      "name": "Search",
+      "version": "1",
+      "provider": "tool-publisher",
+      "registration_provenance": {
+        "provenance_id": "p-new",
+        "origin": "tool_output",
+        "source_id": "mcp-list-result",
+        "derived_from": [
+          "p-server"
+        ]
+      },
+      "tool_fields": {
+        "capability": "ledger.search"
+      }
+    }
+  ],
+  "generated_at": "2026-11-23T12:01:00Z",
+  "agbom_hash": "c1bb3862337640860e4a9bb7a0bbbd6ea729ef20415f63be31a457db3dacf53f"
+}

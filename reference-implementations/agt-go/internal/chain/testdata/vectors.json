@@ -1,0 +1,73 @@
+{
+  "request_hash": {
+    "params": {
+      "acs_version": "0.1.0",
+      "request_id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+      "timestamp": "2026-09-19T10:00:00Z",
+      "metadata": {
+        "session_id": "5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30",
+        "agent_id": "agent"
+      },
+      "payload": {
+        "tool": {
+          "name": "Bash"
+        },
+        "arguments": {
+          "command": {
+            "value": "echo rm -rf /"
+          }
+        },
+        "raw_command": "echo rm -rf /"
+      }
+    },
+    "canonical": "{\"acs_version\":\"0.1.0\",\"metadata\":{\"agent_id\":\"agent\",\"session_id\":\"5c3f1b8e-9a0d-4c2e-8f4b-2d6a7e9c1b30\"},\"payload\":{\"arguments\":{\"command\":{\"value\":\"echo rm -rf /\"}},\"raw_command\":\"echo rm -rf /\",\"tool\":{\"name\":\"Bash\"}},\"request_id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"timestamp\":\"2026-09-19T10:00:00Z\"}",
+    "hash": "1f73e15e340da6bc294e18e38557aef0241921fd3985c94266e1b7416c743058"
+  },
+  "chain": [
+    {
+      "entry": {
+        "entry_id": "1",
+        "step_id": "0b2f6f7e-0c1d-4e5f-8a9b-1c2d3e4f5a60",
+        "step_type": "steps/sessionStart",
+        "timestamp": "2026-09-19T10:00:00Z"
+      },
+      "previous_hash": null,
+      "canonical_content": "{\"entry_id\":\"1\",\"step_id\":\"0b2f6f7e-0c1d-4e5f-8a9b-1c2d3e4f5a60\",\"step_type\":\"steps/sessionStart\",\"timestamp\":\"2026-09-19T10:00:00Z\"}",
+      "entry_hash": "1552a42d04ec72f9c18945400488e3f50fba5b3256537db01b705eea66e30373"
+    },
+    {
+      "entry": {
+        "entry_id": "2",
+        "step_id": "8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10",
+        "step_type": "steps/toolCallRequest",
+        "request_hash": "1f73e15e340da6bc294e18e38557aef0241921fd3985c94266e1b7416c743058",
+        "timestamp": "2026-09-19T10:00:01Z",
+        "provenance_summary": {
+          "origins_seen": [
+            "user_input",
+            "tool_output"
+          ],
+          "entry_count": 2,
+          "entry_count_by_origin": {
+            "user_input": 1,
+            "tool_output": 1
+          }
+        }
+      },
+      "previous_hash": "1552a42d04ec72f9c18945400488e3f50fba5b3256537db01b705eea66e30373",
+      "canonical_content": "{\"entry_id\":\"2\",\"provenance_summary\":{\"entry_count\":2,\"entry_count_by_origin\":{\"tool_output\":1,\"user_input\":1},\"origins_seen\":[\"user_input\",\"tool_output\"]},\"request_hash\":\"1f73e15e340da6bc294e18e38557aef0241921fd3985c94266e1b7416c743058\",\"step_id\":\"8d0b6b0e-4d6b-4f7a-9d1c-1f1c7f0e2a10\",\"step_type\":\"steps/toolCallRequest\",\"timestamp\":\"2026-09-19T10:00:01Z\"}",
+      "entry_hash": "14e6d50a913e8295606bc0d86ee9cde870040e0e0a319b13ae15836128d0d111"
+    },
+    {
+      "entry": {
+        "entry_id": "é-3",
+        "step_id": "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+        "step_type": "steps/toolCallResult",
+        "timestamp": "2026-09-19T10:00:02Z"
+      },
+      "previous_hash": "14e6d50a913e8295606bc0d86ee9cde870040e0e0a319b13ae15836128d0d111",
+      "canonical_content": "{\"entry_id\":\"é-3\",\"step_id\":\"c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f\",\"step_type\":\"steps/toolCallResult\",\"timestamp\":\"2026-09-19T10:00:02Z\"}",
+      "entry_hash": "86e28e694a7e762f205dc0739e4764d9cb32ff2c2c03a56ca88ecbbe0f505229"
+    }
+  ]
+}
