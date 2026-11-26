@@ -70,6 +70,8 @@ extra:
     # Pages that exist in the build but stay out of nav: on purpose.
     out_of_nav_prefixes:
       - spec/instrument/a2a/hooks/
+      # The CycloneDX mapping page links to this standalone viewer.
+      - spec/inspect/agbom-viewer/
 
 nav:
   - Trustworthy Agents: README.md
@@ -114,6 +116,7 @@ nav:
     - Inspect:
       - Overview: spec/inspect/README.md
       - AgBOM with CycloneDX: spec/inspect/extend_cyclonedx.md
+      - Inspect Local BOMs: spec/inspect/agbom_viewer_local.md
       - AgBOM with SPDX: spec/inspect/extend_spdx.md
       - AgBOM with SWID: spec/inspect/extend_swid.md
   - About: about.md

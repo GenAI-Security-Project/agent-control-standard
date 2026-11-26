@@ -1,0 +1,391 @@
+{
+  "specFormat": "CycloneDX",
+  "specVersion": "2.0",
+  "inventories": [
+    {
+      "subject": {
+        "refId": "agent",
+        "type": "application",
+        "name": "Analyst",
+        "version": "5",
+        "description": "Answers ledger questions.",
+        "properties": [
+          {
+            "name": "acs:vendor",
+            "value": "agent-vendor"
+          }
+        ]
+      },
+      "components": [
+        {
+          "refId": "m",
+          "type": "machine-learning-model",
+          "name": "Model",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:provider",
+              "value": "model-provider"
+            },
+            {
+              "name": "acs:endpoint",
+              "value": "https://models.example.com"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-model"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:model:context_window",
+              "value": "64000"
+            },
+            {
+              "name": "acs:model:args",
+              "value": "{\"flags\":[true,null],\"seed\":8}"
+            }
+          ]
+        },
+        {
+          "refId": "ledger-mcp-server",
+          "type": "service",
+          "name": "Ledger",
+          "version": "3",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "mcp_server"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-server"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            }
+          ],
+          "endpoints": [
+            "https://ledger.example.com/mcp"
+          ]
+        },
+        {
+          "refId": "balance-tool",
+          "type": "application",
+          "name": "Balance",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-tool"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "system"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "config.yml"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "ledger.read"
+            }
+          ]
+        },
+        {
+          "refId": "search-tool",
+          "type": "application",
+          "name": "Search",
+          "version": "1",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "tool"
+            },
+            {
+              "name": "acs:provider",
+              "value": "tool-publisher"
+            },
+            {
+              "name": "acs:provenance:provenance_id",
+              "value": "p-new"
+            },
+            {
+              "name": "acs:provenance:origin",
+              "value": "tool_output"
+            },
+            {
+              "name": "acs:provenance:source_id",
+              "value": "mcp-list-result"
+            },
+            {
+              "name": "acs:provenance:derived_from",
+              "value": "[\"p-server\"]"
+            },
+            {
+              "name": "acs:tool:capability",
+              "value": "ledger.search"
+            }
+          ]
+        },
+        {
+          "refId": "peer",
+          "type": "service",
+          "name": "peer",
+          "properties": [
+            {
+              "name": "acs:name-is-id",
+              "value": "true"
+            },
+            {
+              "name": "acs:kind",
+              "value": "a2a_peer"
+            },
+            {
+              "name": "acs:a2a_peer:protocol_version",
+              "value": "0.3"
+            },
+            {
+              "name": "acs:a2a_peer:agent_card_ref",
+              "value": "https://peer.example.com/card"
+            }
+          ],
+          "endpoints": [
+            "https://peer.example.com"
+          ]
+        },
+        {
+          "refId": "kb",
+          "type": "service",
+          "name": "Docs",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "knowledge_source"
+            },
+            {
+              "name": "acs:knowledge_source:source_type",
+              "value": "vector_db"
+            },
+            {
+              "name": "acs:knowledge_source:schema_ref",
+              "value": "https://kb.example.com/schema"
+            }
+          ],
+          "endpoints": [
+            "https://kb.example.com"
+          ]
+        },
+        {
+          "refId": "mem",
+          "type": "service",
+          "name": "Workspace memory",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "memory_store"
+            },
+            {
+              "name": "acs:memory_store:scope",
+              "value": "tenant"
+            },
+            {
+              "name": "acs:memory_store:store_type",
+              "value": "kv"
+            },
+            {
+              "name": "acs:memory_store:path",
+              "value": "file:///memory"
+            },
+            {
+              "name": "acs:memory_store:window_size",
+              "value": "0"
+            }
+          ]
+        },
+        {
+          "refId": "cap",
+          "type": "data",
+          "name": "Reporting",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "agent_capability"
+            }
+          ],
+          "description": "Report"
+        },
+        {
+          "refId": "report",
+          "type": "application",
+          "name": "Report",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "skill"
+            },
+            {
+              "name": "acs:skill:declared_capabilities",
+              "value": "[\"ledger.read\"]"
+            }
+          ],
+          "description": "Prepare report",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "https://skills.example.com/report.zip",
+              "hashes": [
+                {
+                  "alg": "SHA-256",
+                  "content": "4013ccde235bf7afa5787c29b947ae18eb88f9100f625d46b74f4ee184b78ac7"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "refId": "helper",
+          "type": "application",
+          "name": "Helper",
+          "properties": [
+            {
+              "name": "acs:kind",
+              "value": "skill"
+            },
+            {
+              "name": "acs:empty:uses-tool",
+              "value": "true"
+            }
+          ],
+          "description": "Format",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "file:///helper.zip",
+              "hashes": [
+                {
+                  "alg": "SHA-512",
+                  "content": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "acs:agbom_version",
+      "value": "0.1.0"
+    },
+    {
+      "name": "acs:agbom_hash",
+      "value": "64c730fa9a0b76b1a0e8268b01454c88fdfcc892488b123c64d7e6029a8d324c"
+    },
+    {
+      "name": "acs:generated_at",
+      "value": "2026-11-23T12:01:00Z"
+    }
+  ],
+  "blueprints": [
+    {
+      "name": "Observed composition",
+      "modelTypes": [
+        "operational"
+      ],
+      "relationships": [
+        {
+          "ref": "ledger-mcp-server",
+          "custom": [
+            {
+              "type": "acs:exposes-tool",
+              "targets": [
+                "balance-tool",
+                "search-tool"
+              ]
+            }
+          ]
+        },
+        {
+          "ref": "cap",
+          "custom": [
+            {
+              "type": "acs:uses-tool",
+              "targets": [
+                "balance-tool"
+              ]
+            },
+            {
+              "type": "acs:uses-mcp-server",
+              "targets": [
+                "ledger-mcp-server"
+              ]
+            },
+            {
+              "type": "acs:uses-peer",
+              "targets": [
+                "peer"
+              ]
+            }
+          ]
+        },
+        {
+          "ref": "report",
+          "custom": [
+            {
+              "type": "acs:uses-tool",
+              "targets": [
+                "balance-tool"
+              ]
+            },
+            {
+              "type": "acs:uses-mcp-server",
+              "targets": [
+                "ledger-mcp-server"
+              ]
+            },
+            {
+              "type": "acs:uses-peer",
+              "targets": [
+                "peer"
+              ]
+            },
+            {
+              "type": "acs:bundles-model",
+              "targets": [
+                "m"
+              ]
+            },
+            {
+              "type": "acs:may-load-skill",
+              "targets": [
+                "helper"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

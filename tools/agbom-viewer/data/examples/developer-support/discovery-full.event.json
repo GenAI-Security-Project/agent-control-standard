@@ -1,0 +1,88 @@
+{
+  "full_snapshot": {
+    "agbom_version": "0.1.0",
+    "agent": {
+      "agent_id": "developer-support-assistant",
+      "name": "Developer Support Assistant",
+      "version": "1.2",
+      "vendor": "Example Engineering",
+      "description": "Triages developer requests and routes code-review work to an internal tool."
+    },
+    "components": [
+      {
+        "id": "support-triage-model",
+        "type": "model",
+        "name": "Qwen/Qwen2.5-0.5B-Instruct",
+        "version": "7ae55760",
+        "provider": "Example Engineering",
+        "endpoint": "https://triage.models.example.org/api",
+        "registration_provenance": {
+          "provenance_id": "config-triage-model",
+          "origin": "system",
+          "source_id": "support-models.yaml"
+        },
+        "model_fields": {
+          "context_window": 32768
+        }
+      },
+      {
+        "id": "internal-review-mcp",
+        "type": "mcp_server",
+        "name": "Internal Review MCP",
+        "version": "1.4",
+        "endpoint": "https://review.example.org/mcp",
+        "registration_provenance": {
+          "provenance_id": "config-review-mcp",
+          "origin": "system",
+          "source_id": "support-mcp.yaml"
+        },
+        "mcp_server_fields": {
+          "tools": [
+            "internal-code-review-tool"
+          ]
+        }
+      },
+      {
+        "id": "internal-code-review-tool",
+        "type": "tool",
+        "name": "Review a code change",
+        "version": "2.3",
+        "provider": "Example Developer Productivity",
+        "registration_provenance": {
+          "provenance_id": "discovered-review-tool",
+          "origin": "tool_output",
+          "source_id": "mcp-review-list-tools",
+          "derived_from": [
+            "config-review-mcp"
+          ]
+        },
+        "tool_fields": {
+          "capability": "code.review"
+        }
+      },
+      {
+        "id": "code-review-backend",
+        "type": "model",
+        "name": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        "version": "2e1fd397",
+        "provider": "Example Model Hosting",
+        "endpoint": "https://coding.models.example.org/api",
+        "registration_provenance": {
+          "provenance_id": "registered-review-backend",
+          "origin": "system",
+          "source_id": "review-deployment-record",
+          "derived_from": [
+            "discovered-review-tool"
+          ]
+        },
+        "model_fields": {
+          "context_window": 32768
+        }
+      }
+    ],
+    "generated_at": "2026-11-24T15:04:00Z",
+    "agbom_hash": "3e0eb17a5052b8723d7b3adc23c9cc5267084471dd718da029df4b210ca0a46f"
+  },
+  "reason": "discovery",
+  "trigger_step_id": "mcp-review-list-tools"
+}

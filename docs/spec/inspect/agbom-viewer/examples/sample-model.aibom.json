@@ -1,0 +1,15 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:045e65f8-89c2-4c52-997e-7baa6cba5d46",
+  "version": 1,
+  "components": [
+    {
+      "type": "machine-learning-model",
+      "bom-ref": "model-1",
+      "name": "Model name",
+      "version": "1",
+      "description": "Illustrative model component for the AgBOM Viewer."
+    }
+  ]
+}
