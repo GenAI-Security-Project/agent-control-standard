@@ -366,7 +366,7 @@ def test_docs_pages_are_tied_to_the_stylesheet_they_were_built_with(tmp_path):
 def test_main_publishes_the_demo_the_page_points_at(tmp_path):
     assert render_landing.main(["render_landing.py", str(REPO / "landing"), str(tmp_path)]) == 0
     page = (tmp_path / "index.html").read_text(encoding="utf-8")
-    for name in ("demo.mp4", "demo-poster.jpg"):
+    for name in ("finbot-lab.mp4", "finbot-lab-poster.jpg"):
         assert f'"assets/video/{name}"' in page
         assert (tmp_path / "assets" / "video" / name).stat().st_size > 0
     assert (tmp_path / "assets" / "icon.svg").is_file()
