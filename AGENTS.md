@@ -37,7 +37,7 @@ Never file a public issue or pull request for a suspected security vulnerability
 
 ## Commits and branches
 
-- **Base contributor pull requests on `integration`.** Only the editorial allowlist in [Development Process](./CONTRIBUTING.md#development-process) targets `main` directly; project leads promote `integration` to `main`. A pull request that adds a documentation page updates `mkdocs.yml`, so it targets `integration`.
+- **Base every pull request on `integration`, documentation included.** `main` takes only the promotions a project lead opens, as [Development Process](./CONTRIBUTING.md#development-process) describes.
 - **Keep DCO sign-off with the human contributor.** Every commit carries a `Signed-off-by` trailer (`git commit -s`) naming the person certifying the [Developer's Certificate of Origin 1.1](./CONTRIBUTING.md#developers-certificate-of-origin-11). Only a human can make that certification: never put a tool, model, or bot identity in `Signed-off-by`, and do not sign off a commit under a person's name unless they reviewed and approved it. See [How to sign your commits](./CONTRIBUTING.md#how-to-sign-your-commits).
 - **Tool trailers stay optional.** Keep or omit a `Co-Authored-By` trailer naming a tool based on the contributor's preference. See [Authorship and AI assistance](./CONTRIBUTING.md#authorship-and-ai-assistance).
 - **Follow the editorial style guide.** Every prose edit—documentation, specifications, and comments—follows [STYLE.md](./STYLE.md).
