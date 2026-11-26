@@ -62,6 +62,25 @@
             "enum": ["acs-core", "acs-trace", "acs-inspect", "acs-inspect-dynamic", "acs-provenance", "acs-crypto", "acs-audit"]
           },
           "description": "Conformance profiles this Observed Agent implements. 'acs-core' is the mandatory baseline and SHOULD always be included. Other profiles are optional and independently claimable. See Section 4 (Conformance Profiles) for definitions."
+        },
+        "signature_algorithms_supported": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "HMAC-SHA256",
+              "ECDSA-P256",
+              "RSA-PSS-SHA256",
+              "ML-DSA-65",
+              "ML-DSA-44",
+              "ML-DSA-87",
+              "SLH-DSA-128s",
+              "SLH-DSA-128f",
+              "ML-DSA-65+ECDSA-P256",
+              "ML-DSA-65+RSA-PSS-SHA256"
+            ]
+          },
+          "description": "Signature algorithms the Observed Agent can sign and verify. The negotiated set for both directions (requests and responses) is the intersection of this field and ServerHello.signature_algorithms_supported. If this field is omitted, the negotiated set contains only the ACS-Core baseline HMAC-SHA256. During the handshake itself, the Guardian verifies the ClientHello against the algorithms it supports, and the Observed Agent verifies the ServerHello against this field (or the baseline if omitted)."
         }
       }
     },
@@ -100,7 +119,7 @@
               "ML-DSA-65+RSA-PSS-SHA256"
             ]
           },
-          "description": "Signature algorithms the Guardian can verify on incoming requests. Empty array = signatures not supported / not required. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures."
+          "description": "Signature algorithms the Guardian can sign and verify. The negotiated set for both directions (requests and responses) is the intersection of this field and ClientHello.signature_algorithms_supported. 'HMAC-SHA256' is the v0.1 RECOMMENDED default (simplest deployment path). Classical asymmetric ('ECDSA-P256', 'RSA-PSS-SHA256') and PQC ('ML-DSA-*', 'SLH-DSA-*') are OPTIONAL. A future ACS version is expected to promote PQC to RECOMMENDED once ecosystem support matures. ACS-Core conformance requires signatures on every envelope except system/ping and key-resolution errors (Specification section 10, verifier rules)."
         },
         "timeout_config": {
           "type": "object",
