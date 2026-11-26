@@ -20,7 +20,8 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 The three project leads can approve a change to any path. Fred Wilmot, Evgeniy Kokuykin, Lance Dye, and Helen Oakley approve on the same terms on every path except the specification. That includes `.github/`, `GOVERNANCE.md`, the roadmap trust code, and the reference implementations. The specification, meaning `specification/` and the pages under `docs/spec/`, stays with the three project leads alone. The AgBOM Viewer under `docs/spec/inspect/agbom-viewer/` is tooling, so it takes the wider owner set. Before this, several governance paths needed a project lead, and the AgBOM lead also owned the inspect schemas and pages.
 
-**Source:** the pull request that changed `.github/CODEOWNERS` to match.
+**Source:** [PR #679](https://github.com/GenAI-Security-Project/agent-control-standard/pull/679).
+
 ### D-052: Land 0.2 specification work on `release/0.2`
 
 **Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
