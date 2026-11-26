@@ -15,16 +15,4 @@ Run the AgBOM Viewer from your ACS checkout to inspect your own bills of materia
 
 Put an ACS snapshot such as `startup.acs.json` and its CycloneDX 2.0-dev export `startup.cdx.json` in the same folder to inspect them together. The viewer also opens standalone CycloneDX 2.0 draft AgBOMs and model AIBOMs such as CycloneDX 1.7. With two or more ACS captures, choose a **Baseline** and **Comparison** to see the changes.
 
-## Rebuild the public viewer
-
-Maintain the shared HTML, CSS, scripts, fonts, and indexed examples in `docs/spec/inspect/agbom-viewer/`. Maintain the mapping data and viewer configuration in `tools/agbom-viewer/`. Run this command from the ACS root after changing the mapping data, configuration, or indexed examples:
-
-```sh
-node tools/agbom-viewer/build.mjs
-```
-
-The command updates `docs/spec/inspect/agbom-viewer/viewer-data.js` for the static site. Append `--check` to verify that the bundle is current. The [public viewer](agbom-viewer/index.html) uses only the bundled examples.
-
-## Verify viewer changes
-
-Run the evidence and server tests with `node --test tests/agbom_viewer/evidence.test.mjs tests/agbom_viewer/server.test.mjs`.
+The [public viewer](agbom-viewer/index.html) uses only the bundled examples.

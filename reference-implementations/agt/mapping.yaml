@@ -81,6 +81,7 @@ intervention_points:
         bash: command
         WebFetch: url
         webfetch: url
+        Read: file_path
     modifications:
       from: verdict.transform
       when_path: "$policy_target"
