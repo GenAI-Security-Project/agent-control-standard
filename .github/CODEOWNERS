@@ -16,7 +16,8 @@
 # Two owner sets (D-053). The three project leads can approve anything. On every path
 # except the specification, @fewdisc, @artmaro, @Lrd0036, and @e2hln approve on the same
 # terms as the project leads. The specification (/specification/ and the normative pages
-# under /docs/spec/) stays with the three project leads alone. The OWASP organization
+# under /docs/spec/) stays with the three project leads, plus @e2hln on the AgBOM and
+# inspect paths she owns under D-044. The OWASP organization
 # owners @GangGreenTemperTatum, @mamicidal, and @sclintonowasp appear on every line
 # because they administer the organization.
 
@@ -34,6 +35,12 @@
 # change propagates to every downstream implementer, so only the project leads own it.
 /specification/         @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
 /docs/spec/             @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp
+# AgBOM workstream (D-044): the AgBOM lead keeps the inspect pages and the AgBOM and
+# inspect schemas, on top of the project leads. These follow the broader lines above
+# because the last matching pattern wins.
+/specification/v0.1.0/agbom/   @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
+/specification/v0.1.0/inspect/ @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
+/docs/spec/inspect/     @rocklambros @afogel @bar-capsule @GangGreenTemperTatum @mamicidal @sclintonowasp @e2hln
 # The AgBOM Viewer under /docs/spec/inspect/ is tooling, licensed Apache-2.0, not
 # specification text, so it takes the non-spec owner set. This line follows /docs/spec/
 # because the last matching pattern wins.
