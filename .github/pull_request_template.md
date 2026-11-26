@@ -26,6 +26,8 @@
       implementation, an adapter, tests, or CI
 - [ ] `main`, because every changed path is on the documentation lane allowlist in
       CONTRIBUTING.md
+- [ ] `release/0.2`, because this changes normative specification text, a schema, or a
+      conformance requirement for 0.2, or carries out such a change in code
 
 ## Type of change
 

@@ -14,13 +14,28 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 ## Decisions
 
-### D-052: Ship the FinBot lab with the repository
+### D-054: Ship the FinBot lab with the repository
 
 **Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
 
 The FinBot guided lab was built on its own branch, `refimpl/acs-lab-2026-12-09`, for the OWASP GenAI Security Project workshop at the Agentic AI Security Summit Europe on December 9, 2026. The lab now merges into `integration` and reaches `main` through the usual promotion, so `labs/finbot` ships with the repository and anyone who clones it can run the lab at home. The documentation site gets a top-level Labs section. Its pages include the lab's own files, so each guide exists once and the site can't drift from the repository.
 
 **Source:** [PR #672](https://github.com/GenAI-Security-Project/agent-control-standard/pull/672) and [issue #591](https://github.com/GenAI-Security-Project/agent-control-standard/issues/591).
+### D-053: Give four workstream leads the project leads' review rights outside the specification
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+The three project leads can approve a change to any path. Fred Wilmot, Evgeniy Kokuykin, Lance Dye, and Helen Oakley approve on the same terms on every path except the specification. That includes `.github/`, `GOVERNANCE.md`, the roadmap trust code, and the reference implementations. The specification, meaning `specification/` and the pages under `docs/spec/`, stays with the three project leads. Helen Oakley keeps the AgBOM and inspect paths she owns under [D-044](#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first): `docs/spec/inspect/`, `specification/v0.1.0/agbom/`, and `specification/v0.1.0/inspect/`. The AgBOM Viewer under `docs/spec/inspect/agbom-viewer/` is tooling, so it takes the wider owner set. Before this, several governance paths needed a project lead.
+
+**Source:** [PR #679](https://github.com/GenAI-Security-Project/agent-control-standard/pull/679).
+
+### D-052: Land 0.2 specification work on `release/0.2`
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+`release/0.2` carries out [D-049](#d-049-promote-integration-as-015-then-branch-02). It starts from the 0.1.5 work on `integration`. A pull request targets `release/0.2` when it changes normative text under `docs/spec/`, a schema under `specification/`, or a conformance requirement, or when its issue is in the v0.2.0 milestone, because [D-048](#d-048-version-by-what-changed-until-10) makes a specification change a minor release. Code that carries out a specification change on `release/0.2` goes there with it, such as an adapter that enforces a rule only the 0.2 specification has. Other fixes to shipped code, adapters, reference implementation work, and documentation of shipped behavior stay on `integration` and ship in 0.1.x. A workflow opens a pull request that merges `integration` into `release/0.2` whenever `integration` moves ahead, so those fixes reach both lines ([PR #677](https://github.com/GenAI-Security-Project/agent-control-standard/pull/677)).
+
+**Source:** [Issue #99](https://github.com/GenAI-Security-Project/agent-control-standard/issues/99), which tracks how release branches are versioned.
 
 ### D-051: Adopt Part 2 of the Code of Conduct
 

@@ -8,6 +8,10 @@ Give enterprises runtime control over AI agents through an open standard.
 
 Enterprises need to stop an agent's harmful action before it happens, see what agents do, and understand why they act. ACS began as an observability standard and became a control standard ([D-001](./decisions/index.md#d-001-rename-aos-to-acs-and-focus-on-runtime-control)). It now defines how an agent asks a Guardian before it acts, how the Guardian answers, and what record the exchange leaves.
 
+## Part of OWASP
+
+ACS is developed under the [OWASP GenAI Security Project](https://genai.owasp.org/) as part of its Agentic Security Initiative (ASI). [Get involved](https://genai.owasp.org/contributing/) to help shape the standard.
+
 ## What We're Building
 
 **The specification**: ACS defines the hooks, the five dispositions, the wire format, the audit chain, and the conformance profiles a deployment declares. Specification v0.1.0 is current, and v0.2.0 is planned.

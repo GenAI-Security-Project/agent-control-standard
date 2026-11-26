@@ -31,8 +31,10 @@ TITLE = re.compile(r"\A[^<>&\n]+\Z")
 ANCHOR = re.compile(r"\A[A-Za-z][A-Za-z0-9_-]*\Z")
 # A value is external when it matches: any scheme, or a path rooted at the host.
 EXTERNAL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:|^/")
-# A prefix check by design: the host is fixed and any path under it is allowed.
-EXTERNAL_URL = re.compile(r"\Ahttps://(github\.com|owasp\.slack\.com)(/|\Z)")
+# A prefix check by design: the target is fixed and any path under it is allowed. On
+# owasp.org that target is only the Slack invite page, because a bare owasp.slack.com
+# link turns away anyone who is not already in the workspace.
+EXTERNAL_URL = re.compile(r"\Ahttps://(github\.com|owasp\.org/slack/invite)(/|\Z)")
 DOC_PATH = re.compile(r"\A(?!/)(?!.*(^|/)\.\.(/|$))[A-Za-z0-9_./-]+\.md\Z")
 REPO_URL = "https://github.com/GenAI-Security-Project/agent-control-standard"
 
