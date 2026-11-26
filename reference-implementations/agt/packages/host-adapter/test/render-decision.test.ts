@@ -268,6 +268,7 @@ describe("renderDecision", () => {
     expect(hookSpecificOutput).toEqual({
       permissionDecision: "allow",
       permissionDecisionReason: "redaction_applied",
+      additionalContext: "redaction_applied",
       updatedInput: { command: "echo [REDACTED]" },
     });
   });
@@ -279,6 +280,7 @@ describe("renderDecision", () => {
       hookSpecificOutput: {
         permissionDecision: "deny",
         permissionDecisionReason: "blocked",
+        additionalContext: "blocked",
       },
     });
   });
@@ -299,15 +301,28 @@ describe("renderDecision against the shipped hookmap, per hook", () => {
 
   it.each([
     ["allow", { decision: "allow" }, { permissionDecision: "allow" }],
-    ["deny", { decision: "deny", reasoning: "nope" }, { permissionDecision: "deny", permissionDecisionReason: "nope" }],
+    ["deny", { decision: "deny", reasoning: "nope" }, { permissionDecision: "deny", permissionDecisionReason: "nope", additionalContext: "nope" }],
     ["ask", { decision: "ask", reasoning: "confirm?" }, { permissionDecision: "ask", permissionDecisionReason: "confirm?" }],
     [
       "modify",
       { decision: "modify", reasoning: "rewritten", applied_input: { command: "echo [REDACTED]" } },
-      { permissionDecision: "allow", permissionDecisionReason: "rewritten", updatedInput: { command: "echo [REDACTED]" } },
+      { permissionDecision: "allow", permissionDecisionReason: "rewritten", additionalContext: "rewritten", updatedInput: { command: "echo [REDACTED]" } },
     ],
-  ])("renders PreToolUse %s exactly as before", (_name, result, expected) => {
+  ])("renders PreToolUse %s from the shipped hookmap", (_name, result, expected) => {
     expect(renderDecision("PreToolUse", result as never, real)).toEqual({ hookSpecificOutput: expected });
+  });
+
+  // Both reason fields carry `type: string`, so a Guardian that puts a
+  // non-string in `reasoning` gets the decision rendered with no reason at all,
+  // rather than an output Claude Code cannot read.
+  it.each([
+    ["allow", { decision: "allow" }, { permissionDecision: "allow" }],
+    ["deny", { decision: "deny" }, { permissionDecision: "deny" }],
+    ["ask", { decision: "ask" }, { permissionDecision: "ask" }],
+    ["defer", { decision: "defer" }, { permissionDecision: "deny" }],
+    ["modify", { decision: "modify", applied_input: { command: "echo [REDACTED]" } }, { permissionDecision: "allow", updatedInput: { command: "echo [REDACTED]" } }],
+  ])("renders PreToolUse %s with a non-string reasoning and no reason field", (_name, result, expected) => {
+    expect(renderDecision("PreToolUse", { ...result, reasoning: { text: "not a string" } } as never, real)).toEqual({ hookSpecificOutput: expected });
   });
 
   // The reason field is the second half: a rewrite is the only decision that
