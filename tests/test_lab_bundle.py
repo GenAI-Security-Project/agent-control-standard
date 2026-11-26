@@ -847,7 +847,8 @@ def test_labs_workflow_has_module_jobs():
     acceptance = jobs["acceptance"]
     assert acceptance["needs"] == "images"
     assert acceptance["defaults"]["run"]["working-directory"] == "labs/finbot"
-    assert "python3 modules/tests/acceptance.py" in _runs(acceptance)
+    # The kit modules the simulator loads import acs, so the job runs in the adapters env with the pqc extra.
+    assert "uv run --project ../../adapters --locked --extra pqc python modules/tests/acceptance.py" in _runs(acceptance)
     # Attendees run on replay, so the job holds no model key and no secret of any kind.
     text = yaml.safe_dump(acceptance)
     assert "OPENAI" not in text.upper() and "secrets." not in text
