@@ -1,0 +1,65 @@
+# Carries fixes that land on integration forward into the open release branch, so 0.2
+# specification work runs on the same code that ships in 0.1.x (D-052).
+#
+# This opens a pull request rather than pushing. The protect-release ruleset requires pull
+# requests and blocks non-fast-forward updates, and GITHUB_TOKEN is not a bypass actor, so a
+# push here would fail on every run. Merge the pull request with a merge commit. A squash or
+# a rebase never makes integration an ancestor of the release branch, so the next run would
+# open the same pull request again with every earlier change in it.
+#
+# A pull request opened with GITHUB_TOKEN starts no workflows, so its checks do not run until
+# a lead closes and reopens it. No event text reaches the script: the only inputs are the
+# branch name below and git's own refs.
+name: Sync release branch from integration
+
+on:
+  push:
+    branches: ["integration"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-release
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # The release branch that takes integration's fixes. Change it when the next one is cut.
+      RELEASE_BRANCH: release/0.2
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Open the sync pull request when the release branch is behind
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Exit quietly once the release branch is gone, so a finished release line does not
+          # fail every push to integration.
+          git rev-parse --verify "origin/$RELEASE_BRANCH" >/dev/null 2>&1 || { echo "$RELEASE_BRANCH does not exist."; exit 0; }
+          # Ancestry, not content: the release branch carries specification changes that
+          # integration lacks, so the two trees differ even when nothing needs to move.
+          if git merge-base --is-ancestor origin/integration "origin/$RELEASE_BRANCH"; then
+            echo "$RELEASE_BRANCH already carries integration. Nothing to sync."
+            exit 0
+          fi
+          if [ "$(gh pr list --base "$RELEASE_BRANCH" --head integration --state open --json number --jq 'length')" -gt 0 ]; then
+            echo "A sync pull request is already open."
+            exit 0
+          fi
+          gh pr create --base "$RELEASE_BRANCH" --head integration \
+            --title "Sync $RELEASE_BRANCH from integration" \
+            --body "Fixes landed on integration. This carries them to $RELEASE_BRANCH, as D-052 requires. The content already passed review on integration. Close and reopen this pull request to start its checks, then merge it with a merge commit, never a squash or a rebase."
