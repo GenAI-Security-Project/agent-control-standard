@@ -539,10 +539,9 @@ def _header(markup: str) -> str:
 
 
 def _built_mkdocs_pages(built_docs: Path) -> list[Path]:
-    """Find pages that MkDocs renders with site navigation and header links."""
-    docs = REPO / "docs"
-    pages = sorted(path for path in built_docs.rglob("*.html")
-                   if not (docs / path.relative_to(built_docs)).is_file())
+    """Find built pages expected to use the MkDocs header and navigation."""
+    viewer = built_docs / "spec/inspect/agbom-viewer/index.html"
+    pages = sorted(path for path in built_docs.rglob("*.html") if path != viewer)
     assert built_docs / "404.html" in pages
     return pages
 
