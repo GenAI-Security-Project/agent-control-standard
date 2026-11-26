@@ -41,10 +41,16 @@ def test_only_the_project_leads_own_the_specification():
     rules = codeowner_rules()
     for path in SPEC_PATHS:
         assert dict(rules)[path] == SPEC_OWNERS, path
-    # No later line may hand a specification path to anyone else, except the AgBOM
-    # Viewer, which is tooling rather than specification text.
-    spec_lines = [p for p, _ in rules if p.startswith(SPEC_PATHS)]
-    assert spec_lines == ["/specification/", "/docs/spec/", "/docs/spec/inspect/agbom-viewer/"]
+    # No later line may hand a specification path to anyone else, except the AgBOM lead's
+    # D-044 paths and the AgBOM Viewer, which is tooling rather than specification text.
+    agbom = SPEC_OWNERS + ["@e2hln"]
+    later = {p: o for p, o in rules if p.startswith(SPEC_PATHS) and p not in SPEC_PATHS}
+    assert later == {
+        "/specification/v0.1.0/agbom/": agbom,
+        "/specification/v0.1.0/inspect/": agbom,
+        "/docs/spec/inspect/": agbom,
+        "/docs/spec/inspect/agbom-viewer/": LEAD_OWNERS,
+    }
 
 
 def test_every_project_lead_owns_every_line():
