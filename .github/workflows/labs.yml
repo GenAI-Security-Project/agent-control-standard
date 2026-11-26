@@ -125,6 +125,9 @@ jobs:
           bun-version: "1.3.11"
       - name: Run the decision viewer tests with the pqc extra
         run: uv run --project adapters --locked --extra pqc --group test python -m pytest labs/finbot/viewer/tests -v
+      # The finbot-ui proxy, which C-17 relies on to forward only to FinBot and only FinBot's cookies (2026-11-24).
+      - name: Run the finbot-ui proxy tests
+        run: uv run --project adapters --locked --group test python -m pytest labs/finbot/ui/tests -v
 
   images:
     runs-on: ubuntu-latest
@@ -231,7 +234,9 @@ jobs:
   acceptance:
     # Guides 1 to 7 played command by command on a fresh runner with no model key and finbot-net internal, so no call
     # can leave the stack. Every check must print DONE, with no replay miss and no run in a recording's namespace.
-    # acceptance.py is standard library only, like the guide simulator it reads the guides through.
+    # acceptance.py and the guide simulator are standard library only, but the simulator checks a module 7 command's
+    # flags by loading that kit module, and forge and downgrade import acs, downgrade with ML-DSA-65 from the pqc
+    # extra. The real lab CLI runs them with both installed, so the job runs them in the adapters' locked environment.
     needs: images
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -244,10 +249,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.9"
       - name: Check the host
         run: ./lab.sh doctor
       - name: Play guides 1 to 7 offline and run every check
-        run: python3 modules/tests/acceptance.py
+        run: uv run --project ../../adapters --locked --extra pqc python modules/tests/acceptance.py
       - name: Show the service logs
         if: failure()
         run: ./lab.sh logs --no-color

@@ -106,13 +106,23 @@ def test_sign_off_row_shape():
 # ---------------------------------------------------------------- Task 2: the checker
 
 
+def _unsigned(text: str) -> str:
+    """The ledger text with its sign-off row blanked, as it reads before anyone signs.
+
+    The real ledger is signed (2026-11-24), and the tests below sign a copy themselves, so each starts unsigned.
+    """
+    head, sep, tail = text.partition("## Sign-off")
+    return head + sep + re.sub(r"(?m)^\| [^|\n]+ \| \d{4}-\d{2}-\d{2} \| [0-9a-f]{40} \| [0-9a-f]{64} \|$",
+                                    "| | | | |", tail, count=1)
+
+
 @pytest.fixture
 def tree(tmp_path):
-    """A scanned directory and a copy of the real ledger beside it, outside the scanned tree."""
+    """A scanned directory and an unsigned copy of the real ledger beside it, outside the scanned tree."""
     root = tmp_path / "lab"
     root.mkdir()
     ledger = tmp_path / "CLAIMS.md"
-    ledger.write_text(LEDGER.read_text(encoding="utf-8"), encoding="utf-8")
+    ledger.write_text(_unsigned(LEDGER.read_text(encoding="utf-8")), encoding="utf-8")
     return root, ledger
 
 
@@ -255,8 +265,18 @@ def test_require_signed(tree, capsys):
     assert capsys.readouterr().out.startswith("DONE: lab text holds to the ledger (1 files)")
 
 
+def _with_unconfirmed_c08(ledger):
+    """Mark C-08 unconfirmed in a ledger copy. The real ledger has no unconfirmed row since C-08 was confirmed."""
+    text = ledger.read_text(encoding="utf-8")
+    marked = text.replace("| A miss is a fixed line, never a model's guess. |",
+                          "Unconfirmed until the recordings are captured. | A miss is a fixed line, never a model's guess. |", 1)
+    assert marked != text
+    ledger.write_text(marked, encoding="utf-8")
+
+
 def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
     root, ledger = tree
+    _with_unconfirmed_c08(ledger)
     _sign(ledger)
     assert lab_claims.main([str(root), "--ledger", str(ledger), "--require-signed"]) == 1
     out = capsys.readouterr().out
@@ -269,6 +289,8 @@ def test_require_signed_refuses_unconfirmed_rows(tree, capsys):
 
 def test_unconfirmed_rows_parsed(tree):
     _, ledger = tree
+    assert lab_claims.load_ledger(ledger).unconfirmed == ()
+    _with_unconfirmed_c08(ledger)
     assert lab_claims.load_ledger(ledger).unconfirmed == ("C-08",)
 
 
@@ -427,7 +449,7 @@ def test_sign_gate_refuses_a_ledger_with_no_claim_rows(tree, capsys):
 def test_cells_honor_escaped_pipes(tree):
     root, ledger = tree
     before = ledger.read_text(encoding="utf-8")
-    text = before.replace("| `labs/finbot/compose.yaml:48-57`", "| ok a\\| b `labs/finbot/compose.yaml:48-57`", 1)
+    text = before.replace("| `labs/finbot/compose.yaml:49-58`", "| ok a\\| b `labs/finbot/compose.yaml:49-58`", 1)
     assert text != before
     ledger.write_text(text, encoding="utf-8")
     # An escaped pipe keeps the evidence cell whole, so its first path is still read as evidence.
@@ -2141,19 +2163,22 @@ def test_c17_is_confirmed_by_the_network_and_the_token():
     # Rock, 2026-11-22: finbot-net is internal, so the network itself keeps FinBot off any model but the gateway.
     evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-17"][2]
     assert "unconfirmed" not in evidence.lower()
-    for path in ("labs/finbot/compose.yaml:69-71", "labs/finbot/compose.yaml:332-333", "labs/finbot/compose.yaml:329-330",
-                 "labs/finbot/compose.yaml:166-171", "labs/finbot/compose.yaml:63",
-                 "adapters/gateway/src/acs_gateway/app.py:1479-1511", "labs/finbot/cli/commands.py:147-148",
-                 "labs/finbot/images/smoke.sh:126-156"):
+    # The citations as re-anchored by content before signing (2026-11-24): FinBot's two internal networks, the
+    # internal network definitions, the gateway's networks, FinBot's model URL, the client token gate and the probe.
+    for path in ("labs/finbot/compose.yaml:70-72", "labs/finbot/compose.yaml:369-370", "labs/finbot/compose.yaml:374-375",
+                 "labs/finbot/compose.yaml:379-380", "labs/finbot/compose.yaml:174-180", "labs/finbot/compose.yaml:64",
+                 "adapters/gateway/src/acs_gateway/app.py:1486-1518", "labs/finbot/cli/commands.py:147-148",
+                 "labs/finbot/images/smoke.sh:127-172"):
         assert f"`{path}`" in evidence, path
 
 
-def test_c08_cites_the_viewer_and_leaves_capture_open():
+def test_c08_cites_the_viewer_and_the_recordings():
+    # C-08 was confirmed once the recordings were committed (2026-11-24), so it cites them instead of a pending note.
     evidence = {r[0]: r for r in _rows(_section("Claims"))}["C-08"][2]
-    cited, pending = evidence.split("Unconfirmed", 1)
-    assert "`labs/finbot/viewer/model.py:962-965`" in cited and "`labs/finbot/viewer/static/app.js:131-136`" in cited
-    assert "`replay miss: recorded neutral reply`" in cited
-    assert "LAB-16" in pending and "recorded model" in pending and "viewer" not in pending
+    assert "unconfirmed" not in evidence.lower()
+    assert "`labs/finbot/viewer/model.py:962-965`" in evidence and "`labs/finbot/viewer/static/app.js:131-136`" in evidence
+    assert "`replay miss: recorded neutral reply`" in evidence
+    assert "`labs/finbot/replay/recordings/`" in evidence and "gpt-5-nano-2025-08-07" in evidence
     assert ("C-08", "labs/finbot/viewer/model.py") in lab_claims.load_ledger(LEDGER).evidence
 
 

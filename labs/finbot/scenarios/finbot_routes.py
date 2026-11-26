@@ -48,8 +48,13 @@ RESET_TOOLS = ("POST", "/darklab/api/v1/supply-chain/servers/{server}/reset-tool
 # apps/darklab/routes/api.py:215, mail to addresses FinBot can't resolve.
 DEAD_DROP = ("GET", "/darklab/api/v1/toolkit/dead-drop")
 
+# apps/vendor/routes/api.py:154, the session's current vendor id, which a registration made on FinBot's own page sets.
+VENDOR_ME = ("GET", "/vendor/api/v1/vendors/me")
+# The current vendor's invoices, as FinBot's invoices page lists them (static/js/vendor/invoice.js:343).
+INVOICES = ("GET", "/vendor/api/v1/invoices")
+
 ROUTES = frozenset({
-    SESSION_STATUS, REGISTER_VENDOR, VENDOR, CREATE_INVOICE, INVOICE, TRANSFERS, VENDOR_INBOX,
+    SESSION_STATUS, REGISTER_VENDOR, VENDOR, CREATE_INVOICE, INVOICE, TRANSFERS, VENDOR_INBOX, VENDOR_ME, INVOICES,
     VENDOR_CHAT, VENDOR_HISTORY, CLEAR_VENDOR_HISTORY, COPILOT_CHAT, COPILOT_HISTORY,
     CLEAR_COPILOT_HISTORY, SERVER, TOOL_OVERRIDES, RESET_TOOLS, DEAD_DROP,
 })

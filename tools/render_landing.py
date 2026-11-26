@@ -547,12 +547,6 @@ def main(argv: list[str]) -> int:
             # second copy that nothing references and that can drift from the inlined one.
             ignore=shutil.ignore_patterns("starburst.svg"),
         )
-        # The reference implementation owns the recording, so the site copies it at build
-        # time and the repository keeps one 12 MB binary.
-        video = out / "assets" / "video"
-        video.mkdir(parents=True, exist_ok=True)
-        for name in ("demo.mp4", "demo-poster.jpg"):
-            shutil.copy2(repo / "reference-implementations" / "agt" / "docs" / name, video / name)
         (out / "index.html").write_text(pin_stylesheet(page, "assets/acs.css", out / "assets" / "acs.css"), encoding="utf-8")
         show_release_in_docs(
             out,

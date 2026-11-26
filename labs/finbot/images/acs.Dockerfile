@@ -44,6 +44,7 @@ RUN uv pip install --python /opt/acs/adapters/.venv/bin/python --require-hashes 
 # bind mount. The viewer's glob matches nothing until LAB-13's viewer is in the tree, and BuildKit allows that.
 COPY labs/finbot/cli /opt/lab/cli
 COPY labs/finbot/vie[w]er /opt/lab/viewer
+COPY labs/finbot/ui /opt/lab/ui
 COPY docs/topics/signature-benchmark.md /opt/lab/docs/signature-benchmark.md
 # The guard for the paths above: the build fails, instead of deleting anything, when a secret came along.
 RUN if [ -e /opt/lab/state ] || [ -n "$(find /opt/lab \( -name '*.key' -o -name '*.token' -o -name '.env' \) -print)" ]; then \

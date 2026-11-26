@@ -40,6 +40,8 @@ STREAM_TIMEOUT_S = 420.0
 # The fingerprint FinBot pins to the session. Fixed values, sent on every request. identity keeps bodies unencoded,
 # so the byte cap counts what the driver parses.
 FINGERPRINT_HEADERS = {"User-Agent": "acs-lab-driver/1", "Accept-Language": "en-US", "Accept-Encoding": "identity"}
+# FinBot's session cookie (finbot/config.py SESSION_COOKIE_NAME).
+SESSION_COOKIE = "finbot_session"
 UNSAFE_METHODS = frozenset({"POST", "PUT", "DELETE", "PATCH"})
 _DETAIL_CHARS = 200
 

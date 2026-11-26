@@ -1,6 +1,6 @@
 """Module 1's check, Wire it in (issue #589, LAB-16 Task 6). lab check 1 runs it.
 
-Version 1.0.0. Owner: Rock Lambros. Standard library only, like evidence.py, which it reads every source through.
+Version 1.2.0. Owner: Rock Lambros. Standard library only, like evidence.py, which it reads every source through.
 
 Module 1 passes on two runs of s1, judged as the newest of each mode. Each counts only when the driver wrote
 result completed with no error and no replay miss, since any other run shows nothing about the wiring.
@@ -8,13 +8,17 @@ result completed with no error and no replay miss, since any other run shows not
 - The newest off run leaves no ACS record. Its audit window opens no session, no transcript changed while it ran, and
   its model input window holds at least one line, which shows FinBot reached the model through the gateway. "No
   transcript changed" compares the driver's transcripts_before and transcripts_after size maps, never file times.
-- The newest enforce run reached the model, nothing in it was denied or modified, and FinBot made at least one tool
-  call. One of its sessions holds the whole record on its own: a ServerHello that agreed to sign decisions with
-  ML-DSA-65, requests signed with HMAC-SHA256, an answered steps/sessionStart, an allow for every function_call in the
-  run's model input window, and a transcript acs-verify passes with the key document, the fingerprint lab init wrote
-  to .env, and the audit chain. Each allow is an applied allow in the audit log for that session, that call_id and
-  that tool, whose request the session's transcript answers with an allow for the same tool. Allows from any other
-  session don't count, since acs-verify judged only this one (review C1, re-review N1).
+- The newest enforce run reached the model, nothing in it was denied or modified but the one block module 3 owns, and
+  FinBot made at least one tool call. That block is module 3's starter rule denying FinBot's onboarding email to the
+  vendor, external_recipient on finmail__send_email: real FinBot always sends it after onboarding, and the starter
+  allows company mailboxes only (Rock's ruling, 2026-11-24). Every function_call in the run's model input window has an
+  allow in some session, and every session that holds one of those allows holds a whole record: a ServerHello that
+  agreed to sign decisions with ML-DSA-65, requests signed with HMAC-SHA256, an answered steps/sessionStart, and a
+  transcript acs-verify passes with the key document, the fingerprint lab init wrote to .env, and the audit chain.
+  Each allow is an applied allow in the audit log for that session, that call_id and that tool, whose request the
+  session's transcript answers with an allow for the same tool. An allow counts only in a session acs-verify passed
+  (review C1, re-review N1). Real FinBot runs one session per agent, so a run spreads its calls over several sessions,
+  and the fake FinBot's one-session run was the only shape the check passed before (2026-11-24).
 
 A model input line the check can't read for calls, a call with no call_id, or one call_id under two tool names is
 not yet rather than skipped, so no call can go uncounted (review I1, M2, re-review N1). A string input can't carry a
@@ -34,6 +38,9 @@ import report
 from evidence import Evidence, EvidenceError, Run
 
 SCENARIO = "s1"
+# The deny module 1 expects: module 3's starter rule on FinBot's onboarding email to the vendor.
+STARTER_MAIL_TOOL = "finmail__send_email"
+STARTER_MAIL_REASON = "external_recipient"
 ML_DSA_65 = "ML-DSA-65"
 HMAC_SHA256 = "HMAC-SHA256"
 RESPONSE_ALGORITHM = "x_acs_lab_response_algorithm"
@@ -59,12 +66,13 @@ class _NotYet(Exception):
 def check(ev: Evidence) -> int:
     try:
         _judge_off_run(ev)
-        run, session_id, fingerprint = _judge_on_run(ev)
+        run, sessions, fingerprint = _judge_on_run(ev)
     except _NotYet as e:
         report.not_yet(str(e))
         return e.code
+    named = f"session {sessions[0]}" if len(sessions) == 1 else f"all {len(sessions)} sessions that held its allows"
     report.done(f"module 1. With ACS off, FinBot reached the model through the gateway and left no ACS record. "
-                f"Enforce run {run.run_id} governed every call, and acs-verify passed session {session_id} "
+                f"Enforce run {run.run_id} governed every call, and acs-verify passed {named} "
                 f"under {ML_DSA_65} with the Guardian's key {fingerprint}")
     return report.EXIT_PASS
 
@@ -128,7 +136,7 @@ def _transcripts_changed(run: Run) -> str | None:
 # the enforce run
 # ---------------------------------------------------------------------------------------------------------------------
 
-def _judge_on_run(ev: Evidence) -> tuple[Run, str, str]:
+def _judge_on_run(ev: Evidence) -> tuple[Run, list[str], str]:
     runs = ev.runs(SCENARIO, "enforce")
     if not runs:
         raise _NotYet(f"the off run is in. Module 1 needs an enforce run of {SCENARIO} next. {RUN_ON}")
@@ -148,14 +156,19 @@ def _judge_on_run(ev: Evidence) -> tuple[Run, str, str]:
     calls = _function_calls(run, bodies)
     if not calls:
         raise _NotYet(f"FinBot made no tool call in enforce run {run.run_id}, so nothing was governed. {RUN_AGAIN}")
-    # One session with the whole record passes the run. A session the gateway retried leaves an unopened one behind.
-    problems: list[_NotYet] = []
-    for session_id, lines in transcripts.items():
-        try:
-            return run, session_id, _judge_session(ev, run, session_id, lines, calls, audit)
-        except _NotYet as e:
-            problems.append(e)
-    raise problems[0]
+    # Each call needs an allow in some session. A session the gateway retried leaves an unopened one behind, which
+    # holds no allow and so is never judged.
+    allowed = {session_id: _allowed_calls(session_id, _pairs(lines), audit)
+               for session_id, lines in transcripts.items()}
+    for call_id, name in calls.items():
+        if not any((call_id, name) in found for found in allowed.values()):
+            raise _NotYet(f"FinBot's call to {name} ({call_id}) in enforce run {run.run_id} has no allow for that tool "
+                          f"in any session. {RUN_AGAIN}")
+    covering = [session_id for session_id, found in allowed.items() if found & set(calls.items())]
+    fingerprint = ""
+    for session_id in covering:
+        fingerprint = _judge_session(ev, run, session_id, transcripts[session_id])
+    return run, covering, fingerprint
 
 
 def _pairs(lines: list[dict[str, Any]]) -> list[tuple[dict[str, Any], Any]]:
@@ -192,16 +205,29 @@ def _tool_name(request: dict[str, Any]) -> str:
     return str(tool.get("name")) if isinstance(tool, dict) else "a tool"
 
 
+def _starter_mail_deny(event: dict[str, Any]) -> bool:
+    """Module 3's starter rule denying an email to an outside address, the one deny module 1 expects."""
+    return (event.get("decision") == "deny" and event.get("tool") == STARTER_MAIL_TOOL
+            and event.get("reason_codes") == [STARTER_MAIL_REASON])
+
+
 def _judge_decisions(run: Run, audit: list[dict[str, Any]],
                      transcripts: dict[str, list[dict[str, Any]]]) -> None:
-    """Module 1 shows the wiring on calls the starter policies allow, so any other decision is not yet."""
-    found = [(str(e.get("decision")), str(e.get("tool"))) for e in audit
-             if e.get("acs_audit_event") == APPLIED and e.get("method") in GOVERNED and e.get("decision") != "allow"]
+    """Module 1 shows the wiring on calls the starter policies allow, so any other decision is not yet. The one
+    exception is module 3's starter block on the onboarding email, taken from the audit log, which records each
+    applied decision's reason codes. A transcript deny on that tool passes only when the audit log shows such a block."""
+    applied = [e for e in audit if e.get("acs_audit_event") == APPLIED and e.get("method") in GOVERNED]
+    found = [(str(e.get("decision")), str(e.get("tool"))) for e in applied
+             if e.get("decision") != "allow" and not _starter_mail_deny(e)]
+    starter_blocks = any(_starter_mail_deny(e) for e in applied)
     for lines in transcripts.values():
         for request, answer in _pairs(lines):
             decision = _result(answer).get("decision")
-            if request.get("method") in GOVERNED and decision not in (None, "allow"):
-                found.append((str(decision), _tool_name(request)))
+            if request.get("method") not in GOVERNED or decision in (None, "allow"):
+                continue
+            if decision == "deny" and _tool_name(request) == STARTER_MAIL_TOOL and starter_blocks:
+                continue
+            found.append((str(decision), _tool_name(request)))
     if found:
         decision, tool = found[0]
         raise _NotYet(f"enforce run {run.run_id} has a {decision} on {tool}, and module 1 expects every call allowed. "
@@ -236,10 +262,10 @@ def _function_calls(run: Run, bodies: list[dict[str, Any]]) -> dict[str, str]:
     return calls
 
 
-def _judge_calls(run: Run, session_id: str, pairs: list[tuple[dict[str, Any], Any]], calls: dict[str, str],
-                 audit: list[dict[str, Any]]) -> None:
-    """Every call the model saw had an allow the gateway applied in this session, for this call_id and tool, on a
-    request this session's transcript answers allow for the same tool."""
+def _allowed_calls(session_id: str, pairs: list[tuple[dict[str, Any], Any]],
+                   audit: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """(call_id, tool) for each allow the gateway applied in this session on a request this session's transcript
+    answers allow for the same tool."""
     applied: dict[tuple[str, str], set[str]] = {}
     for event in audit:
         call_id, request_id, tool = event.get("call_id"), event.get("request_id"), event.get("tool")
@@ -255,15 +281,12 @@ def _judge_calls(run: Run, session_id: str, pairs: list[tuple[dict[str, Any], An
         if (request.get("method") == TOOL_CALL_REQUEST and isinstance(request_id, str)
                 and result.get("request_id") == request_id and result.get("decision") == "allow"):
             answered[request_id] = _tool_name(request)
-    for call_id, name in calls.items():
-        if not any(answered.get(request_id) == name for request_id in applied.get((call_id, name), set())):
-            raise _NotYet(f"FinBot's call to {name} ({call_id}) in enforce run {run.run_id} has no allow for that tool "
-                          f"in session {session_id}, the session that must hold the signed record. {RUN_AGAIN}")
+    return {(call_id, name) for (call_id, name), request_ids in applied.items()
+            if any(answered.get(request_id) == name for request_id in request_ids)}
 
 
-def _judge_session(ev: Evidence, run: Run, session_id: str, lines: list[dict[str, Any]], calls: dict[str, str],
-                   audit: list[dict[str, Any]]) -> str:
-    """The fingerprint acs-verify pinned when the session holds the whole record, or _NotYet saying what's missing."""
+def _judge_session(ev: Evidence, run: Run, session_id: str, lines: list[dict[str, Any]]) -> str:
+    """The fingerprint acs-verify pinned when the session holds a whole record, or _NotYet saying what's missing."""
     where = f"session {session_id} of enforce run {run.run_id}"
     if not lines:
         raise _NotYet(f"{where} wrote no transcript. {RUN_AGAIN}")
@@ -283,7 +306,6 @@ def _judge_session(ev: Evidence, run: Run, session_id: str, lines: list[dict[str
                       f"not {ML_DSA_65}. Run ./lab.sh sign mldsa, then ./lab.sh run s1")
     if not any(request.get("method") == SESSION_START and _result(answer) for request, answer in pairs):
         raise _NotYet(f"{where} has no answered {SESSION_START}, so the session never opened. {RUN_AGAIN}")
-    _judge_calls(run, session_id, pairs, calls, audit)
     result = ev.verify(session_id)
     if result.outcome == "not_yet":
         raise _NotYet(result.detail)

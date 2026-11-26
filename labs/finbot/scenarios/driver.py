@@ -1,6 +1,6 @@
 """The scenario driver behind lab run and lab record (issue #589, LAB-16 Task 4, Appendix A.11). Standard library only.
 
-Version 1.2.0. Owner: Rock Lambros.
+Version 1.4.0. Owner: Rock Lambros.
 
     lab _drive <scenario> [--answer approve|reject] [--clean] [--capture STEM]
 
@@ -16,7 +16,8 @@ over the routes finbot_routes pins, and never reads FinBot's database. One run, 
 5. Clear the chat history of each surface the scenario chats on (the driver rule, PREMORTEM P10).
 6. Note where the logs end. That is the start of the run's window. Run the steps, with --clean skipping the step kind
    the scenario's facts name, while a watch on the approver page answers with --answer or points the attendee there.
-7. Wait for quiet: no new model input line for QUIET_S seconds and no call waiting for a person, bounded at
+7. Wait for quiet: no new model input line for QUIET_S seconds, no call waiting for a person and, in a capture, no
+   model call still waiting for its recording line (up to inflight_max_s), bounded at
    DONE_TIMEOUT_S, which covers FinBot's LLM_TIMEOUT of 360 seconds. FinBot's background agents keep working after a
    chat's done marker, so quiet is the only done signal (reports/LAB-16-finbot-facts.md).
 8. Take each evidence probe from FinBot's API.
@@ -43,6 +44,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,15 +84,44 @@ class Settings:
     # answers at once. A live or capture call can take far longer, so those runs wait 30 s. quiet_s, when set,
     # overrides both, for tests.
     quiet_s: float | None = None
-    quiet_replay_s: float = 5.0
+    # 15 s, not 5: paced replay holds an answer up to 4 s (gateway REPLAY_PACE_MAX_S), and FinBot's agents spend
+    # seconds between model calls connecting their MCP servers. At 8 s setup read as quiet while the fraud agent was
+    # still connecting, the driver's calls met FinBot's agents in its SQLite database, and FinBot answered nothing for
+    # 40 s (2026-11-24 m3 take). Live runs wait 30 s for the same reason.
+    quiet_replay_s: float = 15.0
     quiet_live_s: float = 30.0
+    # A capture take also waits while a model call it sent has no recording line yet, up to this long past the last
+    # model input line. A slow live call (a judge, say) can outlast quiet_live_s, and a take ended then is cut short
+    # and fails its replay (2026-11-23 live sitting). FinBot gives up on a call at its LLM_TIMEOUT of 360 s, so a call
+    # still unrecorded past that was abandoned: a retried attempt the gateway never records, or a failed exchange.
+    inflight_max_s: float = 360.0
     poll_s: float = 0.5
     done_timeout_s: float = 420.0
     # sessionEnd waits on the decision timeout (5 s in compose.yaml) plus the gateway's grace, per session, in
     # parallel. A session whose start failed never ends, so the wait has a bound.
-    end_wait_s: float = 20.0
+    # The bound on waiting for every session's end. It returns as soon as all have ended, so the bound costs nothing
+    # on a healthy run. FinBot's SQLite stalls for 16 to 40 s when a browser page and its agents contend for it
+    # (2026-11-25 intro keeper: six sessions opened during a stall and were judged unended at 20 s).
+    end_wait_s: float = 60.0
     approver_wait_s: float = approver_client.WAIT_S
     scenarios_dir: Path = HERE
+
+
+# Browser chat mode (LAB_CHAT_IN_BROWSER=1, 2026-11-24 lab videos): the driver writes each chat step as a cue for a
+# person or the recording toolkit to type into FinBot's own chat page, and reads the reply from FinBot's history,
+# instead of posting the message itself. Every other step runs as before. The page each surface chats on, under the
+# finbot-ui proxy (ui/proxy.py), which shares the driver's session by carrying its fingerprint headers.
+CHAT_PAGES = {"vendor": "/vendor/assistant", "copilot": "/admin/dashboard"}
+# The FinBot form a browser-mode run fills on camera for each step it would otherwise make through FinBot's API: the
+# vendor onboarding form and the invoice form, so the audience sees what sets FinBot's agents to work (2026-11-25:
+# m4's invoice and s1's onboarding showed nothing on FinBot's side). Each form posts the body the API step does, with
+# the fields FinBot's page adds (phone "" and attachments []), and both bodies were checked to replay whole.
+FORM_PAGES = {"register_vendor": ("onboarding", "/vendor/onboarding"), "create_invoice": ("invoice", "/vendor/invoices")}
+ONBOARDING_FIELDS = ("company_name", "vendor_category", "industry", "services", "name", "email", "phone", "tin",
+                     "bank_account_number", "bank_name", "bank_routing_number", "bank_account_holder_name")
+INVOICE_FIELDS = ("invoice_number", "amount", "description", "invoice_date", "due_date")
+CHAT_CUE = "chat-cue.json"
+AGREEMENT_COOKIE = "agreedToRules"
 
 
 class DriverError(Exception):
@@ -103,6 +134,13 @@ class Terminated(BaseException):
 
 def _on_sigterm(signum: int, frame: Any) -> None:
     raise Terminated()
+
+
+def allowed_setup_misses(named: Any) -> list[int]:
+    """The setup miss counts a manifest value allows: one count, or a list of them. Anything else allows only 0."""
+    counts = named if isinstance(named, list) else [named]
+    valid = sorted({c for c in counts if isinstance(c, int) and not isinstance(c, bool) and c >= 0})
+    return valid or [0]
 
 
 def _fold(text: Any) -> str:
@@ -266,6 +304,31 @@ class Admin:
             raise DriverError("the gateway's epoch answer has no epoch number")
         return epoch
 
+    def select_replay(self, recording: str | None, pace: float | None = None) -> None:
+        """POST /replay: the one recording the gateway replays from, or every one with None (2026-11-24), and the
+        recording's own replay pace when the manifest pins one."""
+        doc: dict[str, Any] = {"scenario": recording}
+        if pace is not None:
+            doc["pace"] = pace
+        request = urllib.request.Request(self.url.removesuffix("/epoch") + "/replay", method="POST",
+                                         data=json.dumps(doc).encode("utf-8"),
+                                         headers={"Authorization": f"Bearer {self.token}",
+                                                  "Content-Type": "application/json"})
+        try:
+            with self._opener.open(request, timeout=ADMIN_TIMEOUT_S) as response:
+                response.read(64 * 1024)
+        except urllib.error.HTTPError as e:
+            e.close()
+            if recording is None:
+                # Every recording is how a gateway with no /replay already serves, so a refusal changes nothing
+                # (review M2).
+                return
+            raise DriverError(f"the gateway refused to replay {recording} with HTTP {e.code}. Check that "
+                              "replay/recordings holds it, then run ./lab.sh up") from None
+        except (urllib.error.URLError, OSError) as e:
+            raise DriverError(f"the gateway's admin port didn't answer ({getattr(e, 'reason', e)}). "
+                              "Run ./lab.sh up") from None
+
 
 # How far back the driver reads at a time to find a log's last newline. Model input lines carry FinBot's whole tool
 # list, so one line can be longer than this, and the scan keeps going.
@@ -323,6 +386,19 @@ class Logs:
 
     def inputs_size(self) -> int:
         return self._size(self.inputs_path)
+
+    @staticmethod
+    def lines_from(path: Path, start: int = 0) -> int:
+        """Whole lines in path from byte start on, 0 when it is missing."""
+        count = 0
+        try:
+            with path.open("rb") as f:
+                f.seek(start)
+                while chunk := f.read(LINE_SCAN_BYTES):
+                    count += chunk.count(b"\n")
+        except FileNotFoundError:
+            return 0
+        return count
 
     def audit_since(self, start: int) -> list[dict[str, Any]]:
         """ACS_AUDIT lines from start to the last whole line."""
@@ -466,9 +542,21 @@ class Run:
         live = self.env["ACS_UPSTREAM"] != "replay" or args.capture is not None
         self.quiet_s = settings.quiet_s if settings.quiet_s is not None else (
             settings.quiet_live_s if live else settings.quiet_replay_s)
+        # The take's recording, which the gateway appends one line to per exchange it records (capture only).
+        self.capture_path = (bundle / "replay" / "recordings" / f"{args.capture}.jsonl"
+                             if args.capture is not None else None)
+        self.capture_inputs_start = 0
+        self.replay: str | None = None
         self.ids: dict[str, Any] = {}
         self.chats: list[dict[str, Any]] = []
         self.errors: dict[str, str] = {}
+        self.chat_in_browser = os.environ.get("LAB_CHAT_IN_BROWSER", "").strip() == "1"
+        self.cue_seq = 0
+        # Each run numbers its cues from 1, so the cue also names its run, and a typist tells two runs' first cues
+        # apart (2026-11-24 m3 take, where s3's first cue read as s2's).
+        self.cue_run = uuid.uuid4().hex
+        self.setup_timed_out = False
+        self.replay_family: str | None = None
 
     # -- waits ---------------------------------------------------------------------------------------------------
 
@@ -483,11 +571,20 @@ class Run:
             current = self.logs.inputs_size()
             if current != size or (watch is not None and watch.busy()):
                 size, last_change = current, now
-            if now - last_change >= self.quiet_s:
+            quiet_for = now - last_change
+            if quiet_for >= self.quiet_s and (quiet_for >= s.inflight_max_s or self.calls_in_flight() == 0):
                 return True
             if now >= deadline:
                 return False
             time.sleep(s.poll_s)
+
+    def calls_in_flight(self) -> int:
+        """Model calls this capture take sent that have no recording line yet: input lines since the take began
+        minus the recording's lines. Always 0 outside a capture."""
+        if self.capture_path is None:
+            return 0
+        sent = self.logs.lines_from(self.logs.inputs_path, self.capture_inputs_start)
+        return max(0, sent - self.logs.lines_from(self.capture_path))
 
     def wait_ended(self, start: int) -> list[str]:
         """Waits for sessionEnd on every session negotiated since start. Returns the ones still open at the bound."""
@@ -503,16 +600,32 @@ class Run:
     def step(self, step: dict[str, Any]) -> None:
         kind = step["kind"]
         if kind == "register_vendor":
+            if self.chat_in_browser:
+                fields = {k: step["body"].get(k, "") for k in ONBOARDING_FIELDS}
+                vendor_id = self.form_in_page(kind, fields, lambda: self._current_vendor())
+                if vendor_id is not None:
+                    self.ids["vendor_id"] = vendor_id
+                return
             answer = self.finbot.call(routes.REGISTER_VENDOR, body=step["body"])
             if isinstance(answer, dict) and isinstance(answer.get("vendor_id"), int):
                 self.ids["vendor_id"] = answer["vendor_id"]
         elif kind == "create_invoice":
+            if self.chat_in_browser:
+                fields = {k: step["body"][k] for k in INVOICE_FIELDS}
+                number = fields["invoice_number"]
+                invoice_id = self.form_in_page(kind, fields, lambda: self._invoice_id(number))
+                if invoice_id is not None:
+                    self.ids["invoice_id"] = invoice_id
+                return
             answer = self.finbot.call(routes.CREATE_INVOICE, body=step["body"])
             invoice = answer.get("invoice") if isinstance(answer, dict) else None
             if isinstance(invoice, dict) and isinstance(invoice.get("id"), int):
                 self.ids["invoice_id"] = invoice["id"]
         elif kind == "chat":
-            result = self.finbot.chat(step["surface"], step["message"], timeout=self.settings.done_timeout_s)
+            if self.chat_in_browser:
+                result = self.chat_in_page(step["surface"], step["message"])
+            else:
+                result = self.finbot.chat(step["surface"], step["message"], timeout=self.settings.done_timeout_s)
             self.chats.append({"surface": step["surface"], "done": result.done})
         else:
             # A fresh namespace has no server row until this GET creates it, and the PUT and reset return 404
@@ -523,6 +636,77 @@ class Run:
                                  body={"tool_overrides": {step["tool"]: {"description": step["description"]}}})
             else:
                 self.finbot.call(routes.RESET_TOOLS, server=step["server"])
+
+    def write_cue(self, surface: str, page: str, message: str, *, view: bool = False,
+                  form: tuple[str, dict[str, Any]] | None = None) -> str:
+        """Writes the next cue for the browser and returns FinBot's port. A view cue names a page and types nothing."""
+        self.cue_seq += 1
+        cookie = next((c for c in self.finbot.jar if c.name == finbot_client.SESSION_COOKIE), None)
+        if cookie is None:
+            raise finbot_client.FinBotError("no FinBot session cookie to hand to the browser")
+        port = self.env.get("LAB_PORT_FINBOT", "").strip() or "8097"
+        cue = {"run": self.cue_run, "seq": self.cue_seq, "surface": surface, "page": page, "message": message,
+               "url": f"http://localhost:{port}",
+               # The session, then FinBot's CTF agreement, which its pages ask a fresh browser to accept first
+               # (finbot/static/pages/agreement.html sets this cookie). The lab's operator accepts it by running the lab.
+               "cookies": [{"name": cookie.name, "value": cookie.value, "path": "/", "httpOnly": True},
+                           {"name": AGREEMENT_COOKIE, "value": "yes", "path": "/", "httpOnly": False}]}
+        if view:
+            cue["view"] = True
+        if form is not None:
+            cue["form"], cue["fields"] = form
+        folder = self.state / "ui"
+        folder.mkdir(mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".cue-")
+        with os.fdopen(fd, "w") as f:
+            json.dump(cue, f)
+        os.replace(tmp, folder / CHAT_CUE)
+        return port
+
+    def form_in_page(self, kind: str, fields: dict[str, Any], made) -> int | None:
+        """Cues FinBot's form for a step and waits, up to the done bound, for `made` to return the id it created."""
+        form, page = FORM_PAGES[kind]
+        port = self.write_cue("vendor", page, "", form=(form, fields))
+        report.info(f"Fill FinBot's {form} form at http://localhost:{port}{page}")
+        deadline = time.monotonic() + self.settings.done_timeout_s
+        while time.monotonic() < deadline:
+            found = made()
+            if found is not None:
+                return found
+            time.sleep(self.settings.poll_s)
+        raise finbot_client.FinBotError(f"FinBot's {form} form was not submitted in time")
+
+    def _current_vendor(self) -> int | None:
+        answer = self.finbot.call(routes.VENDOR_ME)
+        vendor = answer.get("current_vendor_id") if isinstance(answer, dict) else None
+        return vendor if isinstance(vendor, int) and not isinstance(vendor, bool) else None
+
+    def _invoice_id(self, number: str) -> int | None:
+        for invoice in self._list(self.finbot.call(routes.INVOICES), "invoices"):
+            if isinstance(invoice, dict) and invoice.get("invoice_number") == number \
+                    and isinstance(invoice.get("id"), int):
+                return invoice["id"]
+        return None
+
+    def chat_in_page(self, surface: str, message: str) -> finbot_client.ChatResult:
+        """Cues one chat step for FinBot's page and waits, up to the done bound, for FinBot's history to hold the message
+        and a reply after it. The cue names the page, the message and the driver's session cookie, so the typist's
+        browser joins this run's session. It is written owner-only under state/, like the lab's other secrets."""
+        port = self.write_cue(surface, CHAT_PAGES[surface], message)
+        report.info(f"Type the message into FinBot's chat at http://localhost:{port}{CHAT_PAGES[surface]}")
+        route = routes.probe_route({"kind": "chat_reply", "surface": surface})
+        deadline = time.monotonic() + self.settings.done_timeout_s
+        while time.monotonic() < deadline:
+            messages = self._list(self.finbot.call(route), "messages")
+            asked = [n for n, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user"
+                     and isinstance(m.get("content"), str) and m["content"].strip() == message.strip()]
+            if asked:
+                replies = [m["content"] for m in messages[asked[-1] + 1:] if isinstance(m, dict)
+                           and m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"]]
+                if replies:
+                    return finbot_client.ChatResult(True, replies[-1])
+            time.sleep(self.settings.poll_s)
+        return finbot_client.ChatResult(False, "")
 
     def _id(self, name: str) -> Any:
         value = self.ids.get(name, self.scenario["facts"].get(name))
@@ -621,8 +805,126 @@ class Run:
             return watch
         return ApprovalWatch(approver, self.args.answer, self.settings, url=url, poll_deadline_s=deadline)
 
+    def live_policies(self) -> dict[str, str]:
+        """Each policy module's live variant, read by comparing its live file with each variant's file."""
+        policy = self.bundle / "policy"
+        live: dict[str, str] = {}
+        try:
+            modules = json.loads((policy / "tools" / "modules.json").read_text(encoding="utf-8"))["modules"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return live
+        for module in modules:
+            if not isinstance(module, dict) or not isinstance(module.get("live"), str):
+                continue
+            try:
+                current = (policy / module["live"]).read_bytes()
+            except OSError:
+                continue
+            for name, variant in (module.get("variants") or {}).items():
+                path = variant.get("file") if isinstance(variant, dict) else None
+                try:
+                    if isinstance(path, str) and (policy / path).read_bytes() == current:
+                        live[module["id"]] = name
+                        break
+                except OSError:
+                    continue
+        return live
+
+    def replay_recording(self) -> str | None:
+        """The recording this replay run follows: the one every manifest row with this run's scenario, mode, flags and
+        live policies names. None outside replay, in a capture, or when the rows don't settle on one, and the gateway
+        then replays from every recording as before.
+
+        Two recordings of one scenario share their first keys, and the gateway searched files in name order, so an off
+        run of s1 took s1__enforce's first answer and ran short (2026-11-24 owner sitting)."""
+        if self.env.get("ACS_UPSTREAM") != "replay" or self.args.capture is not None:
+            return None
+        try:
+            rows = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8"))["runs"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        live = self.live_policies()
+        same_run = [r for r in rows if isinstance(r, dict)
+                    and r.get("scenario") == self.args.scenario and r.get("mode") == self.env.get("ACS_LAB_MODE")
+                    and r.get("answer") == self.args.answer and bool(r.get("clean")) == self.args.clean]
+        exact = {r.get("recording") for r in same_run
+                 if r.get("policy") is None or r.get("policy") == {k: live.get(k) for k in r["policy"]}}
+        # A learner's own policy is not byte for byte a shipped variant, so no row matches on policy. The rows for the
+        # same run still settle it unless the recording turns on the policy, as s3's deny and allow do (review M1).
+        for found in (exact, {r.get("recording") for r in same_run}):
+            if len(found) == 1 and isinstance(next(iter(found)), str):
+                return next(iter(found))
+        return None
+
+    def replay_pace(self, recording: str | None) -> float | None:
+        """The pace the manifest pins for a recording, or None for the gateway's own. A recording that catches FinBot's
+        agents racing each other replays only at the pace it was checked at: s4a's reject run missed its recording at
+        the lab's 0.1 and matched at 0 (2026-11-24 m4 takes)."""
+        if recording is None:
+            return None
+        try:
+            pace = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
+                .get("replayPace", {}).get(recording)
+        except (OSError, ValueError, AttributeError):
+            return None
+        if isinstance(pace, bool) or not isinstance(pace, (int, float)) or not 0 <= pace <= 1:
+            return None
+        return float(pace)
+
+    def setup_misses_expected(self, recording: str | None) -> list[int]:
+        """The setup miss counts the manifest allows for a recording, [0] when it names none. s4a__reject was captured
+        with FinBot's vendor onboarding already done, so its setup's onboarding turns have no answer in it, and every
+        run of it misses the same 4 (2026-11-24 m4 takes). s4a__off misses the same 4 on every run (2026-11-26
+        acceptance). s6__deny names two counts: FinBot's background vendor notice sends either after the changed
+        send_email declaration lands, as in the take, or a few seconds before it, and then its next 2 calls have no
+        answer (2026-11-26 acceptance, 1 run in 5). The steps replay whole either way. Any other count fails the run."""
+        if recording is None:
+            return [0]
+        try:
+            named = json.loads((self.settings.scenarios_dir / "manifest.json").read_text(encoding="utf-8")) \
+                .get("setupMissesExpected", {}).get(recording)
+        except (OSError, ValueError, AttributeError):
+            return [0]
+        return allowed_setup_misses(named)
+
+    def _after_setup(self, a0: int, epoch_before: Any) -> tuple[Any, dict[str, Any]]:
+        """Setup's quiet, its epoch closed and its sessions ended, then the baseline and a clear chat history."""
+        if self.scenario["setup"]:
+            if not self.wait_quiet():
+                self.setup_timed_out = True
+            epoch_before = self.admin.bump()
+        self.wait_ended(a0)
+        # The audit boundary checks count decisions from: setup is quiet, its epoch is closed and its sessions
+        # have ended, so every decision setup made sits before this offset (module 3 review).
+        setup_audit_end, _ = self.logs.offsets()
+        baseline = {**self.baseline(), "epoch": epoch_before, "audit_offset": setup_audit_end}
+        for surface in dict.fromkeys(s["surface"] for s in self.scenario["steps"] if s["kind"] == "chat"):
+            self.finbot.call(routes.CLEAR_VENDOR_HISTORY if surface == "vendor" else routes.CLEAR_COPILOT_HISTORY)
+        return epoch_before, baseline
+
     def execute(self) -> int:
+        replaying = self.env.get("ACS_UPSTREAM") == "replay" and self.args.capture is None
+        if replaying:
+            # Always set, so a selection a crashed run left behind never reaches this one.
+            self.replay = self.replay_recording()
+            if self.replay is None:
+                # No single take fits this run, as with a learner's own policy. Its scenario's takes still do, and no
+                # other scenario's answer can reach it. The run says so, since an answer may come from a sibling take.
+                self.replay_family = self.args.scenario
+                report.info(f"No single recording fits this run, so replay draws on {self.args.scenario}'s recordings")
+            self.admin.select_replay(self.replay or self.replay_family, self.replay_pace(self.replay))
+        try:
+            return self._execute()
+        finally:
+            if replaying and (self.replay is not None or self.replay_family is not None):
+                try:
+                    self.admin.select_replay(None)
+                except DriverError:
+                    pass
+
+    def _execute(self) -> int:
         a0, setup_inputs = self.logs.offsets()
+        self.capture_inputs_start = setup_inputs
         epoch_before = self.admin.bump()
         try:
             namespace = self.finbot.open_session()
@@ -632,19 +934,22 @@ class Run:
         try:
             for step in self.scenario["setup"]:
                 self.step(step)
-            if self.scenario["setup"]:
-                if not self.wait_quiet():
-                    result, error = "timed_out", "the scenario's setup didn't go quiet"
-                epoch_before = self.admin.bump()
-            self.wait_ended(a0)
-            # The audit boundary checks count decisions from: setup is quiet, its epoch is closed and its sessions
-            # have ended, so every decision setup made sits before this offset (module 3 review).
-            setup_audit_end, _ = self.logs.offsets()
-            baseline = {**self.baseline(), "epoch": epoch_before, "audit_offset": setup_audit_end}
-            for surface in dict.fromkeys(s["surface"] for s in self.scenario["steps"] if s["kind"] == "chat"):
-                self.finbot.call(routes.CLEAR_VENDOR_HISTORY if surface == "vendor" else routes.CLEAR_COPILOT_HISTORY)
+            # One retry of the quiet wait and everything after it. FinBot's agents and the driver's calls can meet in
+            # FinBot's SQLite database, which then locks and leaves FinBot answering nothing for about 40 s, past the
+            # driver's request timeout (2026-11-24 intro and m3 takes). Setup's own steps are never repeated: a second
+            # vendor registration would be a second vendor.
+            for attempt in (1, 2):
+                try:
+                    epoch_before, baseline = self._after_setup(a0, epoch_before)
+                    break
+                except finbot_client.FinBotError as e:
+                    if attempt == 2 or "timed out" not in str(e):
+                        raise
+                    report.info("FinBot was slow to answer after setup, so the driver waits for quiet again")
         except finbot_client.FinBotError as e:
             raise DriverError(f"FinBot failed before the scenario's steps: {_fold(e)}") from None
+        if self.setup_timed_out:
+            result, error = "timed_out", "the scenario's setup didn't go quiet"
 
         # The run's window starts here: setup's sessions are closed and the history is clear. From here on every exit
         # writes a record, a crash or a signal included, so a check never reads the run before as the newest (M4).
@@ -654,14 +959,17 @@ class Run:
             "format": RUN_FORMAT, "run_id": "", "scenario": self.args.scenario,
             "flags": {"answer": self.args.answer, "clean": self.args.clean},
             "mode": self.env["ACS_LAB_MODE"], "signing": self.env["ACS_RESPONSE_SIGNING"],
-            "upstream": self.env["ACS_UPSTREAM"], "capture": self.args.capture, "policy_sha256": "",
+            "upstream": self.env["ACS_UPSTREAM"], "capture": self.args.capture, "replay": self.replay,
+            "policy_sha256": "",
             "started": _rfc3339(started), "ended": "", "result": "broken",
             "error": "the driver stopped before the run finished",
             "audit": [audit_start, audit_start], "model_inputs": [inputs_start, inputs_start], "sessions": [],
             # lab pins keeps a poisoned run's model input lines out of the tool registry. The span starts before
             # setup, so it covers every line the run's FinBot wrote, and the flag names the run that changed a tool.
             "model_input_span": [setup_inputs, inputs_start], "poisoned": self._poisoned(),
-            "sessions_unended": [], "replay_misses": 0, "epoch": [epoch_before, None], "quiet_s": self.quiet_s,
+            "sessions_unended": [], "replay_misses": 0, "setup_replay_misses": 0, "setup_audit_start": a0,
+            "setup_replay_misses_expected": self.setup_misses_expected(self.replay),
+            "epoch": [epoch_before, None], "quiet_s": self.quiet_s,
             "approval": {"answer": self.args.answer, "waiting_seen": False, "answered": False, "status": None,
                          "error": None},
             "finbot": {"namespace": namespace, "vendor": {}, "evidence": {"baseline": baseline}, "chats": self.chats,
@@ -754,6 +1062,11 @@ class Run:
             "model_input_span": [record["model_input_span"][0], max(record["model_input_span"][0], inputs_end)],
             "sessions": _opened(events),
             "replay_misses": sum(1 for e in events if e.get("acs_audit_event") == "replay_miss"),
+            # Setup's misses too: a setup that got neutral replies leaves FinBot in a state the recording never had,
+            # and the run window alone hid them (2026-11-24 premortem, m7 on paced replay).
+            "setup_replay_misses": sum(1 for e in self.logs.audit_since(record["setup_audit_start"])
+                                       if e.get("acs_audit_event") == "replay_miss")
+                                   - sum(1 for e in events if e.get("acs_audit_event") == "replay_miss"),
         })
         return judge(record)
 
@@ -764,12 +1077,15 @@ class Run:
         if isinstance(reply, str) and reply:
             shown = _fold(reply)
             report.info(f"FinBot's reply: {shown[:REPLY_SHOWN]}{'...' if len(shown) > REPLY_SHOWN else ''}")
+        if code == report.EXIT_PASS and record.get("setup_replay_misses"):
+            report.info(f"Setup had {record['setup_replay_misses']} model calls with no recording, as the manifest "
+                        "expects for this recording. The scenario's steps replayed whole.")
         if code == report.EXIT_PASS:
             report.done(f"{name} ran in {record['mode']} mode and FinBot went quiet. {where}")
         else:
             report.not_yet(f"{name} {label}: {record['error']}. {where}")
         port = self.env.get("LAB_PORT_VIEWER", "").strip() or "8095"
-        report.info(f"The decision viewer is at http://127.0.0.1:{port}/")
+        report.info(f"The decision viewer is at http://localhost:{port}/")
         return code
 
 
@@ -780,7 +1096,10 @@ def judge(record: dict[str, Any]) -> tuple[int, str]:
     environment never reaches here: execute stores broken for it."""
     if record["result"] != "completed":
         return report.EXIT_NOT_YET, record["result"].replace("_", " ")
-    misses = record["replay_misses"]
+    setup = record.get("setup_replay_misses", 0)
+    # The manifest's expected setup misses pass only at a count it names (setup_misses_expected).
+    misses = record["replay_misses"] + (0 if setup in allowed_setup_misses(record.get("setup_replay_misses_expected"))
+                                        else setup)
     errors = record["finbot"].get("errors") or {}
     approval = record["approval"]
     approval_error = approval.get("error")

@@ -10,14 +10,15 @@
 #               publishes none. The lab CLI drives FinBot over drive-net.
 #   upstream-net the gateway alone. Not internal, so the gateway reaches OpenAI for live runs and capture takes, and
 #               publishes the approver port.
-#   drive-net   FinBot and the lab CLI only, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
+#   drive-net   FinBot, the lab CLI and the finbot-ui proxy, so `lab run` can drive FinBot's API (LAB-16, issue #589). internal: true,
 #               so the CLI, which mounts state/secrets, still has no path to the internet.
 #   acs-net     gateway, Guardian, OPA, Jaeger and the lab CLI. internal: true, so nothing on it reaches the internet,
 #               and FinBot, which isn't on it, can't reach the Guardian, OPA or the gateway's admin port.
+#   finbot-ui-net the finbot-ui proxy alone, which publishes FinBot's web UI on loopback and forwards only to FinBot.
 #   ui-net      the viewer and Jaeger only. Docker publishes no port for a container whose only network is internal.
 #
-# Every published port binds 127.0.0.1 and takes an override in labs/finbot/.env: LAB_PORT_APPROVER, LAB_PORT_VIEWER
-# and LAB_PORT_JAEGER (PREMORTEM P9). lab doctor names the variable on a collision.
+# Every published port binds 127.0.0.1 and takes an override in labs/finbot/.env: LAB_PORT_APPROVER, LAB_PORT_VIEWER,
+# LAB_PORT_FINBOT and LAB_PORT_JAEGER (PREMORTEM P9). lab doctor names the variable on a collision.
 #
 # Lab conventions, each off outside this lab and each waiting on the issue named:
 #   - The Guardian key document (acs-lab-keys/1) and ML-DSA-65 decision signing: issue #460.
@@ -79,11 +80,15 @@ services:
       acs-gateway:
         condition: service_healthy
     healthcheck:
+      # Every check is a request with no cookie, and FinBot writes a new session for each one to its SQLite database.
+      # Every 5 s those writes met FinBot's agents and locked the database, which left FinBot answering nothing for
+      # about 40 s (2026-11-24 lab video takes). So it checks every 2 s while it starts, then once a minute.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
-      interval: 5s
+      interval: 60s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 3
+      start_period: 60s
+      start_interval: 2s
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
@@ -118,6 +123,9 @@ services:
       # Replay answers from recordings with no network and no key. compose.openai.yaml switches to OpenAI.
       ACS_UPSTREAM: replay
       ACS_RECORDINGS_DIR: /lab/replay/recordings
+      # Each replayed answer waits a tenth of its recorded duration, at most 4 s, so the run keeps its live shape and
+      # the viewer can tell decisions apart. LAB_REPLAY_PACE=0 answers at once.
+      ACS_REPLAY_PACE: ${LAB_REPLAY_PACE:-0.1}
       ACS_GUARDIAN_URL: http://acs-guardian:8787/
       ACS_GUARDIAN_HOST_ALLOWLIST: acs-guardian
       ACS_HMAC_SECRET_FILE: /run/acs/hmac.key
@@ -167,7 +175,8 @@ services:
       finbot-net: {}
       acs-net:
         ipv4_address: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
-      # The one way out of the stack, for the model upstream and the published approver port. Only the gateway joins it.
+      # The way out of the stack for the model upstream and the published approver port. Only the gateway joins it.
+      # finbot-ui-net is the only other non-internal network a FinBot-side container joins (2026-11-24 premortem).
       upstream-net: {}
     extra_hosts:
       # Reaches a model served on the host, such as Ollama, on Linux as on Docker Desktop.
@@ -288,6 +297,35 @@ services:
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped
 
+  finbot-ui:
+    # FinBot's own web UI for a browser on the host (the lab videos type into its chat page, Rock 2026-11-24). FinBot
+    # publishes no port (C-17), so ui/proxy.py forwards 127.0.0.1:LAB_PORT_FINBOT to finbot:8000 and nowhere else. It
+    # sits on drive-net to reach FinBot and on finbot-ui-net, the one network Docker can publish its port from. It
+    # never takes a target from a request, so FinBot gains no route out through it.
+    image: ${LAB_RUNTIME_IMAGE:-ghcr.io/genai-security-project/acs-lab-runtime:unpublished}
+    build: *acs-build
+    user: "${LAB_UID:-10001}:${LAB_GID:-10001}"
+    command: ["python", "/opt/lab/ui/proxy.py", "--host", "0.0.0.0", "--port", "8097", "--upstream", "finbot:8000"]
+    ports:
+      - "127.0.0.1:${LAB_PORT_FINBOT:-8097}:8097"
+    networks:
+      - drive-net
+      - finbot-ui-net
+    depends_on:
+      finbot:
+        condition: service_healthy
+    healthcheck:
+      # A TCP connect to its own port, never a request to FinBot, which would write a FinBot session per check.
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8097), timeout=3).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
   jaeger:
     image: jaegertracing/all-in-one:1.76.0@sha256:ab6f1a1f0fb49ea08bcd19f6b84f6081d0d44b364b6de148e1798eb5816bacac
     profiles: ["traces"]
@@ -312,6 +350,8 @@ services:
     entrypoint: ["/usr/local/bin/lab-entrypoint", "python", "/opt/lab/cli/lab.py"]
     environment:
       LAB_BUNDLE: /lab
+      # 1 makes `lab run` cue each chat for FinBot's own page instead of posting it (scenarios/driver.py CHAT_PAGES).
+      LAB_CHAT_IN_BROWSER: ${LAB_CHAT_IN_BROWSER:-0}
       ACS_GATEWAY_ADMIN_HOST: ${LAB_GATEWAY_ADMIN_IP:-10.88.47.10}
       ACS_GATEWAY_ADMIN_PORT: "8091"
       ACS_GATEWAY_ADMIN_TOKEN_FILE: /lab/state/secrets/admin.token
@@ -328,6 +368,8 @@ services:
 networks:
   finbot-net:
     internal: true
+  # finbot-ui only, so its port can publish. Nothing else joins it.
+  finbot-ui-net: {}
   upstream-net: {}
   acs-net:
     internal: true

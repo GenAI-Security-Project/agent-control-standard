@@ -43,7 +43,7 @@ BUNDLE_DIR=$(pwd)
 LOCAL_RUNTIME_IMAGE=acs-lab-runtime:local
 LOCAL_FINBOT_IMAGE=acs-lab-finbot:local
 # Published ports and the .env variable that moves each one (PREMORTEM P9).
-PORTS="LAB_PORT_APPROVER:8090 LAB_PORT_VIEWER:8095 LAB_PORT_JAEGER:16686"
+PORTS="LAB_PORT_APPROVER:8090 LAB_PORT_VIEWER:8095 LAB_PORT_FINBOT:8097 LAB_PORT_JAEGER:16686"
 MIN_MEMORY_BYTES=6442450944
 # FinBot's named volumes. compose.yaml fixes the project name, acs-finbot-lab, so these names are fixed too.
 FINBOT_VOLUMES="acs-finbot-lab_finbot-data acs-finbot-lab_finbot-uploads acs-finbot-lab_finbot-cache acs-finbot-lab_redis-data"
@@ -182,6 +182,7 @@ doctor() {
         case $name in
             LAB_PORT_APPROVER) service=acs-gateway ;;
             LAB_PORT_VIEWER) service=acs-viewer ;;
+            LAB_PORT_FINBOT) service=finbot-ui ;;
             *) service=jaeger ;;
         esac
         state=$(port_state "$service" "$port" "$default")

@@ -256,6 +256,20 @@ def test_evidence_snapshot_written(harness, capsys):
     assert record["finbot"]["evidence"]["reply"] == harness.lab.reply
 
 
+def test_answer_answers_each_held_call_once(harness, capsys):
+    """FinBot retried the rejected transfer in the s4a__reject recording, so a second call was held. --answer reject
+    answers that one too, and it does not time out (2026-11-24, m4 took 4 min 41 s on the 240 s ask deadline)."""
+    harness.lab.ask_on_invoice = True
+    harness.lab.ask_again_on_reject = True
+    code, lines = harness.run(capsys, "s4a", "--answer", "reject")
+    assert code == 0, lines
+    assert [a["choice"] for a in harness.lab.answers] == ["reject", "reject"]
+    assert len({a["id"] for a in harness.lab.answers}) == 2
+    assert all(choice == "reject" for choice in harness.lab.pending.values())
+    (record,) = harness.records()
+    assert record["approval"]["answered"] is True and record["approval"]["error"] is None
+
+
 def test_answer_posts_once_with_token_and_origin(harness, capsys):
     harness.lab.ask_on_invoice = True
     code, lines = harness.run(capsys, "s4a", "--answer", "approve")
@@ -295,6 +309,7 @@ def test_untrusted_text_escaped_and_bounded(harness, capsys):
 
 
 def test_capture_stem_recorded(harness, capsys):
+    harness.lab.capture = "s3__allow"
     code, lines = harness.run(capsys, "s3", "--capture", "s3__allow")
     assert code == 0, lines
     (record,) = harness.records()
@@ -479,6 +494,7 @@ def test_quiet_window_follows_the_upstream(harness, capsys):
 
     _set_env(harness, "ACS_UPSTREAM=openai", "ACS_UPSTREAM=replay")
     harness.run(capsys, "s1", **settings)
+    harness.lab.capture = "s1__off"
     harness.run(capsys, "s1", "--capture", "s1__off", **settings)
     by_capture = {r["capture"]: r["quiet_s"] for r in harness.records() if r["scenario"] == "s1"}
     assert by_capture == {None: 0.3, "s1__off": 1.5}
@@ -675,3 +691,351 @@ def test_judge_flags_an_unposted_answer_without_an_error_string():
               "approval": {"answer": "approve", "answered": False, "error": None, "status": None}}
     code, _ = driver.judge(record)
     assert code == 1 and record["result"] == "not_yet" and "--answer" in record["error"]
+
+
+# 2026-11-23 live sitting: a capture take ended while a slow live call had no recording line yet, so its replay ran
+# short. A capture now stays open while a call it sent is unrecorded, up to inflight_max_s.
+
+def _quiet_run(tmp_path, capture: bool, inflight, **settings):
+    import types
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "model-inputs.jsonl").write_text("", encoding="utf-8")
+    run = types.SimpleNamespace(
+        settings=driver.Settings(finbot_url="http://127.0.0.1:1", approver_port=1, quiet_s=0.2, poll_s=0.02,
+                                 done_timeout_s=3.0, **settings),
+        logs=driver.Logs(state), quiet_s=0.2)
+    run.calls_in_flight = inflight
+    return run
+
+
+def test_a_capture_with_a_call_in_flight_is_not_quiet_until_it_is_recorded(tmp_path):
+    import time
+    started = time.monotonic()
+    run = _quiet_run(tmp_path, True, lambda: 1 if time.monotonic() - started < 0.8 else 0, inflight_max_s=5.0)
+    assert driver.Run.wait_quiet(run) is True
+    assert time.monotonic() - started >= 0.8
+
+
+def test_an_unrecorded_call_holds_a_capture_only_up_to_the_bound(tmp_path):
+    import time
+    started = time.monotonic()
+    run = _quiet_run(tmp_path, True, lambda: 1, inflight_max_s=0.6)
+    assert driver.Run.wait_quiet(run) is True
+    assert 0.6 <= time.monotonic() - started < 2.0
+
+
+def test_calls_in_flight_counts_input_lines_since_the_take_less_recording_lines(tmp_path):
+    import types
+    state = tmp_path / "state"
+    state.mkdir()
+    inputs = state / "model-inputs.jsonl"
+    inputs.write_text('{"before": 1}\n', encoding="utf-8")
+    start = inputs.stat().st_size
+    with inputs.open("a", encoding="utf-8") as f:
+        f.write('{"a": 1}\n{"b": 2}\n{"c": 3}\n')
+    recording = tmp_path / "s1__off.jsonl"
+    run = types.SimpleNamespace(logs=driver.Logs(state), capture_path=recording, capture_inputs_start=start)
+    assert driver.Run.calls_in_flight(run) == 3                 # no recording file yet
+    recording.write_text('{"x": 1}\n{"y": 2}\n', encoding="utf-8")
+    assert driver.Run.calls_in_flight(run) == 1
+    recording.write_text('{"x": 1}\n{"y": 2}\n{"z": 3}\n{"w": 4}\n', encoding="utf-8")
+    assert driver.Run.calls_in_flight(run) == 0                 # a retried key never goes negative
+    run.capture_path = None
+    assert driver.Run.calls_in_flight(run) == 0                 # outside a capture nothing is in flight
+
+
+# 2026-11-24 owner sitting: s1__off and s1__enforce share their first keys, so an off run replayed the enforce take's
+# first answer. The driver now picks each replay run's recording from the manifest and the live policies.
+
+def _policy_pack(harness: Harness, **variants: str) -> None:
+    """The real policy pack in the harness bundle, with each named module's live file set to that variant."""
+    import shutil
+    policy = harness.bundle / "policy"
+    shutil.copytree(SCENARIOS.parent / "policy", policy, dirs_exist_ok=True)
+    modules = {m["id"]: m for m in json.loads((policy / "tools" / "modules.json").read_text())["modules"]}
+    for module, variant in {"m3": "starter", "m4": "starter", "m5": "starter", "m6": "starter", **variants}.items():
+        entry = modules[module]
+        source = entry["variants"].get(variant, {}).get("file")
+        if source:
+            shutil.copyfile(policy / source, policy / entry["live"])
+
+
+@pytest.mark.parametrize("argv, mode, policies, want", [
+    (["s1"], "off", {}, "s1__off"),
+    (["s1"], "enforce", {}, "s1__enforce"),
+    (["s2"], "shadow", {}, "s2__off"),
+    (["s3"], "enforce", {}, "s3__deny"),
+    (["s3"], "enforce", {"m3": "solution"}, "s3__allow"),
+    (["s2"], "enforce", {}, "s2__enforce"),
+    (["s2"], "enforce", {"m3": "solution"}, "s2__fixed"),
+    (["s2"], "enforce", {"m3": "solution", "m4": "solution", "m5": "solution", "m6": "solution"}, "s2__solutions"),
+    (["s4a", "--answer", "approve"], "enforce", {"m3": "solution", "m4": "solution"}, "s4a__approve"),
+])
+def test_a_replay_run_selects_the_recording_its_manifest_row_names(harness, capsys, argv, mode, policies, want):
+    _policy_pack(harness, **policies)
+    _set_env(harness, "ACS_LAB_MODE=enforce", f"ACS_LAB_MODE={mode}")
+    harness.lab.chat_done = True
+    harness.run(capsys, *argv)
+    assert harness.lab.replay_selected[0] == want and harness.lab.replay_selected[-1] is None
+    assert harness.records()[-1]["replay"] == want
+
+
+def test_a_run_no_row_settles_replays_from_its_own_scenarios_takes(harness, capsys):
+    # No guide row runs s1 with an answer, so the gateway draws on s1's takes only, never another scenario's
+    # (2026-11-24 premortem, C-08), and the selection is cleared after the run.
+    code, lines = harness.run(capsys, "s1", "--answer", "approve")
+    assert harness.lab.replay_selected == ["s1", None]
+    assert any("replay draws on s1's recordings" in line for line in lines)
+    assert harness.records()[-1]["replay"] is None
+
+
+def test_a_capture_selects_no_replay(harness, capsys):
+    harness.lab.capture = "s3__allow"
+    harness.run(capsys, "s3", "--capture", "s3__allow")
+    assert harness.lab.replay_selected == []
+
+
+def test_a_learners_own_policy_still_settles_a_run_whose_recording_does_not_turn_on_policy(harness, capsys):
+    # Review M1: a correct module 3 policy that is not the shipped solution byte for byte.
+    _policy_pack(harness, m3="solution")
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s1")
+    assert harness.lab.replay_selected[0] == "s1__enforce"
+
+
+def test_s2_under_an_unknown_module_3_policy_replays_from_its_own_takes(harness, capsys):
+    # s2 has a take per policy set (starter, module 3 fixed, every solution), so an unknown policy can't pick one.
+    _policy_pack(harness, m3="solution")
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s2")
+    assert harness.lab.replay_selected == ["s2", None]
+
+
+def test_s3_with_an_unknown_policy_replays_from_its_own_takes(harness, capsys):
+    # s3's deny and allow takes turn on module 3's policy, so an unknown policy can't pick one.
+    _policy_pack(harness)
+    live = harness.bundle / "policy" / "outbound_email.rego"
+    live.write_text(live.read_text() + "\n# my own fix\n")
+    harness.run(capsys, "s3")
+    assert harness.lab.replay_selected == ["s3", None]
+
+
+def test_a_gateway_with_no_replay_route_still_runs_every_recording(harness, capsys, monkeypatch):
+    # Review M2: an older gateway answers 404 to /replay. A null selection changes nothing there.
+    monkeypatch.setattr(harness.lab, "admin_token", harness.lab.admin_token)
+    original = driver.Admin.select_replay
+
+    def no_route(self, recording, pace=None):
+        if recording is None:
+            import io
+            import urllib.error
+            raise_404 = urllib.error.HTTPError(self.url, 404, "not found", {}, io.BytesIO(b""))
+            monkeypatch.setattr(self._opener, "open", lambda *a, **k: (_ for _ in ()).throw(raise_404))
+        return original(self, recording, pace)
+    monkeypatch.setattr(driver.Admin, "select_replay", no_route)
+    code, lines = harness.run(capsys, "s1")
+    assert code == 0, lines
+
+
+def _typist(harness: Harness, stop: Any, sent: list[dict[str, Any]]) -> None:
+    """Stands in for the recording toolkit: reads each chat cue and posts it as FinBot's page would, with the cue's
+    cookie and the driver's fingerprint headers, which ui/proxy.py adds for a browser."""
+    import urllib.request
+
+    import finbot_client
+    cue_path = harness.bundle / "state" / "ui" / driver.CHAT_CUE
+    done: tuple = ()
+    while not stop.is_set():
+        try:
+            cue = json.loads(cue_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cue = None
+        if cue and (cue["run"], cue["seq"]) != done:
+            done = (cue["run"], cue["seq"])
+            sent.append(cue)
+            if cue.get("view"):
+                # A view cue opens a page and types nothing, as acsrec.typist does.
+                stop.wait(0.05)
+                continue
+            if cue.get("form"):
+                # A form cue posts what FinBot's own form would: the onboarding form adds nothing the cue lacks, the
+                # invoice form adds attachments (static/js/vendor/invoice.js:260-267).
+                path = "/vendor/api/v1/vendors/register" if cue["form"] == "onboarding" else "/vendor/api/v1/invoices"
+                body = dict(cue["fields"]) if cue["form"] == "onboarding" else {**cue["fields"], "attachments": []}
+                headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
+                           "X-CSRF-Token": harness.lab.csrf,
+                           "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
+                request = urllib.request.Request(harness.settings.finbot_url + path, method="POST", headers=headers,
+                                                 data=json.dumps(body).encode())
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    response.read()
+                stop.wait(0.05)
+                continue
+            path = "/vendor/api/v1/chat" if cue["surface"] == "vendor" else "/admin/api/v1/copilot/chat"
+            headers = {**finbot_client.FINGERPRINT_HEADERS, "Content-Type": "application/json",
+                       "X-CSRF-Token": harness.lab.csrf, "Cookie": "; ".join(f"{c['name']}={c['value']}" for c in cue["cookies"])}
+            request = urllib.request.Request(harness.settings.finbot_url + path, method="POST", headers=headers,
+                                             data=json.dumps({"message": cue["message"]}).encode())
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read()
+        stop.wait(0.05)
+
+
+def test_browser_chat_mode_cues_the_page_and_reads_the_reply(harness, capsys, monkeypatch):
+    """2026-11-24 lab videos: with LAB_CHAT_IN_BROWSER=1 the message is typed into FinBot's page, so the driver cues it
+    and never posts the chat itself. The run still completes on the reply FinBot's history holds."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        code, lines = harness.run(capsys, "s3")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert code == 0, lines
+    # Setup's onboarding cues a view of the vendor dashboard, then the chat cues its page (2026-11-25).
+    # Setup's onboarding is filled into FinBot's form, then the chat cues its page (2026-11-25).
+    assert [(c["page"], c.get("form")) for c in sent] == [("/vendor/onboarding", "onboarding"),
+                                                          ("/vendor/assistant", None)]
+    assert sent[0]["message"] == "" and [c["name"] for c in sent[1]["cookies"]] == ["finbot_session", "agreedToRules"]
+    assert harness.lab.registered_bodies[0]["phone"] == "" and "company_name" in harness.lab.registered_bodies[0]
+    assert sent[1]["url"] == "http://localhost:8097"
+    assert any("Type the message into FinBot's chat at http://localhost:8097/vendor/assistant" in line for line in lines)
+    # One chat, the typist's, and the session never moved (a fingerprint mismatch would start a new namespace).
+    assert sum(1 for s in harness.lab.seen if s.method == "POST" and s.path == "/vendor/api/v1/chat") == 1
+    assert harness.lab.hijacks == 0
+    cue_file = harness.bundle / "state" / "ui" / driver.CHAT_CUE
+    assert cue_file.stat().st_mode & 0o077 == 0
+
+
+def test_browser_chat_mode_with_no_typist_runs_short(harness, capsys, monkeypatch):
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    code, lines = harness.run(capsys, "s3", done_timeout_s=1.0)
+    assert code != 0, lines
+    assert not any(s.method == "POST" and s.path == "/vendor/api/v1/chat" for s in harness.lab.seen)
+
+
+def test_each_run_names_its_cues(harness, capsys, monkeypatch):
+    """Two runs both cue seq 1. The run id tells them apart, so a typist types the second run's chat too."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        first, _ = harness.run(capsys, "s3")
+        second, _ = harness.run(capsys, "s3")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert (first, second) == (0, 0)
+    assert [c["seq"] for c in sent] == [1, 2, 1, 2] and len({c["run"] for c in sent}) == 2
+
+
+def test_a_finbot_stall_after_setup_is_waited_out_once(harness, capsys, monkeypatch):
+    """2026-11-24 intro take: FinBot's database locked after setup and a baseline read timed out. The driver waits
+    for quiet again and retries once, and the run completes. Setup's vendor registration is not repeated."""
+    import functools
+    import finbot_client
+    monkeypatch.setattr(driver.finbot_client, "FinBot", functools.partial(finbot_client.FinBot, timeout=0.5))
+    harness.lab.stall_first_dead_drop_s = 1.5
+    code, lines = harness.run(capsys, "s3")
+    assert code == 0, lines
+    assert any("waits for quiet again" in line for line in lines)
+    assert sum(1 for s in harness.lab.seen if s.path == "/vendor/api/v1/vendors/register") == 1
+
+
+def test_a_recording_with_a_pinned_pace_is_selected_with_it(harness, tmp_path):
+    """2026-11-24 m4 takes: s4a's reject recording replays only at pace 0, which the manifest pins."""
+    import shutil
+    scen = tmp_path / "scen"
+    shutil.copytree(SCENARIOS, scen, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    doc = json.loads((scen / "manifest.json").read_text(encoding="utf-8"))
+    doc["replayPace"] = {"s4a__reject": 0, "bad": 3}
+    (scen / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
+                     harness.bundle)
+    assert run.replay_pace("s4a__reject") == 0.0
+    assert run.replay_pace("bad") is None and run.replay_pace("s1__off") is None and run.replay_pace(None) is None
+
+
+
+def test_a_replay_miss_during_setup_fails_the_run(harness, capsys):
+    """2026-11-24 premortem: m7's setup missed its recording on paced replay while the run read completed, because only
+    the run's own window counted misses. A setup that got neutral replies is not the recorded run."""
+    harness.lab.replay_miss_on_register = True
+    code, lines = harness.run(capsys, "s3")
+    assert code != 0, lines
+    record = harness.records()[-1]
+    assert record["setup_replay_misses"] == 1 and record["replay_misses"] == 0
+    assert "had no recording in replay" in record["error"]
+
+
+def _judged(**fields):
+    record = {"result": "completed", "error": None, "replay_misses": 0, "setup_replay_misses": 0,
+              "finbot": {"errors": {}}, "approval": {"answer": None, "answered": False, "error": None},
+              "sessions_unended": [], **fields}
+    return driver.judge(record), record
+
+
+def test_setup_misses_pass_only_at_the_count_the_manifest_expects():
+    """2026-11-24 m4 takes: s4a__reject was captured after FinBot's vendor onboarding, so every run of it misses the
+    same 4 setup calls while its steps replay whole. Exactly that count passes. Any other fails, as before."""
+    (code, _), record = _judged(setup_replay_misses=4, setup_replay_misses_expected=4)
+    assert code == 0 and record["error"] is None
+    for setup, expected in ((5, 4), (3, 4), (4, 0), (1, 0)):
+        (code, _), record = _judged(setup_replay_misses=setup, setup_replay_misses_expected=expected)
+        assert code != 0 and "had no recording in replay" in record["error"], (setup, expected)
+    # A list allows each count it names, and only those.
+    for setup in (0, 2):
+        (code, _), record = _judged(setup_replay_misses=setup, setup_replay_misses_expected=[0, 2])
+        assert code == 0 and record["error"] is None, setup
+    (code, _), record = _judged(setup_replay_misses=1, setup_replay_misses_expected=[0, 2])
+    assert code != 0
+    # A step miss always fails, whatever setup expects.
+    (code, _), record = _judged(replay_misses=1, setup_replay_misses=4, setup_replay_misses_expected=4)
+    assert code != 0
+
+
+def test_the_manifest_names_expected_setup_misses_per_recording(harness, tmp_path):
+    import shutil
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, harness.settings, harness.bundle)
+    assert run.setup_misses_expected("s4a__reject") == [4]
+    assert run.setup_misses_expected("s6__deny") == [0, 2]
+    assert run.setup_misses_expected("s4a__approve") == [0] and run.setup_misses_expected(None) == [0]
+    scen = tmp_path / "scenarios"
+    shutil.copytree(SCENARIOS, scen, ignore=shutil.ignore_patterns("tests", "__pycache__"))
+    doc = json.loads((scen / "manifest.json").read_text(encoding="utf-8"))
+    doc["setupMissesExpected"] = {"a": True, "b": -2, "c": "4", "d": 2.5, "e": [2, "x", True, 0]}
+    (scen / "manifest.json").write_text(json.dumps(doc), encoding="utf-8")
+    run = driver.Run(driver.Args("s4a", "reject", False, None), {}, replace(harness.settings, scenarios_dir=scen),
+                     harness.bundle)
+    assert [run.setup_misses_expected(k) for k in "abcd"] == [[0], [0], [0], [0]]
+    assert run.setup_misses_expected("e") == [0, 2]
+
+
+def test_an_invoice_run_in_browser_mode_fills_finbots_forms(harness, capsys, monkeypatch):
+    """2026-11-25: s4a makes its invoice through FinBot's API, so with nothing typed FinBot's pane sat on its portal
+    page through m4. The driver now cues a view of the vendor's invoices page after the invoice, and the dashboard
+    after onboarding, so the video shows FinBot act."""
+    import threading
+    monkeypatch.setenv("LAB_CHAT_IN_BROWSER", "1")
+    harness.lab.ask_on_invoice = True
+    stop, sent = threading.Event(), []
+    typist = threading.Thread(target=_typist, args=(harness, stop, sent), daemon=True)
+    typist.start()
+    try:
+        code, lines = harness.run(capsys, "s4a", "--answer", "approve")
+    finally:
+        stop.set()
+        typist.join(5)
+    assert code == 0, lines
+    assert [(c["page"], c.get("form")) for c in sent] == [("/vendor/onboarding", "onboarding"),
+                                                          ("/vendor/invoices", "invoice")]
+    assert all(c["message"] == "" for c in sent)
+    assert harness.lab.invoice_bodies[0]["attachments"] == [] and harness.lab.invoice_bodies[0]["invoice_number"]

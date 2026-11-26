@@ -31,6 +31,7 @@ uid=$(id -u)
 approver_port=$(env_value LAB_PORT_APPROVER)
 viewer_port=$(env_value LAB_PORT_VIEWER)
 jaeger_port=$(env_value LAB_PORT_JAEGER)
+finbot_port=$(env_value LAB_PORT_FINBOT)
 
 # lab reset keeps the model key by default, so this line names the one command that deletes it.
 if [ -e state/secrets/openai.key ]; then
@@ -124,7 +125,7 @@ for host, port in zip(args[::2], args[1::2]):
     except OSError as e:
         print(f"cannot reach {host}:{port} ({type(e).__name__})")'
 reach_targets="acs-gateway 8090"
-for port in "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}"; do
+for port in "${approver_port:-8090}" "${viewer_port:-8095}" "${jaeger_port:-16686}" "${finbot_port:-8097}"; do
     reach_targets="$reach_targets host.docker.internal $port @gateway $port"
 done
 # 1.1.1.1 is a public address, so no name lookup stands between FinBot and the connect. 11434 is Ollama's default port.
@@ -146,6 +147,21 @@ REACH
 else
     fail "the reachability probe did not run: $(printf '%s' "$reach" | tail -n 1)"
 fi
+# The finbot-ui proxy is the one container besides the gateway on a network FinBot joins and on one that leaves the
+# stack (2026-11-24, C-17). From FinBot, ask it to forward elsewhere: an absolute target and a CONNECT must both be
+# refused, so the proxy is no route out.
+proxy_probe='import socket, sys
+answers = []
+for line in ("GET http://1.1.1.1/ HTTP/1.1", "CONNECT 1.1.1.1:443 HTTP/1.1"):
+    with socket.create_connection(("finbot-ui", 8097), timeout=5) as s:
+        s.sendall((line + "\r\nHost: localhost\r\n\r\n").encode())
+        answers.append(s.recv(64).split(b" ")[1].decode())
+print(" ".join(answers))'
+proxied=$(in_service finbot python -c "$proxy_probe" 2>&1 || true)
+case $proxied in
+    "400 501") pass "the finbot-ui proxy refuses an absolute target and a CONNECT from finbot" ;;
+    *) fail "the finbot-ui proxy answered finbot's forwarding probe with: $proxied" ;;
+esac
 # The positive control (review round 4, M3). FinBot failing to reach 1.1.1.1 proves isolation only when the gateway,
 # on upstream-net in the same run, does reach it. Otherwise the runner itself can't see out, and the checks above
 # pass for the wrong reason.

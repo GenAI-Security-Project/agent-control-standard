@@ -42,6 +42,8 @@ OUTSIDE = "collector@exfil.example"
 PINNED_ROUTES = {
     ("GET", "/api/session/status"),
     ("POST", "/vendor/api/v1/vendors/register"),
+    ("GET", "/vendor/api/v1/vendors/me"),
+    ("GET", "/vendor/api/v1/invoices"),
     ("GET", "/vendor/api/v1/vendors/{vendor_id}"),
     ("POST", "/vendor/api/v1/invoices"),
     ("GET", "/vendor/api/v1/invoices/{invoice_id}"),

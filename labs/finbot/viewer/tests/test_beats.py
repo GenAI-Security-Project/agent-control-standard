@@ -215,3 +215,13 @@ def test_result_file_rewritten_updates_its_row(tmp_path):
     model.refresh()
     [second] = model.rows_after(first.seq)
     assert (second.id, second.beat) == (first.id, "forge_fails_mldsa")
+
+
+def test_a_shadow_mode_allow_is_never_allow_after_fix(tmp_path):
+    """2026-11-25 m2 keeper: a deny of the tool in an earlier run, then module 2's shadow send. The gateway forwards
+    every call in shadow mode, so the send's allow follows no fix and read 'Allow after the fix' wrongly."""
+    logs = LabLogs(tmp_path)
+    step(logs, "finmail__send_email", "deny", reason_codes=["external_recipient"])
+    req = step(logs, "finmail__send_email", "allow", session_id=SESSION_B)
+    applied(logs, req, "shadow_decision", "allow", "allow")
+    assert "allow_after_fix" not in painted(logs)

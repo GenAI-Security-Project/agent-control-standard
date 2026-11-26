@@ -41,6 +41,20 @@ DEFAULT_CAPTURE_SCENARIO = "capture"
 _SCENARIO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
+def _replay_pace(env: Mapping[str, str]) -> float:
+    """ACS_REPLAY_PACE: a share of each recorded call's duration from 0 to 1, 0 when unset."""
+    raw = env.get("ACS_REPLAY_PACE", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError(f"ACS_REPLAY_PACE must be a number from 0 to 1, got {raw!r}")
+    return value
+
+
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
     raw = env.get(name, "").strip()
     if not raw:
@@ -136,6 +150,9 @@ class GatewayConfig:
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
     upstream_model: str | None = None
     replay_scenario: str | None = None
+    # Replay waits this share of each recorded call's duration before answering, so sessions spread out as they did
+    # live and the decision viewer can tell their decisions apart (2026-11-24 live recording run). 0 answers at once.
+    replay_pace: float = 0.0
     # Spans (LAB-09, issue #582). None leaves tracing off, with no exporter and no network call.
     otlp_endpoint: str | None = None
     # The pinned Guardian decision key (acs.client ResponseKeys), or None for HMAC-SHA256 answers as before.
@@ -236,6 +253,7 @@ class GatewayConfig:
             capture_scenario=scenario,
             upstream_model=model or None,
             replay_scenario=replay_scenario or None,
+            replay_pace=_replay_pace(env) if upstream_mode == "replay" else 0.0,
             otlp_endpoint=_otlp_endpoint(env),
             response_keys=_response_keys(env) if mode != "off" else None,
             client_token_file=Path(client_token) if client_token else None,

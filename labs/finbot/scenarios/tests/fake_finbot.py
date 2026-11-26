@@ -76,9 +76,17 @@ class FakeLab:
     reply: str = "Payment notice sent to the vendor."
     # When set, an invoice holds one call for the approver, and the background work waits for the answer.
     ask_on_invoice: bool = False
+    # The bodies a registration and an invoice arrived with, from the driver or from a form a typist submitted.
+    registered_bodies: list = field(default_factory=list)
+    invoice_bodies: list = field(default_factory=list)
+    # When set, a rejected held call is retried once as a new held call, as FinBot's agent retried the transfer in
+    # the s4a__reject recording (2026-11-24). The background work waits for both answers.
+    ask_again_on_reject: bool = False
     # When set, the dead drop answers with more than the driver's 1 MiB read limit once a chat has run, so the
     # baseline before the steps reads normally and the evidence probe after them meets the oversized answer.
     huge_dead_drop: bool = False
+    # Seconds the first dead drop read stalls before answering, as FinBot did with its database locked (2026-11-24).
+    stall_first_dead_drop_s: float = 0.0
     seen: list[Seen] = field(default_factory=list)
     epoch: int = 0
     namespaces: dict[str, str] = field(default_factory=dict)
@@ -104,6 +112,13 @@ class FakeLab:
     # slow upstream call or a Guardian decision does on a live run.
     gap_s: float = 0.0
     replay_miss_on_chat: bool = False
+    # A replay miss logged while setup's vendor registration runs, before the run's window opens (2026-11-24 premortem).
+    replay_miss_on_register: bool = False
+    # The capture stem, as compose.capture.yaml hands it to the real gateway, which appends one recording line per
+    # exchange it records. Set by a test that runs a capture, so the driver sees each call recorded.
+    capture: str | None = None
+    # Every recording the driver asked the gateway to replay from, None for all of them, in order.
+    replay_selected: list[str | None] = field(default_factory=list)
     move_namespace_after_chat: bool = False
     approver_fails: bool = False
     no_assistant_reply: bool = False
@@ -133,6 +148,11 @@ class FakeLab:
 
     def model_input(self, body: dict[str, Any]) -> None:
         ModelInputLog(self.bundle / "state" / "model-inputs.jsonl").append(body)
+        if self.capture is not None:
+            recordings = self.bundle / "replay" / "recordings"
+            recordings.mkdir(parents=True, exist_ok=True)
+            with (recordings / f"{self.capture}.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"scenario": self.capture}) + "\n")
         self.last_model_input = time.monotonic()
 
     def open_session(self) -> str:
@@ -177,6 +197,11 @@ class FakeLab:
                 deadline = time.monotonic() + 10
                 while self.pending.get(wait_for_answer) is None and time.monotonic() < deadline:
                     time.sleep(0.02)
+                if self.ask_again_on_reject and self.pending.get(wait_for_answer) == "reject":
+                    again = uuid.uuid4().hex
+                    self.pending[again] = None
+                    while self.pending.get(again) is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
             self.model_input({"agent": label, "session": session_id, "turn": "first"})
             if self.gap_s:
                 time.sleep(self.gap_s)
@@ -286,8 +311,17 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
                 _json(self, 200, {"csrf_token": lab.csrf, "namespace": lab.namespaces[cookie], "user_id": "u1",
                                   "is_temporary": True}, set_cookie)
             elif route == ("POST", "/vendor/api/v1/vendors/register"):
+                if lab.replay_miss_on_register:
+                    lab.audit("replay_miss", recording_dir="/lab/replay/recordings", reason="no_recording")
                 lab.background("onboarding")
+                lab.registered_bodies.append(body)
                 _json(self, 200, {"success": True, "vendor_id": 1, "workflow_id": "wf_1"}, set_cookie)
+            elif route == ("GET", "/vendor/api/v1/vendors/me"):
+                current = 1 if lab.registered_bodies else None
+                _json(self, 200, {"vendors": [], "current_vendor_id": current, "total_count": 0}, set_cookie)
+            elif route == ("GET", "/vendor/api/v1/invoices"):
+                _json(self, 200, {"invoices": [{"id": 1, "invoice_number": b.get("invoice_number")}
+                                               for b in lab.invoice_bodies]}, set_cookie)
             elif route == ("GET", "/vendor/api/v1/vendors/1"):
                 _json(self, 200, {"id": 1, "company_name": "Northwind Supplies", "status": "active"}, set_cookie)
             elif route == ("POST", "/vendor/api/v1/invoices"):
@@ -296,6 +330,7 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
                     ask = uuid.uuid4().hex
                     lab.pending[ask] = None
                 lab.background("invoice", wait_for_answer=ask)
+                lab.invoice_bodies.append(body)
                 _json(self, 200, {"success": True, "invoice": {"id": 1, "amount": body["amount"],
                                                                "status": "submitted"}}, set_cookie)
             elif route == ("GET", "/vendor/api/v1/invoices/1"):
@@ -305,6 +340,9 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
             elif route == ("GET", "/vendor/api/v1/messages"):
                 _json(self, 200, {"messages": lab.inbox}, set_cookie)
             elif route == ("GET", "/darklab/api/v1/toolkit/dead-drop"):
+                if lab.stall_first_dead_drop_s:
+                    stall, lab.stall_first_dead_drop_s = lab.stall_first_dead_drop_s, 0.0
+                    time.sleep(stall)
                 if lab.huge_dead_drop and lab.chat_sessions:
                     _json(self, 200, {"messages": [{"body": "x" * (2 * 1024 * 1024)}]}, set_cookie)
                 else:
@@ -363,13 +401,19 @@ def _handler(lab: FakeLab, server: str) -> type[BaseHTTPRequestHandler]:
         # -- the gateway's admin port ---------------------------------------------------------------------------
 
         def _admin(self, seen: Seen) -> None:
-            if (seen.method, seen.path) != ("POST", "/epoch"):
+            if seen.method != "POST" or seen.path not in ("/epoch", "/replay"):
                 seen.status = 404
                 _json(self, 404, {"error": "not found"})
                 return
             if seen.headers.get("authorization") != f"Bearer {lab.admin_token}":
                 seen.status = 401
                 _json(self, 401, {"error": "unauthorized"})
+                return
+            if seen.path == "/replay":
+                scenario = json.loads(seen.body)["scenario"]
+                lab.replay_selected.append(scenario)
+                seen.status = 200
+                _json(self, 200, {"scenario": scenario})
                 return
             lab.epoch_calls += 1
             if lab.epoch_calls == lab.fail_epoch_on:
