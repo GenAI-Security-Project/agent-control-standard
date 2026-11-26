@@ -31,10 +31,11 @@ def main() -> int:
         return 2
     import uvicorn
 
-    from acs_gateway.app import create_admin_app, create_app, load_admin_token, load_secret_file
+    from acs_gateway.app import check_distinct_tokens, create_admin_app, create_app, load_admin_token, load_secret_file
 
     try:
         app = create_app(config)
+        check_distinct_tokens(config)
     except (ValueError, OSError) as e:
         # A bad key file or recording is an operator's setting, so it gets the same one-line message as the rest.
         sys.stderr.write(f"acs-gateway: {e}\n")

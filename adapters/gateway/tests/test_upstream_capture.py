@@ -23,6 +23,17 @@ def key_file(tmp_path):
     return path
 
 
+TOKEN = "t" * 64
+
+
+def token_file(tmp_path):
+    # A key file needs the model port's client token, which the client sends in place of a key.
+    path = tmp_path / "client.token"
+    path.write_text(TOKEN + "\n")
+    path.chmod(0o600)
+    return str(path)
+
+
 def capture(gateway, tmp_path, **env):
     return gateway(ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(tmp_path / "rec"), ACS_CAPTURE_SCENARIO="s1", **env)
 
@@ -85,8 +96,9 @@ def test_a_streamed_exchange_is_captured_as_events(gateway, upstream, tmp_path):
 
 def test_the_key_reaches_only_the_upstream_header(gateway, upstream, tmp_path, audit, capfd):
     upstream.reply(response_body(message_item("ok")))
-    client = capture(gateway, tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)))
-    client.post("/v1/responses", json=finbot_request(), headers={"authorization": "Bearer lab-dummy"})
+    client = capture(gateway, tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)),
+                     ACS_GATEWAY_CLIENT_TOKEN_FILE=token_file(tmp_path))
+    client.post("/v1/responses", json=finbot_request(), headers={"authorization": f"Bearer {TOKEN}"})
     assert upstream.received[0].headers["authorization"] == f"Bearer {KEY}"
     for path in (tmp_path / "rec" / "s1.jsonl", tmp_path / "model-inputs.jsonl"):
         assert KEY not in path.read_text()
@@ -97,8 +109,8 @@ def test_the_key_reaches_only_the_upstream_header(gateway, upstream, tmp_path, a
 
 def test_live_with_a_key_replaces_the_client_header(gateway, upstream, tmp_path):
     upstream.reply(response_body(message_item("ok")))
-    gateway(ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path))).post(
-        "/v1/responses", json=finbot_request(), headers={"authorization": "Bearer lab-dummy"})
+    gateway(ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_CLIENT_TOKEN_FILE=token_file(tmp_path)).post(
+        "/v1/responses", json=finbot_request(), headers={"authorization": f"Bearer {TOKEN}"})
     assert upstream.received[0].headers["authorization"] == f"Bearer {KEY}"
 
 

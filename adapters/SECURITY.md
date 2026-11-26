@@ -27,7 +27,7 @@ when its mitigation stops holding, or says why it has none.
 | Audit log | `ACS_AUDIT <json>` lines on adapter stderr. |
 | OPA backend (`src/acs/guardian/opa_backend.py`) | Off by default. With `ACS_POLICY_BACKEND=opa`, the Guardian POSTs each `steps/toolCallRequest` and `steps/toolCallResult` to the OPA server at `ACS_OPA_URL` and treats the answer as untrusted input. |
 | ML-DSA-65 decision key (`src/acs/guardian/decision_keys.py`) | Off by default. With `ACS_RESPONSE_SIGNING=ML-DSA-65`, the Guardian holds a private seed file (`ACS_GUARDIAN_SIGNING_KEY_FILE`) and publishes a public key document (`ACS_GUARDIAN_KEYS`) at `GET /keys`. Clients and the gateway read the same document to verify answers. |
-| Gateway model port (`gateway/src/acs_gateway/app.py`) | Network-facing HTTP server, `127.0.0.1:8080` by default. Takes no client credential. Relays OpenAI Responses API traffic between a client and a model upstream, and in shadow and enforce acts as the client's Observed Agent through `acs.client`. |
+| Gateway model port (`gateway/src/acs_gateway/app.py`) | Network-facing HTTP server, `127.0.0.1:8080` by default. With `ACS_GATEWAY_CLIENT_TOKEN_FILE` set, every request needs `Authorization: Bearer <token>`, and a key file requires the token. Without a key file or token it takes no client credential. Relays OpenAI Responses API traffic between a client and a model upstream, and in shadow and enforce acts as the client's Observed Agent through `acs.client`. |
 | Upstream model key (`ACS_UPSTREAM_KEY_FILE`, `gateway/src/acs_gateway/upstream.py`) | Optional. When set, the gateway holds the real model key and puts it on upstream requests, so the client never sees it. |
 | Gateway admin port (`create_admin_app` in `gateway/src/acs_gateway/app.py`) | Off unless `ACS_GATEWAY_ADMIN_PORT` is set. One route, `POST /epoch`, behind a bearer token from `ACS_GATEWAY_ADMIN_TOKEN_FILE`. Binds `127.0.0.1` unless `ACS_GATEWAY_ADMIN_HOST` says otherwise. |
 | Gateway approver page (`gateway/src/acs_gateway/approver.py`) | Off unless `ACS_GATEWAY_APPROVER_PORT` is set. Releases tool calls held on an ASK, behind the secret in `ACS_GATEWAY_APPROVER_TOKEN_FILE`. Renders model-chosen tool arguments. Binds `127.0.0.1` unless `ACS_GATEWAY_APPROVER_HOST` says otherwise. |
@@ -241,14 +241,19 @@ into one the built-in rules deny.
 `test_opa_process.py::test_the_probe_ignores_proxy_variables`.
 
 **T16: An unauthenticated client spends the operator's model key.**
-The gateway's model port asks callers for no credential, so with
-`ACS_UPSTREAM_KEY_FILE` set, anyone who reaches the port spends the key.
+Without a client credential, anyone who reaches the gateway's model port
+with `ACS_UPSTREAM_KEY_FILE` set spends the key.
 *Mitigation:* `GatewayConfig.from_env` in
 `gateway/src/acs_gateway/config.py` refuses to start with a key file
-unless `ACS_GATEWAY_HOST` is a loopback address, or
+unless `ACS_GATEWAY_CLIENT_TOKEN_FILE` names a client token file, and
+unless `ACS_GATEWAY_HOST` is a loopback address or
 `ACS_UPSTREAM_KEY_SHARED=1` records that the operator accepts the reach.
-The model port binds `127.0.0.1` by default.
-*Test:* `test_upstream_config.py::test_a_key_file_refuses_a_model_port_off_loopback`.
+`ClientTokenGate` in `gateway/src/acs_gateway/app.py` compares the bearer
+token in constant time before the body is read, answers anything else
+with a 401, and refuses a websocket. The model port binds `127.0.0.1` by
+default.
+*Test:* `test_client_token.py`,
+`test_upstream_config.py::test_a_key_file_refuses_a_model_port_off_loopback`.
 
 **T17: Leak of the upstream model key.**
 The key could reach the client, a recording, a log, an error message, or a
@@ -483,7 +488,7 @@ is its only switch.
 | T13 decision forgery by an HMAC holder | opt-in ML-DSA-65 answers, key from the pinned key document, request hash | `test_decision_signing_e2e.py`, `test_pqc_verification.py` |
 | T14 stolen or swapped ML-DSA-65 key | 0600 seed via `O_EXCL`, trusted-file reader, fingerprint pin | `test_decision_keys.py`, `test_key_document.py` |
 | T15 hostile OPA server | deny on every failure, 4000 ms cap, 1 MiB cap, no proxy, no redirect | `test_opa_backend.py`, `test_opa_verdict.py` |
-| T16 model key spent by any caller | key file only on a loopback model port, unless `ACS_UPSTREAM_KEY_SHARED=1` | `test_a_key_file_refuses_a_model_port_off_loopback` |
+| T16 model key spent by any caller | client bearer token required with a key file, constant-time compare, key file only on a loopback model port unless `ACS_UPSTREAM_KEY_SHARED=1` | `test_client_token.py`, `test_a_key_file_refuses_a_model_port_off_loopback` |
 | T17 model key leak | key file rules, no git work tree, upstream header only | `test_the_key_reaches_only_the_upstream_header` |
 | T18 unauthorized epoch bump | bearer token, constant-time compare, 0600 token file of 32 bytes or more | `test_epoch.py` |
 | T19 forged approver answer | secret, session cookie, Origin and Host checks, one-use page tokens, escaping, CSP | `test_approver.py` |

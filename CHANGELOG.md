@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches 1.0.0. Pre-1.0 releases MAY change the ACS-Core baseline and the Trace mappings in patch versions. The wire format version (`acs_version` in the handshake, and the `v0.1.0` in every schema `$id`) evolves separately in the `specification/` directory.
 
+## [Unreleased]
+
+### Changed: act on these before you upgrade
+
+- The gateway's model port now requires a client token whenever the gateway holds the model key. This is a breaking configuration change. A gateway that sets `ACS_UPSTREAM_KEY_FILE` refuses to start unless `ACS_GATEWAY_CLIENT_TOKEN_FILE` names a token file. It must be a regular file the gateway's user owns, mode 0600 or 0400, holding a token of at least 32 bytes on one line with no spaces or control characters. The whole file, counting any trailing newline, holds at most 4096 bytes. The token must not match the approver or admin token when that listener runs. Before you upgrade, create the file and give the token to every client of the model port, which sends it as `Authorization: Bearer <token>`. Every request without it gets a 401 `invalid_api_key` and never reaches the model upstream. Before this change, anyone who could reach the model port spent the operator's key. A gateway without a key file is unchanged. `adapters/gateway/README.md` describes the upgrade ([PR #649](https://github.com/GenAI-Security-Project/agent-control-standard/pull/649)).
+
 ## [0.1.5] - 2026-11-20
 
 Release 0.1.5 ships the `integration` branch as decided in D-049. It adds the reference adapters, an OpenAI Responses API gateway, a Go Guardian, and experimental ML-DSA-65 decision signing. The specification version stays v0.1.0. The files at the `/schema/v0.1.0/` URIs change in place again, so name this release, or its commit, when you claim conformance.
