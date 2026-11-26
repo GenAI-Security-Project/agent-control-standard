@@ -70,6 +70,7 @@ extra:
     # Pages that exist in the build but stay out of nav: on purpose.
     out_of_nav_prefixes:
       - spec/instrument/a2a/hooks/
+      - predicates/acs-verdict-evidence-v1/
 
 nav:
   - Trustworthy Agents: README.md

@@ -274,7 +274,9 @@ def test_landing_sections_anchors_match_the_landing_sections_in_order():
 
 def test_out_of_nav_prefixes_are_declared_and_end_with_a_slash():
     prefixes = acs_nav()["out_of_nav_prefixes"]
-    assert prefixes == ["spec/instrument/a2a/hooks/"]
+    # The verdict-evidence predicate directory is declared here instead of taking a nav
+    # entry: it is a draft spec page, and the review accepted either form.
+    assert prefixes == ["spec/instrument/a2a/hooks/", "predicates/acs-verdict-evidence-v1/"]
     assert all(p.endswith("/") for p in prefixes)
 
 
