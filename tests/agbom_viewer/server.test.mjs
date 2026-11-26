@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
 import { repoRoot, root as viewerRoot } from '../../tools/agbom-viewer/build.mjs';
 import { discover } from '../../tools/agbom-viewer/inventory.mjs';
@@ -16,6 +18,17 @@ async function start(t, options) {
     return new Promise((done) => server.close(done));
   });
   return 'http://127.0.0.1:' + server.address().port;
+}
+
+async function inventoryRoot(t, files) {
+  const base = resolve(tmpdir());
+  const directory = await mkdtemp(join(base, 'agbom-viewer-test-'));
+  t.after(() => {
+    assert.match(relative(base, directory), /^agbom-viewer-test-[a-z0-9]+$/i);
+    return rm(directory, { recursive: true, force: true });
+  });
+  await Promise.all(Object.entries(files).map(([name, value]) => writeFile(join(directory, name), JSON.stringify(value))));
+  return [['inventory', directory]];
 }
 
 test('the local server serves the read-only inventory workflow over loopback', async (t) => {
@@ -52,6 +65,34 @@ test('pairs a .agbom.json snapshot with its CycloneDX export', async () => {
   assert.equal(matches.length, 1);
   assert.equal(matches[0].acsFile, 'inventory/session-start.agbom.json');
   assert.ok(matches[0].cdxText);
+});
+
+test('detects supported AIBOM layouts and reports a CycloneDX 1.6 ACS export as unsupported', async (t) => {
+  const base = { bomFormat: 'CycloneDX', specVersion: '1.6' };
+  const model = { type: 'machine-learning-model', name: 'Example model', version: '1' };
+  const agent = { type: 'application', name: 'Example agent' };
+  const agbom = {
+    ...base, metadata: { component: agent },
+    components: [{ ...model, properties: [{ name: 'acs:provenance:origin', value: 'system' }] }],
+  };
+  const roots = await inventoryRoot(t, {
+    'metadata.json': { ...base, metadata: { component: model } },
+    'nested.aibom.json': { ...base, components: [{ type: 'application', components: [model] }] },
+    'top-level.json': { ...base, specVersion: '1.7', metadata: { component: agent }, components: [model] },
+    'draft.aibom.json': { ...base, specVersion: '2.0-dev', inventories: [{ components: [model] }] },
+    'legacy.cdx.json': agbom,
+    'mixed.cdx.json': { ...base, metadata: { component: agent }, components: [model, { type: 'application', name: 'Example tool' }] },
+  });
+  const origin = await start(t, { roots });
+  const { aiboms, inventories, notices } = await (await fetch(origin + '/api/agbom')).json();
+  assert.deepEqual(aiboms.map(({ file }) => file).sort(), [
+    'inventory/draft.aibom.json', 'inventory/metadata.json', 'inventory/nested.aibom.json', 'inventory/top-level.json',
+  ]);
+  assert.deepEqual(inventories, []);
+  assert.deepEqual(notices, [
+    'inventory/legacy.cdx.json · Unsupported standalone CycloneDX 1.6 document.',
+    'inventory/mixed.cdx.json · Unsupported standalone CycloneDX 1.6 document.',
+  ]);
 });
 
 test('the public preview serves only public viewer files', async (t) => {

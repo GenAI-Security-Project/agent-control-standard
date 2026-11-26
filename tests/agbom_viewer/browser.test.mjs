@@ -263,6 +263,7 @@ test('local captures, comparison, pairing, partial data, events and original AIB
   const payload = '<img src="https://example.invalid/inert.png" onerror="alert(1)">';
   initial.agent.name = payload;
   initial.agbom_version = '0.0.9';
+  delete initial.components.find(({id}) => id === 'internal-review-mcp').mcp_server_fields;
   latest.components.reverse();
   latest.components.find(({id}) => id === 'support-triage-model').version = 'next-revision';
   const save = async (name, obj) => writeFile(join(fixture, name), JSON.stringify(obj));
@@ -295,9 +296,16 @@ test('local captures, comparison, pairing, partial data, events and original AIB
   assert.match(await bodyText(page, '#personal-comparison'), /next-revision/);
   assert.match(await bodyText(page, '#personal-comparison'), /Added components \(2\)/);
   assert.match(await bodyText(page, '#personal-comparison'), /Changed typed relationships \(1\)/);
+  const parentPath = page.locator('#personal-comparison .relationship-change code.path')
+    .filter({ hasText: /^\$\.components\[\d+\]\.mcp_server_fields$/ });
+  assert.equal(await parentPath.count(), 2);
+  assert.equal(await page.locator('#personal-comparison .relationship-change > strong')
+    .filter({ hasText: / · mcp_server_fields$/ }).count(), 0);
   await page.locator('#manual-baseline').selectOption('inventory/later/my-agent.json');
   await page.locator('#manual-target').selectOption('inventory/early/my-agent.json');
   assert.match(await bodyText(page, '#personal-comparison'), /Removed components \(2\)/);
+  assert.match(await bodyText(page, '#personal-comparison'), /Changed typed relationships \(1\)/);
+  assert.equal(await parentPath.count(), 2);
   await page.locator('#personal-events > details > summary').click();
   assert.match(await bodyText(page, '#personal-events'), /No associated baseline/);
   await page.locator('#agbom').selectOption('inventory/early/my-agent.json');
@@ -367,10 +375,14 @@ test('local captures, comparison, pairing, partial data, events and original AIB
   ]}]}] });
   const localAibom = 'Qwen_Qwen2.5-0.5B-Instruct_aibom_1_7.json';
   await save('imported.aibom.json', JSON.parse(await readFile(join(scenario, 'aiboms', localAibom), 'utf8')));
+  await save('metadata-model.json', {
+    bomFormat: 'CycloneDX', specVersion: '1.7',
+    metadata: { component: { type: 'machine-learning-model', name: 'Metadata model', version: 'abc1234' } },
+  });
   await local.click();
   await page.getByRole('button', { name: 'Refresh local inventory' }).click();
   await page.getByRole('option', { name: /Independent second inventory/ }).waitFor({ state: 'attached' });
-  assert.equal(await page.locator('#agbom option').count(), 6);
+  assert.equal(await page.locator('#agbom option').count(), 7);
   await page.locator('#agbom').selectOption('inventory/standalone.cdx.json#inventory-0');
   await page.locator('#personal-focus-filter').selectOption('model');
   const unresolvable = page.locator('#personal-evidence tr').filter({ hasText: 'Referenced model AIBOM' });
@@ -387,6 +399,8 @@ test('local captures, comparison, pairing, partial data, events and original AIB
   await page.locator('#agbom').selectOption('inventory/imported.aibom.json');
   assert.match(await bodyText(page, '#personal-artifacts'), /CycloneDX 1\.7/);
   assert.match(await bodyText(page, '#personal-artifacts'), /Model revision 7ae55760/);
+  await page.locator('#agbom').selectOption('inventory/metadata-model.json');
+  assert.match(await bodyText(page, '#personal-artifacts'), /Metadata model · Model revision abc1234/);
   assert.deepEqual(await readFile(join(fixture, 'later/my-agent.json')), sourceBefore);
   assert.ok(requests.every((url) => url.startsWith(origin)), requests.join('\n'));
 });

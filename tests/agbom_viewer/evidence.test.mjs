@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import vm from 'node:vm';
 import { buildPublicData, publicDir, root } from '../../tools/agbom-viewer/build.mjs';
-import { compareSnapshots, corroborateDiff, inspectModelIdentity, reportedEvent } from '../../tools/agbom-viewer/src/local-evidence.mjs';
+import { compareSnapshots, corroborateDiff, inspectModelIdentity, modelEntries, reportedEvent, sameBomReference } from '../../tools/agbom-viewer/src/local-evidence.mjs';
 
 const text = (path) => readFile(join(root, path), 'utf8');
 const json = async (path) => JSON.parse(await text(path));
@@ -115,6 +115,25 @@ test('comparison uses stable IDs and typed relationships and preserves value dis
   assert.equal(duplicate.changed.length, 0);
 });
 
+test('adding or removing a relationship block counts only its changed fields and relationships', async () => {
+  const rules = await mappingRules(await text('data/mapping.csv'));
+  const capability = { id: 'capability', type: 'agent_capability' };
+  const snapshot = (component) => ({ agent: { agent_id: 'agent' }, components: [component] });
+  const absent = snapshot(capability);
+  const present = snapshot({ ...capability, agent_capability_fields: { description: 'Reports', tools: ['report'], a2a_peers: [] } });
+  const summarize = (changes) => changes.map(({ path, edge, before, after }) => [path.join('.'), edge, before, after]);
+  const added = compareSnapshots(absent, present, rules);
+  assert.deepEqual(summarize(added.changed), [['agent_capability_fields.description', undefined, undefined, 'Reports']]);
+  assert.deepEqual(summarize(added.relationships), [
+    ['agent_capability_fields.tools', 'acs:uses-tool', undefined, ['report']],
+    ['agent_capability_fields.a2a_peers', 'acs:uses-peer', undefined, []],
+  ]);
+  const removed = compareSnapshots(present, absent, rules);
+  const reverse = (changes) => summarize(changes).map(([path, edge, before, after]) => [path, edge, after, before]);
+  assert.deepEqual(summarize(removed.changed), reverse(added.changed));
+  assert.deepEqual(summarize(removed.relationships), reverse(added.relationships));
+});
+
 test('CycloneDX stage diff compares stable references, typed edges and order-insensitive fields', async () => {
   const src = await publicText('use-cases.js');
   const comparison = src.slice(0, src.indexOf('function control'));
@@ -197,6 +216,46 @@ test('original model evidence preserves precision and shows missing, conflicting
     const weak = { ...aibom, components: [{type: 'machine-learning-model', name: model.name, version: model.version}] };
     assert.equal(inspectModelIdentity(model, {record: {...record, aibomComponentRef: undefined}, aibom: weak}).status, 'Insufficient evidence');
   }
+});
+
+test('metadata model evidence matches hexadecimal revisions and preserves case-sensitive identifiers', () => {
+  const identifier = 'Example/Model';
+  const version = 'AbC1234';
+  const fullCommit = version.toUpperCase() + '0'.repeat(33);
+  const entry = {
+    type: 'machine-learning-model', name: 'Metadata model', version,
+    'bom-ref': 'pkg:huggingface/' + identifier + '@' + version.toLowerCase(),
+    purl: 'pkg:huggingface/' + identifier + '@' + version.toUpperCase(),
+    externalReferences: [{ url: 'https://huggingface.co/' + identifier + '/commit/' + fullCommit }],
+  };
+  const aibom = { metadata: { component: entry } };
+  const record = { aibom: 'model.json', aibomComponentRef: entry['bom-ref'], revision: version.toLowerCase() };
+  const model = { name: identifier, version: version.toUpperCase() };
+  assert.deepEqual(modelEntries(aibom), [{ entry, path: ['metadata', 'component'] }]);
+  const outcome = inspectModelIdentity(model, { record, aibom });
+  assert.equal(outcome.status, 'Matching recorded identifier and revision');
+  assert.equal(outcome.entry.version, version);
+  assert.equal(outcome.upstreamCommits[0].revision, fullCommit);
+  assert.deepEqual(outcome.upstreamCommits[0].path, ['metadata', 'component', 'externalReferences', 0, 'url']);
+  assert.equal(inspectModelIdentity({ ...model, version: 'AbC1235' }, { record, aibom }).status, 'Mismatch');
+  assert.equal(inspectModelIdentity({ ...model, name: identifier.toLowerCase() }, { record, aibom }).status, 'Mismatch');
+  assert.equal(inspectModelIdentity(model, { record: { ...record, revision: 'release-A' }, aibom }).status, 'Mismatch');
+  assert.equal(inspectModelIdentity({ ...model, version: 'Release-A' }, {
+    record: { aibom: 'model.json', revision: 'release-a' },
+    aibom: { metadata: { component: { type: 'machine-learning-model', version: 'release-a', purl: 'pkg:huggingface/' + identifier } } },
+  }).status, 'Mismatch');
+});
+
+test('BOM references fold only the hexadecimal UUID', () => {
+  const uuid = 'abcdef01-2345-6789-abcd-ef0123456789';
+  const document = 'urn:cdx:' + uuid + '/1';
+  const upperUuid = 'urn:cdx:' + uuid.toUpperCase();
+  assert.ok(sameBomReference(document, upperUuid + '/1'));
+  assert.ok(sameBomReference(document + '#Model-A', upperUuid + '/1#Model-A'));
+  assert.equal(sameBomReference(document + '#Model-A', upperUuid + '/1#model-a'), false);
+  assert.equal(sameBomReference(document, upperUuid + '/1#Model-A'), false);
+  assert.equal(sameBomReference(document, upperUuid + '/2'), false);
+  assert.equal(sameBomReference('Model-A', 'model-a'), false);
 });
 
 test('the checked-in bundle matches its inputs and only uses indexed public examples', async () => {

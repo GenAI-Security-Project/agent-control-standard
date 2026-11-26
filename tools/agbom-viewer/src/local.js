@@ -1,4 +1,4 @@
-import { compareSnapshots, corroborateDiff, reportedEvent, sameValue, inspectModelIdentity, modelEntries } from './local-evidence.mjs';
+import { compareSnapshots, corroborateDiff, reportedEvent, sameValue, inspectModelIdentity, modelEntries, sameBomReference } from './local-evidence.mjs';
 
 const relationshipRules = rules.filter(({edge}) => edge);
 let loading = false;
@@ -26,9 +26,15 @@ function evidencePair(before, after, change) {
   const cells = element('div', 'change-pair');
   for (const [snapshot, entry, value] of [[before, change.beforeEntry, change.before], [after, change.afterEntry, change.after]]) {
     const cell = element('div');
-    const hit = locate(snapshot.acs, [...(entry?.path ?? []), ...change.path]);
+    const path = [...(entry?.path ?? []), ...change.path];
+    const hit = locate(snapshot.acs, path);
     const evidence = { ...hit, value };
     if (change.edge) {
+      const parent = locate(snapshot.acs, path.slice(0, -1));
+      cell.append(element('span', 'muted', 'Parent block '), element('code', 'path', parent.path));
+      if (parent.value !== undefined && (parent.value === null || typeof parent.value !== 'object' || Array.isArray(parent.value))) {
+        addValue(cell, { value: parent.value });
+      }
       addValue(cell, { ...referencedValues(evidence, snapshot.acsComponents, 'id'), relationship: change.edge });
     } else {
       addValue(cell, evidence);
@@ -165,7 +171,7 @@ function modelAssociationCard(current, component, association, cdxRefs) {
     card.append(element('p', '', 'AIBOM document · CycloneDX ' + aibom.specVersion + ' · BOM revision ' + (aibom.version ?? 'Not supplied')));
     if (cdxRefs.length && aibomLink) {
       const links = cdxRefs.filter(({value}) => typeof value === 'string' && value.startsWith('urn:cdx:'));
-      if (links.length) card.append(element('p', '', links.some(({value}) => value === aibomLink) ?
+      if (links.length) card.append(element('p', '', links.some(({value}) => sameBomReference(value, aibomLink)) ?
         'The CycloneDX BOM-Link matches this document UUID and BOM revision.' : 'CycloneDX BOM-Link differs from this document UUID or BOM revision.'));
     }
     for (const field of ['specVersion', 'serialNumber', 'version']) addValue(evidence, { ...locate(aibom, [field]), note: 'Document ' + field });
