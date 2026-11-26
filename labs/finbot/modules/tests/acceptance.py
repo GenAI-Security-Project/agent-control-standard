@@ -107,6 +107,12 @@ def record_problems(name: str, record: object, recordings: dict[str, str]) -> li
     problems = []
     if record.get("result") != "completed":
         problems.append(f"run record {name} says {record.get('result')!r}: {record.get('error')}")
+    setup_expected = record.get("setup_replay_misses_expected")
+    if isinstance(setup_expected, bool) or not isinstance(setup_expected, int) or setup_expected < 0:
+        problems.append(f"run record {name} has no count of expected setup misses")
+    elif record.get("setup_replay_misses") != setup_expected:
+        problems.append(f"run record {name} counts {record.get('setup_replay_misses')!r} setup misses where its "
+                        f"recording expects {setup_expected}")
     if record.get("replay_misses") != 0:
         problems.append(f"run record {name} counts {record.get('replay_misses')!r} replay misses")
     if record.get("upstream") != "replay":
@@ -208,11 +214,11 @@ class Acceptance:
         if code not in allowed:
             raise NotYet(f"{' '.join(argv)} exited {code}" + (f": {verdict}" if verdict else ""))
         self.audit_offset, misses = new_audit_misses(AUDIT_LOG, self.audit_offset)
-        if misses:
-            raise NotYet(f"{' '.join(argv)} left {len(misses)} replay_miss lines in state/audit.log, the first: "
-                         f"{misses[0]}")
-        if verb == "run":
-            self.read_new_runs(argv)
+        # A run may miss exactly the setup turns the manifest names for its recording, and nothing else.
+        expected = self.read_new_runs(argv) if verb == "run" else 0
+        if len(misses) != expected:
+            raise NotYet(f"{' '.join(argv)} left {len(misses)} replay_miss lines in state/audit.log where its run "
+                         f"records expect {expected}" + (f", the first: {misses[0]}" if misses else ""))
         if verb == "check":
             self.checked += 1
             _say(f"DONE: {' '.join(argv)} exited 0")
@@ -221,7 +227,9 @@ class Acceptance:
             if problems:
                 raise NotYet(problems[0])
 
-    def read_new_runs(self, argv: tuple[str, ...]) -> None:
+    def read_new_runs(self, argv: tuple[str, ...]) -> int:
+        """Checks each new run record, and returns the setup misses they expect between them."""
+        expected = 0
         names = sorted(p.name for p in RUNS_DIR.glob("*.json")) if RUNS_DIR.is_dir() else []
         new = [n for n in names if n not in self.seen_runs]
         if not new:
@@ -235,7 +243,9 @@ class Acceptance:
             problems = record_problems(name, record, self.recordings)
             if problems:
                 raise NotYet(problems[0])
+            expected += record["setup_replay_misses_expected"]
             self.runs += 1
+        return expected
 
     def play(self) -> None:
         guides = {n: self.guide_dir / f"{n}.md" for n in self.modules}
@@ -275,8 +285,8 @@ class Acceptance:
             raise NotYet(".env sets the openai upstream, and attendees run on replay")
         if not self.checked:
             raise NotYet("the guides ran no check")
-        _say(f"DONE: {self.checked} checks passed over {self.runs} runs, offline, with no replay miss and no run "
-             f"in a recording's namespace")
+        _say(f"DONE: {self.checked} checks passed over {self.runs} runs, offline, with no replay miss beyond the setup "
+             f"misses the manifest names and no run in a recording's namespace")
 
 
 def _modules(text: str) -> list[int]:

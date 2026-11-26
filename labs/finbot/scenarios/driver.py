@@ -867,7 +867,8 @@ class Run:
     def setup_misses_expected(self, recording: str | None) -> int:
         """The setup misses the manifest expects for a recording, 0 when it names none. s4a__reject was captured with
         FinBot's vendor onboarding already done, so its setup's onboarding turns have no answer in it, and every run of
-        it misses the same 4 (2026-11-24 m4 takes). Its steps replay whole. Any other count still fails the run."""
+        it misses the same 4 (2026-11-24 m4 takes). s4a__off misses the same 4 on every run (2026-11-26 acceptance). Its
+        steps replay whole. Any other count still fails the run."""
         if recording is None:
             return 0
         try:

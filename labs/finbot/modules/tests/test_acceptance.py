@@ -20,7 +20,8 @@ import acceptance  # noqa: E402
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the lab runs on macOS and Linux only (Rock, 2026-11-17)")
 
 NAMESPACE = "ns_0f3a9c"
-GOOD = {"result": "completed", "replay_misses": 0, "upstream": "replay", "finbot": {"namespace": NAMESPACE}}
+GOOD = {"result": "completed", "replay_misses": 0, "setup_replay_misses": 0, "setup_replay_misses_expected": 0,
+        "upstream": "replay", "finbot": {"namespace": NAMESPACE}}
 
 
 @pytest.fixture
@@ -75,6 +76,9 @@ def test_a_good_record_passes():
     ({"replay_misses": 2}, "counts 2 replay misses"),
     ({"replay_misses": None}, "counts None replay misses"),
     ({"upstream": "openai"}, "'openai' upstream"),
+    ({"setup_replay_misses": 4}, "counts 4 setup misses where its recording expects 0"),
+    ({"setup_replay_misses_expected": None}, "no count of expected setup misses"),
+    ({"setup_replay_misses_expected": True}, "no count of expected setup misses"),
     ({"finbot": {}}, "no FinBot namespace"),
     ({"finbot": "x"}, "no FinBot namespace"),
 ])
@@ -152,3 +156,8 @@ def test_the_shipped_guides_promise_not_yet_only_for_their_early_checks():
     # Each guide's last check is the one that has to say DONE.
     assert all(not flags[-1] for flags in promised.values())
     assert promised[2] == [True, False] and promised[3] == [True, False]
+
+
+def test_a_record_with_its_expected_setup_misses_passes():
+    record = {**GOOD, "setup_replay_misses": 4, "setup_replay_misses_expected": 4}
+    assert acceptance.record_problems("r.json", record, {}) == []
