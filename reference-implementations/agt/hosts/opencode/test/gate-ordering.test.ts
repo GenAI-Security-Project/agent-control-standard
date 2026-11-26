@@ -211,6 +211,8 @@ for (const gate of GATES) {
         expect(entries).toEqual([
           {
             seq: 1,
+            prev_hash: "0".repeat(64),
+            hash: expect.any(String),
             recorded_at: expect.any(String),
             session_id: "ses-ordering-skip",
             // The gate's own ACS method -- so this assertion also catches a
