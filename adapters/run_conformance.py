@@ -24,6 +24,7 @@ PLATFORM_SUITES = {
     "claude": ("claude-code", HERE, ("discover", "tests/integrations/claude_code")),
     "cursor": ("cursor", HERE, ("discover", "tests/integrations/cursor")),
     "nat": ("nat", HERE, ("discover", "tests/integrations/nat")),
+    "fastmcp": ("fastmcp", HERE, ("discover", "tests/integrations/fastmcp")),
 }
 
 PLATFORM_ALIASES = {
@@ -31,6 +32,7 @@ PLATFORM_ALIASES = {
     "claude-code": "claude",
     "cursor": "cursor",
     "nat": "nat",
+    "fastmcp": "fastmcp",
 }
 
 
@@ -98,7 +100,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="PLATFORM",
         nargs="+",
         choices=tuple(PLATFORM_ALIASES),
-        help="one or more of: claude, cursor, nat",
+        help="one or more of: claude, cursor, nat, fastmcp",
     )
     parser.add_argument(
         "--strict",

@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.11"
 
 [options]
@@ -69,12 +69,13 @@ pqc = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", marker = "extra == 'pqc'", specifier = ">=50,<51" },
+    { name = "fastmcp", marker = "extra == 'fastmcp'", specifier = ">=2.9,<5" },
     { name = "jsonschema", extras = ["format-nongpl"], specifier = ">=4.25,<5" },
     { name = "nvidia-nat-core", marker = "extra == 'nat'", specifier = ">=1.7,<1.8" },
     { name = "rfc8785", specifier = ">=0.1.4,<0.2" },
     { name = "ruamel-yaml", marker = "extra == 'nat'", specifier = ">=0.19,<0.20" },
 ]
-provides-extras = ["nat", "pqc"]
+provides-extras = ["nat", "fastmcp", "pqc"]
 
 [package.metadata.requires-dev]
 test = [
@@ -86,7 +87,6 @@ test = [
 name = "acs-gateway"
 version = "0.1.5"
 source = { editable = "." }
-default-groups = ["test"]
 dependencies = [
     { name = "acs-adapters" },
     { name = "httpx" },

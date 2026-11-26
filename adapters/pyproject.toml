@@ -15,6 +15,7 @@ dependencies = ["rfc8785>=0.1.4,<0.2", "jsonschema[format-nongpl]>=4.25,<5"]
 
 [project.optional-dependencies]
 nat = ["nvidia-nat-core>=1.7,<1.8", "ruamel.yaml>=0.19,<0.20"]
+fastmcp = ["fastmcp>=2.9,<5"]
 # ML-DSA-65 signing (issue #574). cryptography 50 is the first release this package pins with
 # ML-DSA-65 in its public API. Lab convention: nvidia-nat-core pins cryptography below 47, so
 # this extra and nat can't share an environment until issue #543 replaces the NAT dependency.
@@ -34,6 +35,7 @@ acs-example-guardian = "acs.guardian.example_guardian:main"
 claude_code = "acs.integrations.claude_code"
 cursor = "acs.integrations.cursor"
 nat = "acs.integrations.nat"
+fastmcp = "acs.integrations.fastmcp"
 
 # NAT imports this module at startup, which registers `_type: acs_guardian`.
 [project.entry-points."nat.components"]
