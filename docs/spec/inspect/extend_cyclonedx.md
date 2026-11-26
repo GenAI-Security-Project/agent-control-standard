@@ -1,6 +1,6 @@
 # Extending CycloneDX
 
-## v0.1.0 mapping (CycloneDX 1.6)
+## Map AgBOM v0.1.0 to CycloneDX 1.6 { #v010-mapping-cyclonedx-16 }
 
 CycloneDX 1.6 is one of the three normative AgBOM serializations in v0.1.0. The canonical AgBOM document is the source of truth, and the Guardian derives CycloneDX output from it on request. The mapping rules live in [`inspect/format-mapping.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/inspect/format-mapping.json), and this page restates them with an example. Where the two differ, the mapping file wins.
 
@@ -227,7 +227,7 @@ Each component keeps its canonical `id` as its `bom-ref`, and both provenance pr
 !!! note "Non-normative: CycloneDX services"
     CycloneDX 1.6 lists services in a top-level `services[]` array, and `service` is not one of its component types. A strict CycloneDX 1.6 validator therefore rejects a `components[]` entry with `type: service`, which the mapping file gives `mcp_server`, `a2a_peer` and `knowledge_source`. The example above holds none of those types for that reason. The mapping stays as published until the specification changes it.
 
-## CycloneDX 2.0-dev (non-normative draft)
+## Explore the CycloneDX 2.0-dev mapping (non-normative draft) { #cyclonedx-20-dev-non-normative-draft }
 
 The AgBOM Viewer follows a pinned revision of CycloneDX 2.0-dev. The draft maps canonical ACS AgBOM fields and terms to CycloneDX 2.0 and records gaps.
 

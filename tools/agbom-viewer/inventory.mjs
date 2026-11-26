@@ -1,6 +1,10 @@
-import { lstat, readdir, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, open, readdir } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 
+const maxInventoryFiles = 100;
+const maxInventoryFileMiB = 1;
+const maxInventoryFileBytes = maxInventoryFileMiB * 1024 * 1024;
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const list = (value) => Array.isArray(value) ? value : [];
 const fold = (name) => name.toLowerCase();
@@ -51,7 +55,7 @@ function relativeFile(index, name) {
   return posix.join(posix.dirname(index.path), name);
 }
 
-async function scan(dir, prefix, files, notices) {
+async function* inventoryFiles(dir, prefix, notices) {
   let entries;
   try {
     if (!(await lstat(dir)).isDirectory()) {
@@ -67,27 +71,71 @@ async function scan(dir, prefix, files, notices) {
     const file = join(dir, entry.name);
     const path = posix.join(prefix, entry.name);
     if (entry.isDirectory()) {
-      await scan(file, path, files, notices);
-      continue;
-    }
-    if (!entry.isFile() || !/\.json$/i.test(entry.name)) continue;
-    try {
-      const source = await readFile(file, 'utf8');
-      const value = JSON.parse(source.replace(/^\uFEFF/, ''));
-      const name = fold(entry.name);
-      const kind = name === 'capture-index.json' ? 'index' : name === 'model-associations.json' ? 'associations' : classify(value, name);
-      files.set(path, { path, source, value, kind });
-    } catch (error) {
-      files.set(path, { path, kind: 'invalid' });
-      notices.push(path + ' · ' + (error instanceof SyntaxError ? 'Malformed JSON' : error.code ?? error.message));
+      yield* inventoryFiles(file, path, notices);
+    } else if (entry.isFile() && /\.json$/i.test(entry.name)) {
+      yield { file, path, name: fold(entry.name) };
     }
   }
 }
 
-export async function discover(roots) {
+async function readInventoryFile(file) {
+  const before = await lstat(file);
+  if (!before.isFile()) throw new Error('Expected a regular file.');
+  if (before.size > maxInventoryFileBytes) return null;
+  const handle = await open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  try {
+    const current = await handle.stat();
+    if (!current.isFile() || current.dev !== before.dev || current.ino !== before.ino) {
+      throw new Error('File changed during inventory discovery.');
+    }
+    if (current.size > maxInventoryFileBytes) return null;
+    // Read at most one byte past the limit to detect growth during discovery.
+    const buffer = Buffer.allocUnsafe(maxInventoryFileBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+      if (!bytesRead) return buffer.toString('utf8', 0, total);
+      total += bytesRead;
+    }
+    return null;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function scan(roots, notices) {
   const files = new Map();
+  let remaining = maxInventoryFiles;
+  let limitReached = false;
+  for (const [prefix, dir] of roots) {
+    for await (const { file, path, name } of inventoryFiles(dir, prefix, notices)) {
+      if (remaining === 0) {
+        notices.push(`Local inventory limit reached (${maxInventoryFiles} JSON files per refresh). Move some files out of inventory/ and refresh.`);
+        return { files, limitReached: true };
+      }
+      remaining--;
+      try {
+        const source = await readInventoryFile(file);
+        if (source === null) {
+          notices.push(`${path} · Skipped because it exceeds the ${maxInventoryFileMiB} MiB per-file limit.`);
+          limitReached = true;
+          continue;
+        }
+        const value = JSON.parse(source.replace(/^\uFEFF/, ''));
+        const kind = name === 'capture-index.json' ? 'index' : name === 'model-associations.json' ? 'associations' : classify(value, name);
+        files.set(path, { path, source, value, kind });
+      } catch (error) {
+        files.set(path, { path, kind: 'invalid' });
+        notices.push(path + ' · ' + (error instanceof SyntaxError ? 'Malformed JSON' : error.code ?? error.message));
+      }
+    }
+  }
+  return { files, limitReached };
+}
+
+export async function discover(roots) {
   const notices = [];
-  for (const [prefix, dir] of roots) await scan(dir, prefix, files, notices);
+  const { files, limitReached } = await scan(roots, notices);
   const byKind = (kind) => [...files.values()].filter((file) => file.kind === kind);
   const acsFiles = byKind('acs');
   const paired = new Set();
@@ -161,5 +209,5 @@ export async function discover(roots) {
   }
   const aiboms = byKind('aibom').map(({path, source, value}) =>
     ({ file: path, cdxText: source, doc: value }));
-  return { inventories: [...inventories, ...standalone], aiboms, notices, series, events: byKind('event').map(({path, value}) => ({file: path, payload: value})) };
+  return { inventories: [...inventories, ...standalone], aiboms, notices, limitReached, series, events: byKind('event').map(({path, value}) => ({file: path, payload: value})) };
 }
