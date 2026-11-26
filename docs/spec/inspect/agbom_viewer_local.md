@@ -27,4 +27,4 @@ The command updates `docs/spec/inspect/agbom-viewer/viewer-data.js` for the stat
 
 ## Verify viewer changes
 
-Run the evidence and server tests with `node --test tests/agbom_viewer/evidence.test.mjs tests/agbom_viewer/server.test.mjs`. Run `node --test tests/agbom_viewer/browser.test.mjs` with Playwright and Chromium installed. Set `VIEWER_PLAYWRIGHT` and `VIEWER_BROWSER` to use existing installations. To exercise the Museum test pack, set `VIEWER_MUSEUM_PACK` to the path of your copy under `inventory/` or in a temporary directory.
+Run the evidence and server tests with `node --test tests/agbom_viewer/evidence.test.mjs tests/agbom_viewer/server.test.mjs`.

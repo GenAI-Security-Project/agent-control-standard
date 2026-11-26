@@ -3,7 +3,8 @@ import { once } from 'node:events';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { repoRoot } from '../../tools/agbom-viewer/build.mjs';
+import { repoRoot, root as viewerRoot } from '../../tools/agbom-viewer/build.mjs';
+import { discover } from '../../tools/agbom-viewer/inventory.mjs';
 import { createViewerServer, docsPath } from '../../tools/agbom-viewer/serve.mjs';
 
 async function start(t, options) {
@@ -41,6 +42,16 @@ test('the local server serves the read-only inventory workflow over loopback', a
     }).on('error', reject).end();
   });
   assert.equal(forbiddenHost, 403);
+});
+
+test('pairs a .agbom.json snapshot with its CycloneDX export', async () => {
+  const fixtures = join(viewerRoot, 'data', 'examples', 'developer-support');
+  const { inventories } = await discover([['inventory', fixtures]]);
+  const exportPath = 'inventory/session-start.cdx.json';
+  const matches = inventories.filter(({ cdxFile }) => cdxFile === exportPath);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].acsFile, 'inventory/session-start.agbom.json');
+  assert.ok(matches[0].cdxText);
 });
 
 test('the public preview serves only public viewer files', async (t) => {

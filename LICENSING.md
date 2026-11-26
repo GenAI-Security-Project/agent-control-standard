@@ -12,6 +12,7 @@ Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
 | `.github/**` | Apache License 2.0 | `Apache-2.0` |
 | `pyproject.toml`, `uv.lock`, `mkdocs.yml`, `.vscode/**` | Apache License 2.0 | `Apache-2.0` |
 | Code samples embedded in any Markdown file | Apache License 2.0 | `Apache-2.0` |
+| `docs/spec/inspect/agbom-viewer/**` except `assets/**` | Apache License 2.0 | `Apache-2.0` |
 | `docs/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTORS.md`, `STYLE.md`, `SPEC_REVIEW_PRINCIPLES.md`, `LICENSING.md` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `landing/**`, `tools/**`, `tests/**` | Apache License 2.0 | `Apache-2.0` |

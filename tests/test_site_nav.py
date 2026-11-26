@@ -351,10 +351,12 @@ def samples(built_docs, landing_rows) -> dict[str, Path]:
     chosen["not_found"] = rows["not_found"] = built_docs / "404.html"
     mkdocs_pages = _built_mkdocs_pages(built_docs)
     for index, prefix in enumerate(acs_nav()["out_of_nav_prefixes"]):
+        if prefix == "spec/inspect/agbom-viewer/":
+            continue  # The standalone viewer uses its own header.
         found = [path for path in mkdocs_pages if path.name == "index.html"
                  and path.is_relative_to(built_docs / prefix)]
-        if found:
-            chosen[f"out_of_nav_{index}"] = rows[f"out_of_nav_{index}"] = found[0]
+        assert found, REPAIR["prefix_matches_nothing"].format(prefix=prefix)
+        chosen[f"out_of_nav_{index}"] = rows[f"out_of_nav_{index}"] = found[0]
     for state, path in chosen.items():
         assert path.is_file(), REPAIR["sample_state"].format(state=f"{state} chose {rows[state]!r}, not built")
     duplicates = [state for state, path in chosen.items() if list(chosen.values()).count(path) > 1]

@@ -31,7 +31,7 @@ function normalizedBasename(path) {
 }
 
 function pairName(path) {
-  return normalizedBasename(path).replace(/(?:\.acs)?\.json$/, '.cdx.json');
+  return normalizedBasename(path).replace(/(?:\.acs|\.agbom)?\.json$/, '.cdx.json');
 }
 
 function mismatch(acs, cdx) {
