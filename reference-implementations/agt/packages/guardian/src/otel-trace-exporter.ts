@@ -9,8 +9,8 @@
  * This file assembles the exporter. Three neighbors hold the rest:
  * otel-mapping.ts reads the mapping and says which envelope field feeds
  * which attribute, otlp-file-exporter.ts writes the OTLP/JSON file, and
- * loopback-proxy.ts holds the proxy helpers main.ts applies before the
- * Guardian starts.
+ * loopback-proxy.ts says which endpoints are loopback and holds the proxy
+ * helpers main.ts applies before the Guardian starts.
  *
  * Span lifetime follows the envelope log. `start` is called where the
  * request is recorded and hands back the span; `end` is called with that
@@ -53,7 +53,7 @@ import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { AlwaysOnSampler, BasicTracerProvider, BatchSpanProcessor, type SpanExporter, type SpanLimits } from "@opentelemetry/sdk-trace-base";
 import {
-  asNumber,
+  asClampedErrorCode,
   asObject,
   collect,
   CORRELATION_ATTRIBUTE_SOURCES,
@@ -81,6 +81,7 @@ import {
   type OtelMapping,
   type RejectionReason,
 } from "./otel-mapping.ts";
+import { isLoopbackEndpoint } from "./loopback-proxy.ts";
 import { createFileSpanExporter } from "./otlp-file-exporter.ts";
 
 // Every name this module exported before the split, so existing importers
@@ -229,6 +230,11 @@ export type CreateOtelTraceExporterOptions = {
   filePath?: string;
   /** OTLP/HTTP traces endpoint, e.g. `http://127.0.0.1:4318/v1/traces`. */
   endpoint?: string;
+  /** Lets `endpoint` be plain http to a host that is not loopback. */
+  allowPlaintextEndpoint?: boolean;
+  /** For tests. The SDK reads the headers variables from process.env, so any
+   * other value hides from the plain http check a header the SDK still sends. */
+  env?: Record<string, string | undefined>;
   /** A span exporter used beside (or instead of) the two above. Exists so
    * tests can read spans back in-process; not meant for production use. */
   spanExporter?: SpanExporter;
@@ -339,9 +345,54 @@ function rejectedAttributes(claimed: Attributes, reason: RejectionReason, errorC
   return attributes;
 }
 
+const OTLP_HEADERS_VARIABLES = ["OTEL_EXPORTER_OTLP_HEADERS", "OTEL_EXPORTER_OTLP_TRACES_HEADERS"] as const;
+
+const PLAINTEXT_OPT_IN = "ACS_OTEL_ALLOW_PLAINTEXT_ENDPOINT=1";
+
+/**
+ * A span carries reasoning text and provenance ids, so plain http to a host
+ * that is not loopback is refused unless the operator opted in (#283). With
+ * the opt-in it is still refused when the URL has a user name or password or
+ * a headers variable is set: those usually carry a credential, and the
+ * opt-in accepts unencrypted spans, not an unencrypted credential. The SDK
+ * reads the headers variables from the environment when the output is
+ * built, so they are read here at the same moment.
+ */
+function checkPlaintextEndpoint(endpoint: string, allowed: boolean, env: Record<string, string | undefined>): string | undefined {
+  const { protocol, hostname, username, password } = new URL(endpoint);
+  if (protocol !== "http:" || isLoopbackEndpoint(endpoint)) {
+    return undefined;
+  }
+  if (!allowed) {
+    throw new Error(
+      `refusing plain http to ${hostname}, which is not a loopback host: spans would cross the network unencrypted. ` +
+        `Use an https endpoint, or set ${PLAINTEXT_OPT_IN} to send them anyway.`,
+    );
+  }
+  if (username !== "" || password !== "") {
+    throw new Error(
+      `refusing plain http to ${hostname} even with ${PLAINTEXT_OPT_IN}: the endpoint URL carries a user name or password, ` +
+        "which would cross the network unencrypted. Use an https endpoint, or take them out of the URL.",
+    );
+  }
+  const headers = OTLP_HEADERS_VARIABLES.find((name) => (env[name] ?? "").trim() !== "");
+  if (headers !== undefined) {
+    throw new Error(
+      `refusing plain http to ${hostname} even with ${PLAINTEXT_OPT_IN}: ${headers} is set, and the headers it adds can carry credentials, ` +
+        `which would cross the network unencrypted. Use an https endpoint, or unset ${headers}.`,
+    );
+  }
+  return (
+    `otel trace export to ${endpoint}: ${PLAINTEXT_OPT_IN} is set, so spans go to ${hostname} over plain http, unencrypted. ` +
+    "Use an https endpoint unless every hop to that host is trusted."
+  );
+}
+
 export function createOtelTraceExporter({
   filePath,
   endpoint,
+  allowPlaintextEndpoint = false,
+  env = process.env,
   spanExporter,
   methodsEvaluated,
   timeoutConfig,
@@ -404,10 +455,14 @@ export function createOtelTraceExporter({
     // gzip the body. Headers from OTEL_EXPORTER_OTLP_*HEADERS are merged by
     // the SDK under any set here and cannot be refused, so the README lists
     // them as honored.
-    construct(
-      endpoint,
-      () => new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as OtlpCompression }),
-    );
+    construct(endpoint, () => {
+      // Inside construct, so a refusal costs this output alone.
+      const warning = checkPlaintextEndpoint(endpoint, allowPlaintextEndpoint, env);
+      if (warning !== undefined) {
+        console.error(warning);
+      }
+      return new OTLPTraceExporter({ url: endpoint, timeoutMillis: ENDPOINT_TIMEOUT_MS, compression: "none" as OtlpCompression });
+    });
   }
   if (spanExporter !== undefined) {
     construct("span exporter", () => spanExporter);
@@ -453,15 +508,18 @@ export function createOtelTraceExporter({
   // open span is never exported, and without this the step left no trace.
   const openSpans = new Set<StepSpan>();
 
+  const timeoutFor = (stepSpan: StepSpan): number | undefined => timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
+
   /** The failure event's attributes for one step, as this Guardian reports
    * them: its own posture, elapsed time since the span started, and the
-   * request's size when known. */
+   * request's size when known. The elapsed time is rounded up, so a late
+   * step never reports exactly the timeout. */
   function failureAttributes(stepSpan: StepSpan, failureClass: FailureClass, known: Partial<DecisionFailure> = {}): Attributes {
     return decisionFailureAttributes({
       class: failureClass,
       posture,
       reportedBy: "guardian",
-      elapsedMs: Math.round(performance.now() - stepSpan.startedAt),
+      elapsedMs: Math.ceil(performance.now() - stepSpan.startedAt),
       payloadBytes: stepSpan.payloadBytes,
       ...known,
     });
@@ -549,7 +607,7 @@ export function createOtelTraceExporter({
   function finish(stepSpan: StepSpan, envelope: unknown, mapping: OtelMapping, rejection: RejectionReason | undefined): void {
     const { span } = stepSpan;
     const error = asObject(asObject(envelope)?.error);
-    const errorCode = asNumber(error?.code);
+    const errorCode = asClampedErrorCode(error?.code);
     // Rejected before the span opened, rejected by a check after it opened,
     // or answered with a code that only a rejection carries: each ends as a
     // rejected request, and no held attribute reaches it.
@@ -578,7 +636,7 @@ export function createOtelTraceExporter({
       // The second: a decision that finished after the host stopped waiting.
       // The host applied its posture at the timeout, so the decision above
       // probably never took effect, and a reader has to be told.
-      const timeoutMs = timeoutConfig?.per_method_ms?.[stepSpan.method] ?? timeoutConfig?.default_ms;
+      const timeoutMs = timeoutFor(stepSpan);
       if (timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs) {
         span.addEvent(DECISION_FAILURE_EVENT, failureAttributes(stepSpan, "timeout", { timeoutMs }));
       }
@@ -645,9 +703,15 @@ export function createOtelTraceExporter({
               continue;
             }
             stepSpan.span.setAttributes({ ...stepSpan.claimed, ...stepSpan.held });
+            // Open past the host's timeout: the host already applied its
+            // posture, so timeout is the more exact class.
+            const timeoutMs = timeoutFor(stepSpan);
+            const timedOut = timeoutMs !== undefined && performance.now() - stepSpan.startedAt > timeoutMs;
             stepSpan.span.addEvent(
               DECISION_FAILURE_EVENT,
-              failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
+              timedOut
+                ? failureAttributes(stepSpan, "timeout", { timeoutMs })
+                : failureAttributes(stepSpan, "other", { detail: "the Guardian shut down before it answered this step" }),
             );
             stepSpan.span.setStatus({ code: SpanStatusCode.ERROR, message: "no response before shutdown" });
             stepSpan.span.end();

@@ -1,18 +1,52 @@
 /**
- * Keeps a loopback trace endpoint off an HTTP proxy. Both functions take the
- * environment as a parameter: main.ts, the composition root, passes
- * process.env, and the exporter itself never reads or writes it.
+ * Says which trace endpoints are loopback, and keeps one off an HTTP proxy.
+ * The two proxy functions take the environment as a parameter: main.ts, the
+ * composition root, passes process.env, and the exporter itself never reads
+ * or writes the proxy variables.
  */
+import { isIPv4, isIPv6 } from "node:net";
+
+/** The eight groups of an IPv6 address as the URL parser prints it. */
+function ipv6Groups(address: string): number[] {
+  const [head = "", tail] = address.split("::");
+  const groups = (part: string): number[] => (part === "" ? [] : part.split(":").map((group) => Number.parseInt(group, 16)));
+  const before = groups(head);
+  const after = tail === undefined ? [] : groups(tail);
+  return [...before, ...new Array<number>(8 - before.length - after.length).fill(0), ...after];
+}
+
+/**
+ * Whether an endpoint's host is this machine: 127.0.0.0/8, `::1`, the
+ * IPv4-mapped 127 range, or exactly `localhost`. The URL parser normalizes
+ * the host first (`127.1` and `0x7f.0.0.1` arrive as `127.0.0.1`), so the
+ * address is judged as numbers and `127.0.0.1.example.com` stays a name.
+ * `localhost` is accepted because the walkthrough uses it, though a hosts
+ * file can point it elsewhere.
+ */
+export function isLoopbackEndpoint(endpoint: string): boolean {
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
+  if (isIPv4(host)) {
+    return Number(host.split(".")[0]) === 127;
+  }
+  if (isIPv6(host)) {
+    const groups = ipv6Groups(host);
+    const leadingZeros = (count: number): boolean => groups.slice(0, count).every((group) => group === 0);
+    const isLoopback = leadingZeros(7) && groups[7] === 1;
+    const isMappedLoopback = leadingZeros(5) && groups[5] === 0xffff && groups[6]! >> 8 === 127;
+    return isLoopback || isMappedLoopback;
+  }
+  return host === "localhost";
+}
 
 /** The NO_PROXY entries that exempt a loopback endpoint's host, or none
  * when the endpoint is not loopback. IPv6 gets both forms: Bun matches only
  * `[::1]`, and other clients expect the bare `::1`. */
 function loopbackProxyEntries(endpoint: string): string[] {
-  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
-  if (host === "127.0.0.1" || host === "localhost") {
-    return [host];
+  if (!isLoopbackEndpoint(endpoint)) {
+    return [];
   }
-  return host === "::1" ? ["::1", "[::1]"] : [];
+  const host = new URL(endpoint).hostname.replace(/^\[|\]$/g, "");
+  return host.includes(":") ? [host, `[${host}]`] : [host];
 }
 
 const splitProxyList = (value: string): string[] =>
