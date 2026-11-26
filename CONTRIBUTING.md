@@ -185,6 +185,14 @@ it takes only two kinds of change: a promotion from `integration`, and an editor
 change to a path on the allowlist below. A guard enforces this and will tell you to
 retarget if you get it wrong.
 
+Specification work for 0.2 goes to `release/0.2` instead
+([D-052](https://owaspacs.org/docs/decisions/#d-052-land-02-specification-work-on-release02)). Target it
+when your pull request changes normative text under `docs/spec/`, a schema under
+`specification/`, or a conformance requirement, or when its issue is in the v0.2.0
+milestone. Branch from `release/0.2`, sync with it, and open the pull request against it.
+Code that carries out a specification change on `release/0.2` goes there with it. Other fixes
+to shipped code and documentation stay on `integration`.
+
 Paths that may target `main` directly: `docs/topics/`, `design/`, `docs/README.md`,
 `README.md`, `CONTRIBUTORS.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`,
 `SECURITY.md`, `STYLE.md`, `LICENSING.md`, and `NOTICE`. Everything else goes to
