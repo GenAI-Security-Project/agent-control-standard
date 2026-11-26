@@ -391,7 +391,7 @@ describe("architectural invariants", () => {
    * entry declares a `tools` list when its caller names no scoped tool
    * (`GovernStepInput.scopedTool`, packages/host-adapter/src/govern-step.ts).
    * acs-hook.ts names none: its own settings.json matcher already scopes
-   * both gates -- `^(Bash|WebFetch)$` at the request gate, `^Bash$` at the
+   * both gates -- `^(Bash|WebFetch|Read)$` at the request gate, `^(Bash|Read)$` at the
    * result gate -- so it has never needed to.
    *
    * `scripts/verify-zero-diff.sh` once held that shut mechanically by
@@ -486,7 +486,7 @@ describe("architectural invariants", () => {
             `main().catch exits 2 -- so every call to an UNLISTED tool becomes a blocking stop, not the silent ` +
             `skip a list is added for. Both are fail-closed, so nothing runs ungoverned, and neither is what a ` +
             `"tools" list means anywhere else. Scope this gate by its host's own matcher (settings.json, ` +
-            `"^(Bash|WebFetch)$") as it already is.`,
+            `"^(Bash|WebFetch|Read)$" and "^(Bash|Read)$") as it already is.`,
         );
       }
     }

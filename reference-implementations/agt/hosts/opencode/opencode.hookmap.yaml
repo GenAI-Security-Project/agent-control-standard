@@ -222,7 +222,7 @@ hooks:
     # are shaped for; `read`'s is {display, loaded, preview, truncated} (no
     # `exit`, and `preview` is ITS OWN mirror, not this one); `grep`'s is
     # {matches, truncated}; an invalid call's is {truncated} alone. Claude Code
-    # gets this scoping for free from settings.json's anchored `^Bash$`
+    # gets this scoping for free from settings.json's anchored `^(Bash|Read)$`
     # matcher -- there, the exposure is the matcher's to hold rather than the
     # gate's; OpenCode has no matcher, so the equivalent has to be declared
     # here instead. The adapter both shape-checks the list (`loadHookmap`) and

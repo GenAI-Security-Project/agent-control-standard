@@ -168,6 +168,23 @@ describe("acs-hook.ts -- the Claude Code hook shim, run as a real subprocess", (
     expect(stderr).toBe("");
   });
 
+  it("allows a real Read tool call, evaluated on its file_path: exit 0 and a plain allow", async () => {
+    // Read sends no `command`, so the request gate's policy target has to be
+    // named for it in mapping.yaml; without that entry the call was denied on
+    // evaluation_failed (measured live on Claude Code 2.1.316, #330).
+    const payload = { ...preToolUsePayload("unused"), tool_name: "Read", tool_input: { file_path: "/current/dir/README.md" } };
+
+    const { stdout, stderr, exitCode } = await runHook(payload, guardian.url);
+
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout) as { hookSpecificOutput: Record<string, unknown> };
+    expect(parsed.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "allow",
+    });
+    expect(stderr).toBe("");
+  });
+
   // This wrapper refusal is hook-aware. At PreToolUse an output Claude Code
   // reads no decision from lets the tool call proceed, so this shim refuses
   // to write one -- and that same refusal, applied to the result gate, would
@@ -196,7 +213,7 @@ describe("acs-hook.ts -- the Claude Code hook shim, run as a real subprocess", (
  * already scoped on. When a gate's hookmap entry declares a `tools` list,
  * governStep refuses a caller that names none. This shim declares no
  * `tools` at either gate (each has its own settings.json matcher already
- * scoping it -- `^(Bash|WebFetch)$` at the request gate, `^Bash$` at the
+ * scoping it -- `^(Bash|WebFetch|Read)$` at the request gate, `^(Bash|Read)$` at the
  * result gate) and passes no `scopedTool`. `scripts/verify-zero-diff.sh`
  * pinned `hosts/claude-code/*.ts` and `*.yaml`, which is why this comment
  * used to say the shim's one `governStep` call could not be updated even if
