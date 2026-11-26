@@ -121,7 +121,7 @@ describe("opencode.hookmap.yaml", () => {
     // and `metadata` is per-tool -- only `bash` carries
     // `metadata.exit`/`metadata.output`, which this gate's `outputs` and
     // `exit_status` paths are shaped for. The Claude Code host gets the
-    // equivalent scoping for free from settings.json's anchored `^Bash$`
+    // equivalent scoping for free from settings.json's anchored `^(Bash|Read)$`
     // matcher; OpenCode has none, so it is declared here instead.
     const hooks = loadHookmap(HOOKMAP).hooks;
     expect(hooks["tool.execute.after"]?.tools).toEqual(["bash"]);

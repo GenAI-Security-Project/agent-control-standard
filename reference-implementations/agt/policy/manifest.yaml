@@ -201,3 +201,13 @@ tools:
     type: Tool
     id: webfetch
     security_labels: [shell]
+  # Claude Code's own real tool name for reading a file, registered for the
+  # reason every entry above is: an unregistered tool_call.name fails AGT's
+  # evaluation closed on runtime_error:tool_unknown before any rule runs
+  # (measured at the result gate, through the real shim). The label
+  # copies the others, as agreed in #330: Read reaches no network, so the
+  # egress gate, the only reader of security_labels, has nothing to check.
+  Read:
+    type: Tool
+    id: Read
+    security_labels: [shell]

@@ -76,7 +76,7 @@
  * it returns, which is what lets the same function serve a second host with a
  * different wire shape (see render-decision.ts).
  */
-import { buildEnvelope, modificationDocumentOf, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
+import { buildEnvelope, modificationDocumentOf, outputsFor, type AcsRequestEnvelope, type Hookmap } from "./build-envelope.ts";
 import type { AuditSink } from "./audit-sink.ts";
 import {
   applyFailurePosture,
@@ -152,8 +152,8 @@ export type GovernStepInput = {
    * Optional because a gate can decline to scope at all: host #1 declares no
    * `tools` at either of its gates -- each has its own settings.json matcher
    * already scoping it, and the two are no longer the same matcher: the
-   * request gate's matcher names two tools, the result gate's matcher still
-   * names one -- so it has nothing to tell and nothing is checked. A caller
+   * request gate's matcher names three tools, the result gate's matcher
+   * names two -- so it has nothing to tell and nothing is checked. A caller
    * whose gate does declare a list and does not tell is refused outright,
    * before anything is asked or audited -- see the guard in `governStep`
    * below, which is what makes this structural rather than a convention a
@@ -291,7 +291,8 @@ export type GovernedStep =
  * `HookmapHookEntryCommon.tools`'s own contract (build-envelope.ts) and
  * host #1's own case: its hookmap declares no `tools` at either gate,
  * because each has its own settings.json matcher already scoping it --
- * `^(Bash|WebFetch)$` at the request gate, `^Bash$` at the result gate.
+ * `^(Bash|WebFetch|Read)$` at the request gate, `^(Bash|Read)$` at the
+ * result gate.
  *
  * `tools` is shared hookmap vocabulary that build-envelope.ts shape-checks at
  * load time (`assertToolsWellFormed`) and normalises (`normalizeTools`), but
@@ -567,9 +568,10 @@ export async function governStep({
   // an entry declaring `arguments` is a gate that decides whether a step runs,
   // and has no output to replace.
   //
-  // `?? undefined` because a hookmap is YAML: a key written with nothing after
-  // it parses to null, which is a key present and unusable, not a key absent.
-  const outputs = entry?.outputs ?? undefined;
+  // `outputsFor` picks this tool's own `by_tool` paths when the hookmap names
+  // any, through the same function `buildPayload` uses, so the leaf a
+  // replacement is patched into is the leaf that went on the wire.
+  const outputs = entry === undefined ? undefined : outputsFor(entry, payload);
   const outputLocation: HostOutputLocation | undefined = outputs === undefined ? undefined : { payload, outputs };
 
   /**
