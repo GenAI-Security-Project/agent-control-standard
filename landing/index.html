@@ -89,22 +89,22 @@
       <figcaption>
         <strong>One finance agent built to be attacked, seven controls, every decision on screen.</strong>
         FinBot runs each attack with ACS off, then again with a Guardian deciding every step. A chat tries to mail
-        vendor data out. Shadow mode records a deny but blocks nothing. A fixed mail rule blocks the leak and lets the
-        vendor's own mail through. A large payment waits for a human approver. A bank account number is masked
+        vendor data out. Shadow mode records a deny but blocks nothing. A mail rule that denies all outside mail also
+        stops the vendor's own notice, and the fixed rule blocks the leak and lets that notice through. A large payment waits for a human approver. A bank account number is masked
         before the model reads it. A tool whose description was changed is caught by its pinned digest. A forged
         decision passes under a shared HMAC key and fails under ML-DSA-65. This is the lab from the OWASP GenAI
         Security Project workshop at the Agentic AI Security Summit Europe.
       </figcaption>
       <details id="demo-transcript" class="film-transcript">
         <summary>Text description of the demo video</summary>
-        <p>The narrated recording runs about ten and a half minutes in eight parts. FinBot's web pages are on the
+        <p>The narrated recording runs just under twelve minutes in eight parts. FinBot's web pages are on the
         left and the ACS decision viewer is on the right. Some parts add an operator terminal above FinBot. Captions
         show every narrated line. The narration is a synthetic voice clone, used with the speaker's consent.</p>
         <ol>
           <li>Overview. A vendor's onboarding form is typed and submitted, and the Guardian allows the call. A chat then asks FinBot to mail vendor data to an outside address. The Guardian denies the send, and FinBot answers with a neutral line.</li>
-          <li>Wiring ACS in. FinBot onboards a vendor with ACS off, and the viewer shows no ACS record. With ACS on, the gateway opens a session with a handshake, and each tool call waits for the Guardian's signed answer. FinBot's welcome email to the vendor is denied, because the starting mail rule blocks every outside address.</li>
+          <li>Wiring ACS in. FinBot onboards a vendor with ACS off, and the viewer shows no ACS record. With ACS on, the gateway opens a session with a handshake, and each tool call waits for the Guardian's signed answer. FinBot's welcome email to the vendor is denied, because the starting mail rule denies all outside mail.</li>
           <li>Shadow mode. The same attack chat runs with ACS off, then in shadow mode. The Guardian records a deny, and the mail still leaves, because shadow mode blocks nothing.</li>
-          <li>Fixing the mail rule. The fixed rule blocks outside addresses and allows the vendor's own. The attack is denied, and a payment notice to the vendor is allowed.</li>
+          <li>Fixing the mail rule. The starting rule denies all outside mail, so it also denies a payment notice the vendor asks for at its own address. The fixed rule blocks outside addresses and allows the vendor's own. The attack is denied, and the vendor's payment notice is allowed.</li>
           <li>Human approval. A large payment gets an ask decision, and the gateway holds the transfer for an approver. Approved, the payment goes through. Rejected, the gateway denies the call and no money moves.</li>
           <li>Redaction. With ACS off, the vendor record reaches the model with its bank account number. With the redaction rule on, the Guardian answers modify, and the gateway masks the number before the model reads it.</li>
           <li>Tool pins. An attacker rewrites a tool's description to steer FinBot into a leak. A rule that checks each tool's pinned digest denies the changed tool.</li>
