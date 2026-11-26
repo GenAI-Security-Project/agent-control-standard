@@ -1525,6 +1525,42 @@ describe("AGT's stock egress gate, driven from configuration", () => {
     }
   });
 
+  // #373: each of these reaches evil.test and was ALLOWED through the shipped
+  // policy before the extractor changed.
+  for (const command of [
+    `curl 'https://docs.anthropic.com'@evil.test/x`,
+    `curl "https://docs.anthropic.com"@evil.test/x`,
+    `curl HTTPS://evil.test/x`,
+  ]) {
+    it(`denies the shell shape that reaches an off-list host, for ${command}`, async () => {
+      const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+      try {
+        const decision = await postToolCallRequest(guardian, "Bash", { command }, { raw_command: command });
+        expect(decision.decision).toBe("deny");
+        expect(decision.reason_codes).toEqual(["egress_destination_not_allowed"]);
+      } finally {
+        await guardian.close();
+      }
+    });
+  }
+
+  // #373: a `url` argument naming an allowlisted URL must not silence the
+  // command's own destination. The two disagree, which the gate denies.
+  it("denies a shell command carrying an allowlisted `url` argument beside an off-list URL", async () => {
+    const guardian = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml" });
+    try {
+      const decision = await postToolCallRequest(
+        guardian,
+        "Bash",
+        { command: "curl https://evil.test/x", url: "https://docs.anthropic.com/a" },
+        { raw_command: "curl https://evil.test/x" },
+      );
+      expect(decision.decision).toBe("deny");
+    } finally {
+      await guardian.close();
+    }
+  });
+
   // No false positive in either direction, which is what makes a SHARED
   // policy-target leaf safe: the destructive-shell patterns do not match URLs,
   // and the egress gate does not match commands.
