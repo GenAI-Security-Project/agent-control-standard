@@ -193,7 +193,9 @@ test('file URL works offline with the local font and sample download', async (t)
   }), ['loaded']);
   const waiting = page.waitForEvent('download');
   await page.getByRole('link', { name: 'Download full CycloneDX 2.0-dev AgBOM JSON' }).click();
-  assert.deepEqual(await readFile(await (await waiting).path()), await readFile(join(publicDir, downloadPath)));
+  // The offline download comes from the bundle, which normalizes Windows checkout line endings.
+  const sampleJson = await readFile(join(publicDir, downloadPath), 'utf8');
+  assert.deepEqual(await readFile(await (await waiting).path()), Buffer.from(sampleJson.replaceAll('\r\n', '\n')));
   await page.getByRole('link', { name: 'Explore Use Cases' }).click();
   assert.match(await bodyText(page, '#case-context'), /finance assistant/);
   assert.match(await bodyText(page, '.stage-artifacts'), /example-ledger-agent_startup\.cdx\.json/);
