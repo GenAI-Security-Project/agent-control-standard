@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -55,6 +56,8 @@ STATE = BUNDLE / "state"
 AUDIT_LOG = STATE / "audit.log"
 RUNS_DIR = STATE / "runs"
 RECORDINGS_DIR = BUNDLE / "replay" / "recordings"
+# A count of mail in a check line. It comes from the run, so a guide may show a different one.
+MESSAGE_COUNT = re.compile(r"\b\d+ messages?\b")
 MISS_MARK = '"acs_audit_event": "replay_miss"'
 # The module 7 kit prints NOT YET for a forgery that fails, which is the point of the lesson.
 LESSON_VERBS = {"forge", "verify", "downgrade"}
@@ -97,6 +100,15 @@ def new_audit_misses(path: Path, offset: int) -> tuple[int, list[str]]:
     return len(data), [line for line in lines if MISS_MARK in line]
 
 
+def _setup_counts(value: object) -> list[int] | None:
+    """The setup miss counts a run record allows: one count, or a list of them as the driver writes for a recording
+    the manifest names more than one count for. None when the record carries neither."""
+    counts = value if isinstance(value, list) else [value]
+    if not counts or any(isinstance(c, bool) or not isinstance(c, int) or c < 0 for c in counts):
+        return None
+    return sorted(set(counts))
+
+
 def record_problems(name: str, record: object, recordings: dict[str, str]) -> list[str]:
     """Why one run record fails acceptance, or nothing. recordings maps a recording's file name to its text."""
     if not isinstance(record, dict):
@@ -104,6 +116,12 @@ def record_problems(name: str, record: object, recordings: dict[str, str]) -> li
     problems = []
     if record.get("result") != "completed":
         problems.append(f"run record {name} says {record.get('result')!r}: {record.get('error')}")
+    allowed = _setup_counts(record.get("setup_replay_misses_expected"))
+    if allowed is None:
+        problems.append(f"run record {name} has no count of expected setup misses")
+    elif record.get("setup_replay_misses") not in allowed:
+        problems.append(f"run record {name} counts {record.get('setup_replay_misses')!r} setup misses where its "
+                        f"recording expects {' or '.join(map(str, allowed))}")
     if record.get("replay_misses") != 0:
         problems.append(f"run record {name} counts {record.get('replay_misses')!r} replay misses")
     if record.get("upstream") != "replay":
@@ -162,6 +180,23 @@ def _run(argv: tuple[str, ...], env: dict[str, str]) -> tuple[int, str]:
     return process.wait(), verdict
 
 
+def promised_not_yet(command: guide_sim.Command) -> str | None:
+    """The start of the NOT YET line a guide shows right after a check, up to its first message count, or None when
+    the guide shows no NOT YET there. A guide runs a check early on purpose to show what it still wants, and the
+    counts in that line come from the run, so only the words before them are held to the guide."""
+    text = command.path.read_text(encoding="utf-8")
+    for start, tag, body in guide_sim.fences(text):
+        if start <= command.line:
+            continue
+        if tag in guide_sim.SHELL:
+            return None
+        first = next((line.strip() for line in body if line.strip()), "")
+        if tag != "text" or not first.startswith("NOT YET"):
+            return None
+        return MESSAGE_COUNT.split(first, maxsplit=1)[0]
+    return None
+
+
 class Acceptance:
     def __init__(self, modules: list[int], guide_dir: Path, env: dict[str, str]) -> None:
         self.modules = modules
@@ -174,18 +209,25 @@ class Acceptance:
         self.recordings = {p.name: p.read_text(encoding="utf-8", errors="replace")
                            for p in sorted(RECORDINGS_DIR.glob("*.jsonl"))} if RECORDINGS_DIR.is_dir() else {}
 
-    def command(self, argv: tuple[str, ...]) -> None:
+    def command(self, argv: tuple[str, ...], promised: str | None = None) -> None:
         verb = argv[1]
         code, verdict = _run(argv, self.env)
+        if promised is not None:
+            # The guide shows this check saying NOT YET, so it has to say that, in the words the guide shows.
+            if code != 1 or not verdict.startswith(promised):
+                raise NotYet(f"{' '.join(argv)} exited {code} with {verdict or 'no verdict'!r}, and the guide shows "
+                             f"a line starting {promised!r}")
+            _say(f"DONE: {' '.join(argv)} said NOT YET, as the guide shows")
+            return
         allowed = (0, 1) if verb in LESSON_VERBS else (0,)
         if code not in allowed:
             raise NotYet(f"{' '.join(argv)} exited {code}" + (f": {verdict}" if verdict else ""))
         self.audit_offset, misses = new_audit_misses(AUDIT_LOG, self.audit_offset)
-        if misses:
-            raise NotYet(f"{' '.join(argv)} left {len(misses)} replay_miss lines in state/audit.log, the first: "
-                         f"{misses[0]}")
-        if verb == "run":
-            self.read_new_runs(argv)
+        # A run may miss exactly the setup turns the manifest names for its recording, and nothing else.
+        expected = self.read_new_runs(argv) if verb == "run" else 0
+        if len(misses) != expected:
+            raise NotYet(f"{' '.join(argv)} left {len(misses)} replay_miss lines in state/audit.log where its run "
+                         f"records expect {expected}" + (f", the first: {misses[0]}" if misses else ""))
         if verb == "check":
             self.checked += 1
             _say(f"DONE: {' '.join(argv)} exited 0")
@@ -194,7 +236,9 @@ class Acceptance:
             if problems:
                 raise NotYet(problems[0])
 
-    def read_new_runs(self, argv: tuple[str, ...]) -> None:
+    def read_new_runs(self, argv: tuple[str, ...]) -> int:
+        """Checks each new run record, and returns the setup misses they expect between them."""
+        expected = 0
         names = sorted(p.name for p in RUNS_DIR.glob("*.json")) if RUNS_DIR.is_dir() else []
         new = [n for n in names if n not in self.seen_runs]
         if not new:
@@ -208,7 +252,9 @@ class Acceptance:
             problems = record_problems(name, record, self.recordings)
             if problems:
                 raise NotYet(problems[0])
+            expected += record["setup_replay_misses"]
             self.runs += 1
+        return expected
 
     def play(self) -> None:
         guides = {n: self.guide_dir / f"{n}.md" for n in self.modules}
@@ -235,7 +281,7 @@ class Acceptance:
                     self.command(("./lab.sh", "init"))
                     self.command(("./lab.sh", "up"))
                     set_up = True
-                self.command(c.argv)
+                self.command(c.argv, promised_not_yet(c) if verb == "check" else None)
                 if verb == "reset":
                     set_up = False
                 elif verb == "up":
@@ -248,8 +294,8 @@ class Acceptance:
             raise NotYet(".env sets the openai upstream, and attendees run on replay")
         if not self.checked:
             raise NotYet("the guides ran no check")
-        _say(f"DONE: {self.checked} checks passed over {self.runs} runs, offline, with no replay miss and no run "
-             f"in a recording's namespace")
+        _say(f"DONE: {self.checked} checks passed over {self.runs} runs, offline, with no replay miss beyond the setup "
+             f"misses the manifest names and no run in a recording's namespace")
 
 
 def _modules(text: str) -> list[int]:

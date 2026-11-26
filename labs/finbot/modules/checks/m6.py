@@ -108,7 +108,9 @@ def check(ev: Evidence) -> int:
         report.not_yet(f"s6's newest enforce run has no deny with {MISMATCH} on {SEND}{landed}. To fix it, {FIX}")
         return report.EXIT_NOT_YET
 
-    through = [e for e in sends if e.get("decision") != "deny"]
+    # Only the run's own sessions count. FinBot's background onboarding mails the vendor a status note, and now and
+    # then it sends that note just before the description changes, so the unchanged declaration rightly passes.
+    through = [e for e in sends if e.get("decision") != "deny" and e.get("session_id") in sessions]
     if through:
         # A deny on one call proves nothing when another call of the same tool still ran.
         report.not_yet(f"s6's newest enforce run denied one {SEND} call but let {len(through)} more through. Make "
