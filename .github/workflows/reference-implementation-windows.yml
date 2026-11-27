@@ -58,9 +58,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1.3.11 is the version reference-implementation.yml pins. 1.4.4 is the version
-        # the Bun bump moves to, and the 1.4.x line is where issue #111 shows.
-        bun: ["1.3.11", "1.4.4"]
+        # 1.4.5 is the version reference-implementation.yml pins. 1.4.4 stays as a
+        # second 1.4.x cell for the issue #111 stdin check.
+        bun: ["1.4.4", "1.4.5"]
     runs-on: windows-latest
     # A hook that waits on stdin forever would otherwise hold the runner for the
     # six-hour default.

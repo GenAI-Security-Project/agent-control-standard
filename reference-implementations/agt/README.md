@@ -216,7 +216,7 @@ The Guardian's file and the converter's file share a format and a join key, so y
 
 If you only want to see what the output looks like, open [`samples/trace/acs-trace-sample.jsonl`](samples/trace/acs-trace-sample.jsonl). It's a committed run of the same exporter.
 
-**1. Get the code.** You need `git` and [Bun](https://bun.sh) 1.3 (CI runs 1.3.11). If someone gave you a commit to use, check it out, so your results match theirs.
+**1. Get the code.** You need `git` and [Bun](https://bun.sh) 1.4 (CI runs 1.4.5). If someone gave you a commit to use, check it out, so your results match theirs.
 
 ```bash
 git clone https://github.com/GenAI-Security-Project/agent-control-standard.git

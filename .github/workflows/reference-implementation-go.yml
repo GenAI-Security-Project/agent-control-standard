@@ -87,7 +87,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
-          bun-version: "1.3.11"
+          bun-version: "1.4.5"
 
       - name: Prepare the Go Guardian quality gate
         run: make setup
