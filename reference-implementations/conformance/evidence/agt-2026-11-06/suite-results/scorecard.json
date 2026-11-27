@@ -1,0 +1,51 @@
+{
+  "target": "http://127.0.0.1:8787/acs",
+  "limit": 100,
+  "scorecards": [
+    {
+      "policy": "external",
+      "limit": 100,
+      "protocol": [
+        {
+          "check": "handshake returns a schema-valid ServerHello (v0.1.0 $def required fields)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "system/ping answers (liveness probe)",
+          "ok": null,
+          "detail": "no system/ping (error -32011); normativity unsettled (handshake.json: clients SHOULD include it; hooks/system-ping.json: a Guardian MUST return allow) \u2014 reported as an open observation, not a failure"
+        },
+        {
+          "check": "toolCallRequest returns schema-valid AcsResult",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "check": "undeclared method is refused (JSON-RPC error)",
+          "ok": true
+        },
+        {
+          "check": "\u00a710 signature verification",
+          "ok": null,
+          "detail": "PENDING: ServerHello signature_algorithms_supported=[] has no HMAC-SHA256 baseline, so \u00a710 signing is not exercised"
+        },
+        {
+          "check": "\u00a710.3 replay/timestamp rejection",
+          "ok": null,
+          "detail": "PENDING: no HMAC-SHA256 baseline advertised (skew_window_ms=300000)"
+        }
+      ],
+      "committed": {
+        "race": 0,
+        "continue": 0,
+        "retry": 0
+      },
+      "verdict": {
+        "race": "N/A (evaluation_failed)",
+        "continue": "N/A (evaluation_failed)",
+        "retry": "N/A (evaluation_failed)"
+      }
+    }
+  ]
+}

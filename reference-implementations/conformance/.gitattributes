@@ -1,0 +1,3 @@
+# Keep the frozen evidence comparable across platforms: store and check out text with LF, so a
+# Windows run (whose Python writes CRLF) still diffs clean against the committed results.
+* text=auto eol=lf
