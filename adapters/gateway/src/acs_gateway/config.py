@@ -41,6 +41,20 @@ DEFAULT_CAPTURE_SCENARIO = "capture"
 _SCENARIO = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
+def _replay_pace(env: Mapping[str, str]) -> float:
+    """ACS_REPLAY_PACE: a share of each recorded call's duration from 0 to 1, 0 when unset."""
+    raw = env.get("ACS_REPLAY_PACE", "").strip()
+    if not raw:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError(f"ACS_REPLAY_PACE must be a number from 0 to 1, got {raw!r}")
+    return value
+
+
 def _positive_number(env: Mapping[str, str], name: str, default: float) -> float:
     raw = env.get(name, "").strip()
     if not raw:
@@ -136,10 +150,15 @@ class GatewayConfig:
     capture_scenario: str = DEFAULT_CAPTURE_SCENARIO
     upstream_model: str | None = None
     replay_scenario: str | None = None
+    # Replay waits this share of each recorded call's duration before answering, so sessions spread out as they did
+    # live and the decision viewer can tell their decisions apart (2026-11-24 live recording run). 0 answers at once.
+    replay_pace: float = 0.0
     # Spans (LAB-09, issue #582). None leaves tracing off, with no exporter and no network call.
     otlp_endpoint: str | None = None
     # The pinned Guardian decision key (acs.client ResponseKeys), or None for HMAC-SHA256 answers as before.
     response_keys: ResponseKeys | None = None
+    # The model port's client bearer token (final review R8, issue #588). None leaves the port open, as before.
+    client_token_file: Path | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> GatewayConfig:
@@ -180,13 +199,23 @@ class GatewayConfig:
             raise ValueError(f"ACS_UPSTREAM_KEY_SHARED must be 0 or 1, got {shared!r}")
         key_shared = key_file is not None and not _loopback(listen_host)
         if key_shared and shared != "1":
-            # The model port takes no client credential, so with a key file anyone who reaches it spends the
-            # operator's key. Loopback keeps that to this host (security scan F1 and F2). Lab convention: the lab
-            # bundle binds every address on a container network that only the lab's containers and the host itself
-            # can reach, and says so with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
+            # Off loopback, more than this host's processes can reach the model port, so the operator says so
+            # (security scan F1 and F2). The client token below still gates every call. Lab convention: the lab bundle
+            # binds every address on a container network that only the lab's containers and the host itself can reach,
+            # and says so with ACS_UPSTREAM_KEY_SHARED=1 (issue #588).
             raise ValueError(f"ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_HOST on a loopback address, got "
-                             f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client that can reach "
-                             "the model port may spend the key")
+                             f"{listen_host!r}. Set ACS_UPSTREAM_KEY_SHARED=1 only when every client holding the "
+                             "client token that can reach the model port may spend the key")
+        client_token = env.get("ACS_GATEWAY_CLIENT_TOKEN_FILE", "").strip()
+        if key_file is not None and not client_token:
+            # With a key file, whoever reaches the model port spends the operator's key: on a Linux host that is any
+            # local user, through the bridge network. A client token closes that.
+            raise ValueError("ACS_UPSTREAM_KEY_FILE needs ACS_GATEWAY_CLIENT_TOKEN_FILE, the token the model port's "
+                             "clients send as their bearer, so only they can spend the key")
+        if client_token and upstream_mode != "replay" and key_file is None:
+            # Without a key file the client's own Authorization header goes upstream, and it would carry the token.
+            raise ValueError("ACS_GATEWAY_CLIENT_TOKEN_FILE needs ACS_UPSTREAM_KEY_FILE outside replay, or the token "
+                             "would be forwarded upstream as the client's key")
         model = env.get("ACS_UPSTREAM_MODEL", "").strip()
         replay_scenario = env.get("ACS_REPLAY_SCENARIO", "").strip() if upstream_mode == "replay" else ""
         if replay_scenario and not _SCENARIO.fullmatch(replay_scenario):
@@ -224,8 +253,10 @@ class GatewayConfig:
             capture_scenario=scenario,
             upstream_model=model or None,
             replay_scenario=replay_scenario or None,
+            replay_pace=_replay_pace(env) if upstream_mode == "replay" else 0.0,
             otlp_endpoint=_otlp_endpoint(env),
             response_keys=_response_keys(env) if mode != "off" else None,
+            client_token_file=Path(client_token) if client_token else None,
         )
 
 

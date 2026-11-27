@@ -85,6 +85,17 @@ nav:
     - Sign and verify decisions: topics/signed-decisions.md
     - Signature benchmark: topics/signature-benchmark.md
     - Decision Log: decisions/index.md
+  - Labs:
+    - "FinBot lab: start here": labs/finbot/index.md
+    - "Module 1: Wire it in": labs/finbot/modules/1.md
+    - "Module 2: Watch it": labs/finbot/modules/2.md
+    - "Module 3: Stop it": labs/finbot/modules/3.md
+    - "Module 4: Ask a human": labs/finbot/modules/4.md
+    - "Module 5: Clean it": labs/finbot/modules/5.md
+    - "Module 6: Poison a tool": labs/finbot/modules/6.md
+    - "Module 7: Forge a decision": labs/finbot/modules/7.md
+    - Lab glossary: labs/finbot/modules/glossary.md
+    - Claims ledger: labs/finbot/CLAIMS.md
   - Concepts:
     - Overview: concepts/README.md
     - Agents: concepts/agents.md

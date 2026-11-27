@@ -20,6 +20,7 @@ import httpx
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.background import BackgroundTask
+from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
@@ -290,6 +291,13 @@ class Gateway:
                 return None
             chunks.append(chunk)
         return b"".join(chunks)
+
+    def select_replay(self, scenario: str | None, pace: float | None = None) -> None:
+        """Replay from one recording, or from all of them with None, at `pace` or the configured pace with None.
+        ValueError when the gateway is not on replay, the recording is missing or the pace is not from 0 to 1, and the
+        store is then left as it was."""
+        self.upstream_source.select(scenario, pace)
+        _audit("replay_selected", scenario=scenario, pace=pace)
 
     def bump_epoch(self) -> int:
         dropped = self.sessions.held()
@@ -1475,13 +1483,52 @@ def _parse(raw: bytes) -> Any:
         return None
 
 
+class ClientTokenGate:
+    """The model port's client check (final review R8, issue #588), in front of every route.
+
+    A request passes only with `Authorization: Bearer <token>`, compared in constant time. Anything else gets the
+    Responses API's own 401 before the gateway reads the body, so a refused call reaches no upstream, never has the
+    model key swapped in, and leaves no model input line. The refusal is audited without the header's value. Only
+    lifespan passes untouched. A websocket is refused, token or not, and any other scope type gets nothing.
+    """
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode("utf-8")
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # Fail closed on every other scope (final review m-4). No route serves a websocket today, so refusing here
+            # keeps one added later from going ungated. Closing before accept makes the server answer 403.
+            if scope["type"] == "websocket":
+                _audit("client_unauthorized", cause="websocket", path=scope.get("path"))
+                await send({"type": "websocket.close", "code": 1008})
+            return
+        given = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
+        # One header, exactly the expected bytes. compare_digest runs in time that doesn't depend on where they differ.
+        if len(given) == 1 and hmac.compare_digest(given[0], self.expected):
+            await self.app(scope, receive, send)
+            return
+        _audit("client_unauthorized", cause="missing" if not given else "wrong", method=scope.get("method"),
+               path=scope.get("path"))
+        response = openai_error(401, "Incorrect API key provided.", "invalid_request_error", "invalid_api_key")
+        await response(scope, receive, send)
+
+
 def create_app(config: GatewayConfig) -> Starlette:
+    # Read first, so a bad token file stops startup before anything else is built.
+    token = (load_secret_file(config.client_token_file, "ACS_GATEWAY_CLIENT_TOKEN_FILE")
+             if config.client_token_file is not None else None)
     gateway = Gateway(config)
     routes = [
         Route("/v1/responses", gateway.responses, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
         Route("/{path:path}", gateway.not_found, methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]),
     ]
-    app = Starlette(routes=routes, lifespan=gateway.lifespan)
+    middleware = [Middleware(ClientTokenGate, token=token)] if token is not None else []
+    app = Starlette(routes=routes, middleware=middleware, lifespan=gateway.lifespan)
     app.state.gateway = gateway
     return app
 
@@ -1520,4 +1567,28 @@ def create_admin_app(gateway: Gateway, token: str) -> Starlette:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return JSONResponse({"epoch": gateway.bump_epoch()})
 
-    return Starlette(routes=[Route("/epoch", epoch, methods=["POST"])])
+    async def replay(request: Request) -> Response:
+        """POST /replay {"scenario": "<recording>" | null, "pace": 0..1}: the recording a lab run replays, or every one,
+        and optionally its own replay pace (2026-11-24)."""
+        given = request.headers.get("authorization", "").encode("utf-8")
+        if not hmac.compare_digest(given, expected):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        scenario = body.get("scenario", ...) if isinstance(body, dict) else ...
+        if scenario is not None and not isinstance(scenario, str):
+            return JSONResponse({"error": "scenario must be a recording name or null"}, status_code=400)
+        pace = body.get("pace") if isinstance(body, dict) else None
+        if pace is not None and (isinstance(pace, bool) or not isinstance(pace, (int, float)) or not 0 <= pace <= 1):
+            return JSONResponse({"error": "pace must be a number from 0 to 1, or absent"}, status_code=400)
+        try:
+            gateway.select_replay(scenario, pace)
+        except ValueError:
+            # The message can name the recordings directory, so the answer is a fixed line.
+            return JSONResponse({"error": "the gateway is not on replay, or holds no such recording"},
+                                status_code=409)
+        return JSONResponse({"scenario": scenario})
+
+    return Starlette(routes=[Route("/epoch", epoch, methods=["POST"]), Route("/replay", replay, methods=["POST"])])

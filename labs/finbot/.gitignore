@@ -1,0 +1,5 @@
+# Written by lab init and the running stack. Secrets, keys, transcripts and logs never reach git.
+state/
+.env
+*.key
+*.token

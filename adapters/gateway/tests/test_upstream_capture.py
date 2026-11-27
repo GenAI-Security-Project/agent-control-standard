@@ -23,6 +23,17 @@ def key_file(tmp_path):
     return path
 
 
+TOKEN = "t" * 64
+
+
+def token_file(tmp_path):
+    # A key file needs the model port's client token, which the client sends in place of a key (final review R8).
+    path = tmp_path / "client.token"
+    path.write_text(TOKEN + "\n")
+    path.chmod(0o600)
+    return str(path)
+
+
 def capture(gateway, tmp_path, **env):
     return gateway(ACS_UPSTREAM="capture", ACS_RECORDINGS_DIR=str(tmp_path / "rec"), ACS_CAPTURE_SCENARIO="s1", **env)
 
@@ -85,8 +96,9 @@ def test_a_streamed_exchange_is_captured_as_events(gateway, upstream, tmp_path):
 
 def test_the_key_reaches_only_the_upstream_header(gateway, upstream, tmp_path, audit, capfd):
     upstream.reply(response_body(message_item("ok")))
-    client = capture(gateway, tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)))
-    client.post("/v1/responses", json=finbot_request(), headers={"authorization": "Bearer lab-dummy"})
+    client = capture(gateway, tmp_path, ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)),
+                     ACS_GATEWAY_CLIENT_TOKEN_FILE=token_file(tmp_path))
+    client.post("/v1/responses", json=finbot_request(), headers={"authorization": f"Bearer {TOKEN}"})
     assert upstream.received[0].headers["authorization"] == f"Bearer {KEY}"
     for path in (tmp_path / "rec" / "s1.jsonl", tmp_path / "model-inputs.jsonl"):
         assert KEY not in path.read_text()
@@ -97,8 +109,8 @@ def test_the_key_reaches_only_the_upstream_header(gateway, upstream, tmp_path, a
 
 def test_live_with_a_key_replaces_the_client_header(gateway, upstream, tmp_path):
     upstream.reply(response_body(message_item("ok")))
-    gateway(ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path))).post(
-        "/v1/responses", json=finbot_request(), headers={"authorization": "Bearer lab-dummy"})
+    gateway(ACS_UPSTREAM_KEY_FILE=str(key_file(tmp_path)), ACS_GATEWAY_CLIENT_TOKEN_FILE=token_file(tmp_path)).post(
+        "/v1/responses", json=finbot_request(), headers={"authorization": f"Bearer {TOKEN}"})
     assert upstream.received[0].headers["authorization"] == f"Bearer {KEY}"
 
 
@@ -186,16 +198,70 @@ def split_stream(*pieces):
     return SSE([f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events])
 
 
+NS_B = "ns_user_ZyXwVuTs_-987654"
+
+
 @pytest.mark.parametrize("pieces", [
-    (f"Mail admin@{NS_A[:10]}", f"{NS_A[10:]}.finbot"),
-    (f"Mail admin@{NS_A[:6]}", NS_A[6:15], f"{NS_A[15:]}.finbot"),
+    (f"Mail admin@{NS_B[:10]}", f"{NS_B[10:]}.finbot"),
+    (f"Mail admin@{NS_B[:6]}", NS_B[6:15], f"{NS_B[15:]}.finbot"),
 ])
 def test_capture_refuses_an_id_split_across_streamed_deltas(gateway, upstream, tmp_path, audit, pieces):
-    """Fix round 4, I-2: no single delta holds the namespace, but the deltas rejoin into it on replay."""
+    """Fix round 4, I-2: no single delta holds the namespace, but the deltas rejoin into it on replay. A namespace the
+    request never named stays refused once the part is remapped whole (2026-11-23)."""
     upstream.reply(split_stream(*pieces))
     response = capture(gateway, tmp_path).post("/v1/responses", json={
         **finbot_request(system=f"User ID: {USER_A}"), "stream": True})
     assert response.status_code == 200
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
+@pytest.mark.parametrize("pieces", [
+    (f"Mail admin@{NS_A[:10]}", f"{NS_A[10:]}.finbot"),
+    (f"Mail admin@{NS_A[:6]}", NS_A[6:15], f"{NS_A[15:]}.finbot"),
+])
+def test_a_mapped_namespace_split_across_deltas_is_captured_as_its_placeholder(gateway, upstream, tmp_path, pieces):
+    """2026-11-23 owner sitting: FinBot's streamed answer named the vendor's namespace, which the request carries, and
+    every s5 take was skipped. The part's deltas are remapped as one text and kept as one delta."""
+    upstream.reply(split_stream(*pieces))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
+    [line] = recorded(tmp_path)
+    deltas = [e["data"]["delta"] for e in line["response"] if "delta" in e["data"]]
+    assert deltas == ["Mail admin@ns_{{acs:user:1}}.finbot"]
+    assert NS_A not in (tmp_path / "rec" / "s1.jsonl").read_text()
+    other = "ns_user_ZyXwVuTs_-987654"
+    replayed = gateway(ACS_UPSTREAM="replay", ACS_RECORDINGS_DIR=str(tmp_path / "rec")).post(
+        "/v1/responses", json={**finbot_request(system=system(other)), "stream": True})
+    assert f"Mail admin@{other}.finbot" in replayed.text and NS_A not in replayed.text
+
+
+def two_part_stream(first: str, *second: str):
+    """Two streamed text parts with no done events, the second split where the caller says."""
+    events = [("response.created", {"type": "response.created", "sequence_number": 0,
+                                    "response": {**response_body(), "status": "in_progress", "output": []}})]
+    pieces = [(0, first), *((1, p) for p in second)]
+    events += [("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": i + 1,
+                                               "item_id": "msg_1", "output_index": 0, "content_index": c,
+                                               "delta": p, "logprobs": []}) for i, (c, p) in enumerate(pieces)]
+    events.append(("response.completed", {"type": "response.completed", "sequence_number": len(pieces) + 1,
+                                          "response": {**response_body(), "output": []}}))
+    return SSE([f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events])
+
+
+def test_an_unnamed_id_beside_another_part_is_still_refused(gateway, upstream, tmp_path, audit):
+    """Review of the 2026-11-23 change: a part ending in a letter, joined with the next, hid the next part's id from
+    the id pattern's edges. Each part is checked on its own."""
+    upstream.reply(two_part_stream("abc", NS_B[:12], NS_B[12:]))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
+    assert recorded(tmp_path) == []
+    assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
+
+
+@pytest.mark.parametrize("form", [NS_A.upper(), USER_A.removeprefix("user_")])
+def test_a_mapped_id_in_a_form_the_pattern_misses_is_refused_after_the_merge(gateway, upstream, tmp_path, audit, form):
+    """Review of the 2026-11-23 change: holds_mapped_user still refuses once a part's deltas are merged."""
+    upstream.reply(split_stream(f"Mail admin@{form[:7]}", f"{form[7:]}.finbot"))
+    capture(gateway, tmp_path).post("/v1/responses", json={**finbot_request(system=system(NS_A)), "stream": True})
     assert recorded(tmp_path) == []
     assert [e["cause"] for e in audit() if e["acs_audit_event"] == "capture_skipped"] == ["unmapped_id"]
 

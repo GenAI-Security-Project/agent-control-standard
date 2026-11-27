@@ -1,0 +1,13 @@
+# Everything that runs inside a Linux container or a POSIX shell keeps LF endings, whatever the checkout's
+# core.autocrlf says. A CR in lab.sh or the image entrypoint breaks the shebang line.
+*.sh text eol=lf
+*.py text eol=lf
+Dockerfile* text eol=lf
+*.Dockerfile text eol=lf
+*.dockerignore text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.rego text eol=lf
+*.jsonl text eol=lf
+cli/tests/fake_docker/docker text eol=lf

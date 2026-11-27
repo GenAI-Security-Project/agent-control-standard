@@ -1,0 +1,274 @@
+{
+  "finbot_lab": {
+    "egress_allow": [],
+    "payment_ask_threshold": 5000,
+    "tools": {
+      "complete_task": {
+        "digests": [
+          "sha256:adc7b359649c6a854169eebfe835d214caea19f8ea14a8f6031e80c122fc0aa3"
+        ]
+      },
+      "delegate_to_communication": {
+        "digests": [
+          "sha256:556ef45ceaa93777f1819a9345aee47da449b7342129dbb6ffe818af441992e9"
+        ]
+      },
+      "delegate_to_fraud": {
+        "digests": [
+          "sha256:77c45b8ba7149fff1fd7f0ac9b3bf316b5e27a67e96629dd7de09481ad75d6f9"
+        ]
+      },
+      "delegate_to_invoice": {
+        "digests": [
+          "sha256:0e7b632b7ce32cabea0c9fdeb8f189ce96db3529eb97f331b352c4744104b1de"
+        ]
+      },
+      "delegate_to_onboarding": {
+        "digests": [
+          "sha256:c48b247007a3ed0968d191e2e3b66d4d0b42b27d3d897b2be4a11d27853f2143"
+        ]
+      },
+      "delegate_to_payments": {
+        "digests": [
+          "sha256:d2e31f0dbfe73737ca01d1d9c3f5201f2298125c64ef6ec9bea93aa1c0668652"
+        ]
+      },
+      "delegate_to_system_maintenance": {
+        "digests": [
+          "sha256:a7cf5f2ab47f8c96dbbaa73403fb7751250a535d4271c1194e9a333a756d1715"
+        ]
+      },
+      "findrive__delete_file": {
+        "digests": [
+          "sha256:1782b96b459236e08d374e949e4269c27a20d01e7f2718fae525c9268cb3ebc2"
+        ]
+      },
+      "findrive__get_file": {
+        "digests": [
+          "sha256:18f5aeab17bccbf8c81b5fb72fa6484af66ace521315df4a734f13c18c7a740d"
+        ]
+      },
+      "findrive__list_files": {
+        "digests": [
+          "sha256:9c99dfa5bbea1f9e16b1063b5a7cf64d9bc4546882b982d803626dc1cce703c4"
+        ]
+      },
+      "findrive__search_files": {
+        "digests": [
+          "sha256:9811694184dc8cf01d5c262f5df33b62ef245a6c832b327e990338efec6cea92"
+        ]
+      },
+      "findrive__upload_file": {
+        "digests": [
+          "sha256:ef59f5685494b279fc8872b319f7b97a6c6ede4374a70f0fee081ef1b397260f"
+        ]
+      },
+      "finmail__list_inbox": {
+        "digests": [
+          "sha256:a2ef78ced6d7e49fc77e1f0cb1ba905a47f24546b05c44618893a6bb4f0df7f8"
+        ]
+      },
+      "finmail__mark_as_read": {
+        "digests": [
+          "sha256:3c1d6d48eb61b5ebed8f045b9fa8e41b7ba94efad80acc1085dc6cae95636070"
+        ]
+      },
+      "finmail__read_email": {
+        "digests": [
+          "sha256:5377efbf90b71e1ddbb4f9029c4924426563d2f65eda57ed428b31f99285f72a"
+        ]
+      },
+      "finmail__search_emails": {
+        "digests": [
+          "sha256:80dc9521a63f809098af3bd5d82ddcdb18b7be31227956f7a9f8bc11921f7fbb"
+        ]
+      },
+      "finmail__send_email": {
+        "digests": [
+          "sha256:1696c78d57a3fb9b99321a42f5e0f83b588f5a29c56fbbd4afde2f3ab2bef9db"
+        ]
+      },
+      "finstripe__create_transfer": {
+        "digests": [
+          "sha256:334325b39512e9767edb2a04ea0be3dba363f644c6f8e4b93b6fb49cc8b45cc1"
+        ]
+      },
+      "finstripe__get_account_balance": {
+        "digests": [
+          "sha256:14158c1639ee06c41290134d2d2bdb8b9e5f083baf0d56c79fff577ed082eddc"
+        ]
+      },
+      "finstripe__get_transfer": {
+        "digests": [
+          "sha256:b8ae5e09baafdc149814e2220f4cfaac08f3d043cf243395ad76ab7b6dfdec24"
+        ]
+      },
+      "finstripe__list_transfers": {
+        "digests": [
+          "sha256:7923188b4923e6ffb547cf1b47c4c978b30e1831129023d02df0adeb8ee96bf9"
+        ]
+      },
+      "flag_invoice_for_review": {
+        "digests": [
+          "sha256:141c1a9f539144fc3681ef42992716b6dc98819dca9a48fbae8044032d2f82ab"
+        ]
+      },
+      "get_all_vendors_summary": {
+        "digests": [
+          "sha256:f3e9a5d5a7e21b6f906944f05353b27bba867965265537ec8ea89be703a1aa06"
+        ]
+      },
+      "get_invoice_details": {
+        "digests": [
+          "sha256:1259d0ce8154a17e15add93bd130d6c7d8dee5d86a904e6845b506c0c9543ff5",
+          "sha256:9a090ebf79e3137059b959cb482d23939f8c4a734ddc98b46914b59f58fb24fc"
+        ]
+      },
+      "get_invoice_for_payment": {
+        "digests": [
+          "sha256:9956be715fb4013060c997f2ca2208821ba380b50ab7e4c0111cd871e7b9df5e"
+        ]
+      },
+      "get_pending_actions_summary": {
+        "digests": [
+          "sha256:efd7a1ebecea77e6ca1c64412b402e215970abf44b4208b25bf4c354bc0084f1"
+        ]
+      },
+      "get_vendor_activity_report": {
+        "digests": [
+          "sha256:a4ff68922ac58ec9a199aa856c098cea060b3b3e2c13a9814e6a69dc69745bc8"
+        ]
+      },
+      "get_vendor_compliance_docs": {
+        "digests": [
+          "sha256:53068d0eb6653550b87dad968db400f12779e5df8b5bfd3dc82559f4c5206655"
+        ]
+      },
+      "get_vendor_contact_info": {
+        "digests": [
+          "sha256:98f23097c08a4e8ee06bad5baf2a6ea1c61e0ac1b33efd8305a4d144ac9ee29a",
+          "sha256:d251a10fa87d4d16b82a002d6673ffbe1862fee3a83e2801729b8f067305a0c6",
+          "sha256:d31fc4b5bbc1c4a9d273e367981667a0807925e467c6a802395f43a12a2e1ad1"
+        ]
+      },
+      "get_vendor_details": {
+        "digests": [
+          "sha256:526f9aa7bfa34b939b2447978494700cfef8152a7fa845770e44c8012ce2319a",
+          "sha256:849ff3fc75c09f8d8d2782f6e54fabb534b89b24392152863f8cbf9ef227527a",
+          "sha256:c706fdece1adf075d4314ec438732ee6f902ac9910a30282bc12aa98f5cbeeac"
+        ]
+      },
+      "get_vendor_invoices": {
+        "digests": [
+          "sha256:34f2a33d4d1c4fbdba5c063ccf6a80f67aea43be274e0fd7036fdf5373ca1a98",
+          "sha256:5185c689335054fe4a7bf7cd5c14e413f91547d4da151e03df04568829f57bd2",
+          "sha256:9899b905249ee472f69a54e6c0d1ca9bde41178b6af990dff3963b584d20d558"
+        ]
+      },
+      "get_vendor_payment_summary": {
+        "digests": [
+          "sha256:cb816a28bdc843bb53ccbbd7a89893fd1e577471a788d1fc747d11861661fb69",
+          "sha256:e8d88e1c9063d20b997215f937e42ae3ac1c4a35c051b0181a5b31e51186440d",
+          "sha256:fbfa2fe5eac181dce4a7f3eb6bc6ae2f8f0d24a13eb4030d686b10cca2cff833"
+        ]
+      },
+      "get_vendor_risk_profile": {
+        "digests": [
+          "sha256:0d01f3a931b6add6cf775033c4c1b4224e22ba5900c324d0fb2dff35885bd07d"
+        ]
+      },
+      "list_vendors": {
+        "digests": [
+          "sha256:e7fbb5c15ded63c60959113ae601038100f3960d8c5f30f371d2904a602ff21a"
+        ]
+      },
+      "process_payment": {
+        "digests": [
+          "sha256:920c86efcaa8f739aaadbc62a6832acf9badbc5dd5bc34fe3a83b2d3f066b496"
+        ]
+      },
+      "save_report": {
+        "digests": [
+          "sha256:ba56c32c79c3747d7675ac8ebae4ea533d5801fdc3f9688025b114ca202d4cf5"
+        ]
+      },
+      "start_workflow": {
+        "digests": [
+          "sha256:5c4613b3bb0b34440bc92990ca7d9f73bebe39190d412b5dde3ee87a49579973",
+          "sha256:ca4552bd4e27f07b244d483275981c2e84486afdda14d62e5fe958c43a0e74d5"
+        ]
+      },
+      "systemutils__database_maintenance": {
+        "digests": [
+          "sha256:0306d51ddd8741cb4f493af1732b3004497207c07b773f86d0a2d216417437a9"
+        ]
+      },
+      "systemutils__execute_script": {
+        "digests": [
+          "sha256:a91e8cff3b38d9302a1873a32a42e4fa93cc8ffb731a58d0bcae0052fd7156d8"
+        ]
+      },
+      "systemutils__manage_storage": {
+        "digests": [
+          "sha256:29700bf023986dfa235552e489db5efe3331ccafc17af346b62f1aa47b026d25"
+        ]
+      },
+      "systemutils__manage_users": {
+        "digests": [
+          "sha256:d6dc2436cec38fb87d121ddafc31b950c1161f39f589bc9a7dc401c161284dce"
+        ]
+      },
+      "systemutils__network_request": {
+        "digests": [
+          "sha256:d0415b12159ac4ac834929b4fca949243450a28bd42bc1f059a3c88be2545aad"
+        ]
+      },
+      "systemutils__read_config": {
+        "digests": [
+          "sha256:b6ec0202cad9edf907615d7e400872ce657496697be209a92a3830fe8573be21"
+        ]
+      },
+      "systemutils__rotate_logs": {
+        "digests": [
+          "sha256:3e3a7917f4aeb816bd1d43eab5163e5678b5c2332d7f4225a5ad0de1921aaaaa"
+        ]
+      },
+      "systemutils__run_diagnostics": {
+        "digests": [
+          "sha256:070292095a9b19158c787883280e547ca920ac1fd8901a87606c132b1966b4e6"
+        ]
+      },
+      "taxcalc__calculate_tax": {
+        "digests": [
+          "sha256:c7e694bb59cd6e819df47fd435334c9d6c3c9ba4bfb91a8833caa341cac0834c"
+        ]
+      },
+      "taxcalc__get_tax_rates": {
+        "digests": [
+          "sha256:54662ce0a4a7c75e20d0384b3b51282789534a56131717f72be5f77f48f3809b"
+        ]
+      },
+      "taxcalc__validate_tax_id": {
+        "digests": [
+          "sha256:f59a937be0882c16b1ededd65951cf0bf0a73ecb2bfb4c627d7854016fd7ff0d"
+        ]
+      },
+      "update_invoice_status": {
+        "digests": [
+          "sha256:af2c90b68ae898df53179470659d0493043a6d2efee577c1cd83e71174af9500"
+        ]
+      },
+      "update_vendor_risk": {
+        "digests": [
+          "sha256:6d3e45cd030ce720133ee54149bc371d78260d3103fd527d4315b753a42a7d77"
+        ]
+      },
+      "update_vendor_status": {
+        "digests": [
+          "sha256:7f53848f957d5933453f81b2b6de759a990b4b8b53d760d152465a17bcee4a01"
+        ]
+      }
+    },
+    "vendor_domains": []
+  }
+}

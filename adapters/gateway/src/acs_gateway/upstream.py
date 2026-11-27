@@ -5,6 +5,7 @@ Live with no key file passes no transport at all, which is the gateway's behavio
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -52,6 +53,8 @@ _ID = re.compile(
     r")(?![A-Za-z0-9_-])")
 _PLACEHOLDER = re.compile(r"\{\{acs:(?:user|wf|tr|uuid|time):\d+\}\}")
 _USER_VALUE = re.compile(_USER)
+# A recording's file name, as config's ACS_REPLAY_SCENARIO and ACS_CAPTURE_SCENARIO take it.
+SCENARIO_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SKELETON_ENTRY = re.compile(r"(?:user|wf|tr|uuid|time):[1-9][0-9]*")
 
 
@@ -401,6 +404,8 @@ class RecordingStore:
     def __init__(self, files: list[list[Recording]]) -> None:
         # One list per file, in file name order, each in line order.
         self.files = files
+        # A pace the run's selection named, or None for the gateway's ACS_REPLAY_PACE.
+        self.pace: float | None = None
 
     @classmethod
     def load(cls, directory: Path, scenario: str | None = None) -> RecordingStore:
@@ -410,9 +415,16 @@ class RecordingStore:
             raise ValueError(f"ACS_RECORDINGS_DIR {directory} is not a directory")
         if scenario is not None:
             only = directory / f"{scenario}.jsonl"
-            if not only.is_file():
+            family = sorted(directory.glob(f"{scenario}__*.jsonl")) if "__" not in scenario else []
+            if only.is_file():
+                paths = [only]
+            elif family:
+                # A bare scenario name selects that scenario's own takes and no other's, for a run no single take
+                # fits, such as a learner's own policy, so it never draws on another scenario's answers (2026-11-24
+                # premortem, C-08).
+                paths = family
+            else:
                 raise ValueError(f"ACS_REPLAY_SCENARIO file {only} does not exist")
-            paths = [only]
         else:
             paths = sorted(directory.glob("*.jsonl"))
         files = []
@@ -495,6 +507,27 @@ class _Answer:
     content: bytes
     content_type: str
     miss: dict[str, Any] | None
+    wait_s: float = 0.0
+
+
+# The longest one paced answer waits, so a slow recorded call can't stall a take (2026-11-24 live recording run).
+REPLAY_PACE_MAX_S = 4.0
+
+
+def recorded_seconds(response: Any) -> float:
+    """How long the recorded model call took, from its created_at and completed_at, or 0 when either is missing.
+
+    A streamed recording carries them on its response.completed event. Both are whole seconds (Responses API)."""
+    if isinstance(response, list):
+        response = next((e["data"].get("response") for e in response
+                         if isinstance(e, dict) and isinstance(e.get("data"), dict)
+                         and e["data"].get("type") == "response.completed"), None)
+    if not isinstance(response, dict):
+        return 0.0
+    start, end = response.get("created_at"), response.get("completed_at")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (start, end)) or end < start:
+        return 0.0
+    return float(end - start)
 
 
 def _response(status: int, content: bytes, content_type: str) -> httpx.Response:
@@ -510,8 +543,10 @@ class ReplayTransport(httpx.AsyncBaseTransport):
     retry, so a retry gets exactly the first answer, a miss included, with no cache (PREMORTEM P11).
     """
 
-    def __init__(self, store: RecordingStore) -> None:
+    def __init__(self, store: RecordingStore, pace: float = 0.0, pace_max_s: float = REPLAY_PACE_MAX_S) -> None:
         self.store = store
+        self.pace = pace
+        self.pace_max_s = pace_max_s
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         if request.method != "POST" or not request.url.path.endswith("/responses"):
@@ -519,6 +554,8 @@ class ReplayTransport(httpx.AsyncBaseTransport):
                                "code": "unknown_url"}}
             return _response(404, json.dumps(error).encode("utf-8"), "application/json")
         answer = self._answer(await request.aread(), request.headers.get(BRANCH_HEADER))
+        if answer.wait_s > 0:
+            await asyncio.sleep(answer.wait_s)
         if answer.miss is not None:
             _audit("replay_miss", **answer.miss)
             # The transport runs inside the gateway's upstream send, so the miss marks that model call's span (LAB-09,
@@ -546,9 +583,11 @@ class ReplayTransport(httpx.AsyncBaseTransport):
         if not complete:
             return self._miss(body.get("model"), "placeholder_unfilled", step, branch, stream,
                               scenario=recording.scenario)
+        pace = self.store.pace if self.store.pace is not None else self.pace
+        wait = min(self.pace_max_s, pace * recorded_seconds(recording.response))
         if stream:
-            return _Answer(encode_events(response), "text/event-stream", None)
-        return _Answer(json.dumps(response).encode("utf-8"), "application/json", None)
+            return _Answer(encode_events(response), "text/event-stream", None, wait)
+        return _Answer(json.dumps(response).encode("utf-8"), "application/json", None, wait)
 
     @staticmethod
     def _miss(model: Any, cause: str, step: int | None, branch: str, stream: bool, **extra: Any) -> _Answer:
@@ -576,6 +615,57 @@ class LiveTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _delta_part(event: Any) -> tuple[Any, ...] | None:
+    """The streamed part a delta event adds to, or None when the event carries no text delta."""
+    data = event.get("data") if isinstance(event, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("delta"), str):
+        return None
+    return (data.get("type"), data.get("item_id"), data.get("output_index"), data.get("content_index"),
+            data.get("summary_index"))
+
+
+def _part_texts(events: list[dict[str, Any]]) -> list[str]:
+    """Each streamed part's deltas joined, one text per part, in the order the parts first appear."""
+    parts: dict[tuple[Any, ...], list[str]] = {}
+    for event in events:
+        part = _delta_part(event)
+        if part is not None:
+            parts.setdefault(part, []).append(event["data"]["delta"])
+    return ["".join(pieces) for pieces in parts.values()]
+
+
+def _rejoin_deltas(raw: list[dict[str, Any]], normalized: list[dict[str, Any]],
+                   mapping: dict[str, str]) -> list[dict[str, Any]]:
+    """normalized with each streamed part whose deltas, joined, still hold a user id remapped as one text.
+
+    The part's text is joined from the raw deltas, mapped with to_placeholders and kept in the part's first delta
+    event; its other delta events are dropped. Replay sends the part as one delta, which a streaming client reads
+    as it reads several. Parts that hold no user id keep their deltas as they came."""
+    parts: dict[tuple[Any, ...], list[int]] = {}
+    for i, event in enumerate(raw):
+        part = _delta_part(event)
+        if part is not None:
+            parts.setdefault(part, []).append(i)
+    first: dict[int, str] = {}
+    dropped: set[int] = set()
+    for indexes in parts.values():
+        mapped = "".join(normalized[i]["data"]["delta"] for i in indexes)
+        if not (unmapped_user_id(mapped) or holds_mapped_user(mapped, mapping)):
+            continue
+        first[indexes[0]] = to_placeholders("".join(raw[i]["data"]["delta"] for i in indexes), mapping)
+        dropped.update(indexes[1:])
+    if not first:
+        return normalized
+    out = []
+    for i, event in enumerate(normalized):
+        if i in dropped:
+            continue
+        if i in first:
+            event = {**event, "data": {**event["data"], "delta": first[i]}}
+        out.append(event)
+    return out
 
 
 def parse_events(text: str) -> list[dict[str, Any]] | None:
@@ -775,11 +865,15 @@ class CaptureTransport(httpx.AsyncBaseTransport):
             _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario)
             return
         if stream:
-            # An id split across deltas escapes both checks piece by piece and rejoins on replay, so the deltas are
-            # checked again joined with no separator (fix round 4, I-2).
-            joined = "".join(e["data"]["delta"] for e in normalized
-                             if isinstance(e.get("data"), dict) and isinstance(e["data"].get("delta"), str))
-            if unmapped_user_id(joined) or holds_mapped_user(joined, mapping):
+            # An id split across deltas escapes both checks piece by piece and rejoins on replay (fix round 4, I-2).
+            # Each streamed part's deltas are mapped again as one text and kept as one delta, so a mapped id the model
+            # spelled across deltas becomes its placeholder: FinBot's answers name the vendor's namespace, and every
+            # s5 take of the 2026-11-23 owner sitting was skipped for it. What still holds an id after that is
+            # skipped as before.
+            normalized = _rejoin_deltas(response, normalized, mapping)
+            # Each part is checked on its own: joined with the next part's text, a letter or digit beside an id hides
+            # it from the id pattern's edges (review of the 2026-11-23 change).
+            if any(unmapped_user_id(text) or holds_mapped_user(text, mapping) for text in _part_texts(normalized)):
                 _audit("capture_skipped", cause="unmapped_id", scenario=self._scenario, where="stream_deltas")
                 return
         line = {"scenario": self._scenario, "match": re.escape(first_user), "turn": turn, "step": step, "branch": branch,
@@ -816,8 +910,8 @@ class UpstreamSource:
         self._key = read_key_file(config.upstream_key_file) if config.upstream_key_file is not None else None
         if config.upstream_key_shared:
             # One line, so the operator who opted in sees what the opt-in means. The key itself is never written.
-            sys.stderr.write(f"acs-gateway: ACS_UPSTREAM_KEY_SHARED=1, so every client that can reach the model port "
-                             f"on {config.listen_host} spends the model key\n")
+            sys.stderr.write(f"acs-gateway: ACS_UPSTREAM_KEY_SHARED=1, so every client holding the client token "
+                             f"that can reach the model port on {config.listen_host} spends the model key\n")
         self._store = None
         self._capture_path = None
         if self.mode == "capture":
@@ -830,9 +924,31 @@ class UpstreamSource:
                 # this run's (fix round 2, CR5).
                 raise ValueError(f"ACS_CAPTURE_SCENARIO file {self._capture_path} already exists. Move it away or "
                                  "choose another scenario")
+        self._recordings_dir = config.recordings_dir
+        self._replay_pace = config.replay_pace
         if self.mode == "replay":
             assert config.recordings_dir is not None
             self._store = RecordingStore.load(config.recordings_dir, config.replay_scenario)
+
+    def select(self, scenario: str | None, pace: float | None = None) -> None:
+        """Serve replay from <scenario>.jsonl alone, or from every file when scenario is None.
+
+        Two recordings of one scenario share their first keys, s1__off and s1__enforce among them, and the store searches
+        files in name order, so an off run took the enforce take's first answer and went off its own path (2026-11-23
+        owner sitting). The lab picks the run's recording before each run. The store's file list is swapped in place,
+        so the lifespan's transport serves the new list from its next request. A bad name or a missing file raises
+        ValueError and leaves the store as it was."""
+        if self.mode != "replay" or self._store is None:
+            raise ValueError("the gateway does not run on replay")
+        if scenario is not None and not SCENARIO_NAME.fullmatch(scenario):
+            raise ValueError("a replay scenario is a plain name of letters, digits, _ and -")
+        if pace is not None and not (isinstance(pace, (int, float)) and not isinstance(pace, bool) and 0 <= pace <= 1):
+            raise ValueError("a replay pace is a number from 0 to 1")
+        assert self._recordings_dir is not None
+        self._store.files = RecordingStore.load(self._recordings_dir, scenario).files
+        # A recording whose agents race each other replays only at the pace it was checked at, so its selection can
+        # name one, and None keeps ACS_REPLAY_PACE (2026-11-24 m4 takes, where s4a's reject run missed at 0.1).
+        self._store.pace = None if pace is None else float(pace)
 
     @property
     def records_branch(self) -> bool:
@@ -848,7 +964,7 @@ class UpstreamSource:
         """A fresh transport for one lifespan, or None for the default."""
         if self.mode == "replay":
             assert self._store is not None
-            return ReplayTransport(self._store)
+            return ReplayTransport(self._store, self._replay_pace)
         if self._capture_path is not None:
             return CaptureTransport(LiveTransport(self._key), self._capture_path, self._scenario, self._max_bytes)
         if self._key is not None:

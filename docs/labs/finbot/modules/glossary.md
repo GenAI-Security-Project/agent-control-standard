@@ -1,0 +1,1 @@
+--8<-- "labs/finbot/modules/glossary.md"

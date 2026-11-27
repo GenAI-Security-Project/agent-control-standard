@@ -1,0 +1,95 @@
+{
+  "modules": [
+    {
+      "id": "base",
+      "test_package": "finbot_test.base",
+      "variants": {
+        "solution": {
+          "fails": []
+        }
+      }
+    },
+    {
+      "id": "m3",
+      "live": "outbound_email.rego",
+      "test_package": "finbot_test.m3",
+      "variants": {
+        "starter": {
+          "file": "starters/m3/outbound_email.rego",
+          "fails": [
+            "test_vendor_notice_allowed"
+          ]
+        },
+        "solution": {
+          "file": "solutions/m3/outbound_email.rego",
+          "data_patch": "solutions/m3/data.patch.json",
+          "fails": []
+        }
+      }
+    },
+    {
+      "id": "m4",
+      "live": "payment_threshold.rego",
+      "test_package": "finbot_test.m4",
+      "variants": {
+        "starter": {
+          "file": "starters/m4/payment_threshold.rego",
+          "fails": [
+            "test_above_threshold_asks",
+            "test_forged_answer_still_asks",
+            "test_missing_amount_asks",
+            "test_missing_threshold_asks",
+            "test_non_number_amount_asks",
+            "test_string_threshold_asks"
+          ]
+        },
+        "solution": {
+          "file": "solutions/m4/payment_threshold.rego",
+          "fails": []
+        }
+      }
+    },
+    {
+      "id": "m5",
+      "live": "redact_bank.rego",
+      "test_package": "finbot_test.m5",
+      "variants": {
+        "starter": {
+          "file": "starters/m5/redact_bank.rego",
+          "fails": [
+            "test_field_inside_the_field_redacted_once",
+            "test_flat_vendor_record_redacted",
+            "test_key_with_slash_escaped",
+            "test_nested_and_listed_numbers_all_redacted"
+          ]
+        },
+        "solution": {
+          "file": "solutions/m5/redact_bank.rego",
+          "fails": []
+        }
+      }
+    },
+    {
+      "id": "m6",
+      "live": "tool_pins.rego",
+      "test_package": "finbot_test.m6",
+      "variants": {
+        "starter": {
+          "file": "starters/m6/tool_pins.rego",
+          "fails": [
+            "test_changed_digest_denies_call",
+            "test_changed_digest_denies_result",
+            "test_entry_without_digests_denies",
+            "test_missing_version_denies_call",
+            "test_missing_version_denies_result",
+            "test_non_string_version_denies"
+          ]
+        },
+        "solution": {
+          "file": "solutions/m6/tool_pins.rego",
+          "fails": []
+        }
+      }
+    }
+  ]
+}

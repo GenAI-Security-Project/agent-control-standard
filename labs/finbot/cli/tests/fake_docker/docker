@@ -1,0 +1,36 @@
+#!/bin/sh
+# A stand-in for docker in the lab.sh tests. It logs each call, one line, as
+#   LAB_UID=<v> LAB_GID=<v> LAB_RUNTIME_IMAGE=<v> | <argv joined by spaces>
+# to $FAKE_DOCKER_LOG and answers with canned output. Settings:
+#   FAKE_DOCKER_FAIL_PORTS  space-separated host ports whose probe fails, as if something held them
+#   FAKE_DOCKER_PULL_FAIL=1 compose pull fails, as when the ghcr packages aren't published
+#   FAKE_DOCKER_DOWN=1      docker info fails, as when the daemon isn't running
+#   FAKE_DOCKER_MEM         MemTotal in bytes, default 16 GiB
+#   FAKE_DOCKER_ARCH        Architecture, default x86_64
+printf 'LAB_UID=%s LAB_GID=%s LAB_RUNTIME_IMAGE=%s | %s\n' "${LAB_UID:-}" "${LAB_GID:-}" \
+    "${LAB_RUNTIME_IMAGE:-}" "$*" >> "${FAKE_DOCKER_LOG:?}"
+case "$1" in
+    info)
+        [ "${FAKE_DOCKER_DOWN:-}" = 1 ] && exit 1
+        case "$*" in
+            *MemTotal*) echo "${FAKE_DOCKER_MEM:-17179869184}" ;;
+            *Architecture*) echo "${FAKE_DOCKER_ARCH:-x86_64}" ;;
+        esac
+        exit 0 ;;
+    run)
+        for port in ${FAKE_DOCKER_FAIL_PORTS:-}; do
+            case "$*" in *"127.0.0.1:$port:"*) echo "port is already allocated" >&2; exit 125 ;; esac
+        done
+        exit 0 ;;
+    image) exit 0 ;;
+    manifest) exit 0 ;;
+    compose)
+        case "$*" in
+            *"version --short"*) echo "2.30.0"; exit 0 ;;
+            *" pull"*) [ "${FAKE_DOCKER_PULL_FAIL:-}" = 1 ] && exit 1; exit 0 ;;
+            *" port "*) exit 1 ;;
+            *"config --images"*) printf '%s\n' redis:7-alpine@sha256:aa "${LAB_RUNTIME_IMAGE:-ghcr.io/x/acs-lab-runtime:unpublished}"; exit 0 ;;
+        esac
+        exit 0 ;;
+esac
+exit 0

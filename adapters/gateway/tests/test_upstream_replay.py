@@ -262,3 +262,53 @@ def test_the_streamed_miss_has_the_event_set_a_model_streams_for_one_message():
         "response.output_item.done", "response.completed"]
     assert events[0]["data"]["response"]["output"] == [] and events[0]["data"]["response"]["status"] == "in_progress"
     assert events[-1]["data"]["response"] == upstream_module.miss_response("gpt-5-nano")
+
+
+def _timed(text: str, seconds: int) -> dict:
+    return {**response_body(message_item(text)), "created_at": 1_000, "completed_at": 1_000 + seconds}
+
+
+def test_paced_replay_waits_its_share_of_the_recorded_call(gateway, tmp_path, no_network, monkeypatch):
+    # 2026-11-24 live recording run: instant replay put several sessions' decisions in one viewer poll.
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(upstream_module.asyncio, "sleep", sleep)
+    write(tmp_path / "rec", line(0, _timed("short", 8)), line(0, _timed("long", 60), match="Pay vendor 9"))
+    client = replay(gateway, tmp_path, ACS_REPLAY_PACE="0.25")
+    assert client.post("/v1/responses", json=finbot_request()).status_code == 200
+    assert client.post("/v1/responses", json=finbot_request(user="Pay vendor 9")).status_code == 200
+    # A quarter of 8 s, then a quarter of 60 s held to the 4 s bound.
+    assert waits == [2.0, upstream_module.REPLAY_PACE_MAX_S]
+
+
+def test_unpaced_replay_and_misses_answer_at_once(gateway, tmp_path, no_network, monkeypatch):
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(upstream_module.asyncio, "sleep", sleep)
+    write(tmp_path / "rec", line(0, _timed("short", 8)))
+    assert replay(gateway, tmp_path).post("/v1/responses", json=finbot_request()).status_code == 200
+    paced = replay(gateway, tmp_path, ACS_REPLAY_PACE="1")
+    assert paced.post("/v1/responses", json=finbot_request(user="nothing recorded")).status_code == 200
+    assert waits == []
+
+
+def test_recorded_seconds_reads_a_streamed_recording_and_ignores_bad_times():
+    events = [{"event": "response.completed", "data": {"type": "response.completed",
+                                                       "response": {"created_at": 5, "completed_at": 12}}}]
+    assert upstream_module.recorded_seconds(events) == 7.0
+    assert upstream_module.recorded_seconds({"created_at": 9, "completed_at": 3}) == 0.0
+    assert upstream_module.recorded_seconds({"created_at": True, "completed_at": 3}) == 0.0
+    assert upstream_module.recorded_seconds({"output": []}) == 0.0
+
+
+@pytest.mark.parametrize("bad", ["-0.1", "1.5", "nan", "fast"])
+def test_a_bad_replay_pace_stops_startup(gateway, tmp_path, bad):
+    write(tmp_path / "rec", line(0, _timed("short", 8)))
+    with pytest.raises(ValueError, match="ACS_REPLAY_PACE"):
+        replay(gateway, tmp_path, ACS_REPLAY_PACE=bad)

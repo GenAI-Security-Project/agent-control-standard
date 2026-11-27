@@ -426,7 +426,7 @@ section:first-of-type { border-top: 0; }
 
 .film { margin: 0 0 3.5rem; }
 .film video {
-  display: block; width: 100%; height: auto; aspect-ratio: 3024 / 1900;
+  display: block; width: 100%; height: auto; aspect-ratio: 1920 / 1080;
   border: 1px solid var(--acs-border-strong); border-radius: 12px; background-color: var(--acs-surface);
 }
 .film figcaption { margin-top: 0.75rem; color: var(--acs-text-soft); font-size: 0.95rem; }

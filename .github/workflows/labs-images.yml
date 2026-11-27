@@ -1,0 +1,88 @@
+# Publishes the FinBot lab's two images to ghcr.io by digest, for linux/amd64 and linux/arm64 (issue #588, LAB-15).
+#
+# Owner: Rock Lambros. Runs only on the lab branch and on acs-lab-* tags. Images go out by digest with no tag
+# (push-by-digest), so compose.yaml names exactly what was built and nothing can move a tag under it. The two digests
+# land in the step summary, and a follow-up commit pins compose.yaml to them. The names are decoupled from issue #94
+# (PREMORTEM P18). When the org keeps the packages private, lab.sh builds both images locally instead.
+name: labs-images
+
+on:
+  push:
+    branches: ["refimpl/acs-lab-2026-12-09"]
+    tags: ["acs-lab-*"]
+    paths:
+      - "labs/**"
+      - "adapters/**"
+      - "specification/v0.1.0/**"
+      - "docs/topics/signature-benchmark.md"
+      - ".github/workflows/labs-images.yml"
+
+# Deny by default. The one job grants itself what it needs.
+permissions: {}
+
+concurrency:
+  group: labs-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write   # push the two images to ghcr.io
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU for the arm64 build
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push acs-lab-runtime
+        id: runtime
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: labs/finbot/images/acs.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/genai-security-project/acs-lab-runtime,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Build and push acs-lab-finbot
+        id: finbot
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          # FinBot's own Dockerfile at the pinned commit, with the same digest-pinned base images as compose.yaml.
+          context: https://github.com/GenAI-Security-Project/finbot-ctf.git#1450fc4d15cbe80dbaf52dde1df767dbc967e32e
+          target: app
+          build-contexts: |
+            python:3.13-slim-bookworm=docker-image://python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
+            ghcr.io/astral-sh/uv:0.6=docker-image://ghcr.io/astral-sh/uv:0.6@sha256:4a6c9444b126bd325fba904bff796bf91fb777bf6148d60109c4cb1de2ffc497
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/genai-security-project/acs-lab-finbot,push-by-digest=true,name-canonical=true,push=true
+
+      - name: Write both digests to the summary
+        env:
+          RUNTIME_DIGEST: ${{ steps.runtime.outputs.digest }}
+          FINBOT_DIGEST: ${{ steps.finbot.outputs.digest }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Lab images"
+            echo ""
+            echo "Pin these in labs/finbot/compose.yaml:"
+            echo ""
+            echo "- ghcr.io/genai-security-project/acs-lab-runtime@${RUNTIME_DIGEST}"
+            echo "- ghcr.io/genai-security-project/acs-lab-finbot@${FINBOT_DIGEST}"
+          } >> "$GITHUB_STEP_SUMMARY"
