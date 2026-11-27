@@ -9,30 +9,34 @@
     {
       "rep": 1,
       "claude_exit": 1,
-      "duration_s": 5.0,
-      "endpoint": "http://127.0.0.1:46107/reset",
-      "guardian_port": 42315,
+      "duration_s": 5.3,
+      "endpoint": "http://127.0.0.1:55599/reset",
+      "guardian_port": 41949,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
-        ".claude-config/backups/.claude.json.backup.1795782698172",
-        ".claude-config/projects/-tmp-acs-reset-1-141c0s-o/17df021c-c8e9-496c-a119-d736167ede45.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785832019",
+        ".claude-config/projects/-tmp-acs-reset-1-083wjalp/63d82661-1f4a-4e94-98be-1bcb9ecd1de8.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/a48c69dfc0776592.json",
+        "guardian-state/a48c69dfc0776592.lock",
+        "handshake-cache/bb13360047c7e5ed72aa128d302824aed3fabacbfa9a1be8fbc3faa1e406bc40.json.ended",
         "stub.jsonl"
       ],
-      "claude_stdout": "API Error: API returned an empty or malformed response (HTTP 200) \u2014 check for a proxy or gateway intercepting the request. Response: content-type event-stream, body is an event stream (the non-streaming request was answered with a stream), 6717 bytes, request-id absent, server other. This was the non-streaming retry of streaming request (no Anthropic request-id), which failed with: stream_truncated, StreamTruncatedError, StreamTruncated; 16 stream events received, first after 4 ms, none in the final 0 ms.\n",
+      "claude_stdout": "API Error: Connection to the API was lost (ECONNRESET). This is usually temporary \u2014 try again.\n",
       "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782701.066,
+          "t": 1795785835.027,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -60,13 +64,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782701.622,
+          "t": 1795785835.574,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -94,13 +99,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782701.629,
+          "t": 1795785835.582,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": false,
           "turn": "first",
+          "served": "application/json",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -128,83 +134,113 @@
           "tool_result": ""
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785835.028,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785835.574,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785835.582,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 1223,
+          "declared": 2447
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=17df021c req=37733034",
-        "[guardian] steps/sessionStart session=17df021c req=ba0421f6",
-        "[guardian] steps/turnStart session=17df021c req=88d616da",
-        "[guardian] steps/userMessage session=17df021c req=e8354a2e",
-        "[guardian] steps/sessionEnd session=17df021c req=6fc94ede"
+        "[guardian] handshake/hello session=63d82661 req=17713600",
+        "[guardian] steps/sessionStart session=63d82661 req=0f14e0e0",
+        "[guardian] steps/turnStart session=63d82661 req=bd19d1f4",
+        "[guardian] steps/userMessage session=63d82661 req=54a59678",
+        "[guardian] steps/sessionEnd session=63d82661 req=c9f199e1"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "bcc44cd8-1f22-4424-b632-ab222b29a13d",
-          "session_id": "17df021c-c8e9-496c-a119-d736167ede45",
-          "request_id": "37733034-a148-419e-9821-3a567b2b7b5f",
-          "params_sha256": "5cac41ad9362560ba9f0e693a8f46c0a47442f18b435cb4db4965ed92651eebe"
+          "id": "e3b1c869-de91-4901-80eb-c15200280ac3",
+          "session_id": "63d82661-1f4a-4e94-98be-1bcb9ecd1de8",
+          "request_id": "17713600-de83-4e38-be68-b93b067a0b8d",
+          "params_sha256": "5cceaf7611f3ad1ed024d44dbbbb11583e0a5828614ade317e083be865b353aa"
         },
         {
           "bytes": 882,
           "method": "steps/sessionStart",
-          "id": "a60f727b-55a4-4e32-b3de-cc4db4ee5c16",
-          "session_id": "17df021c-c8e9-496c-a119-d736167ede45",
-          "request_id": "ba0421f6-1272-4539-9f70-593567e6edb9",
-          "params_sha256": "64e54a879c49ea08ac9bd77d3e5c2b7f68d01f030e477f7715813ee46811cc2e"
+          "id": "4da82b70-ba5d-4af9-82dd-10ced70c2ae6",
+          "session_id": "63d82661-1f4a-4e94-98be-1bcb9ecd1de8",
+          "request_id": "0f14e0e0-7370-457e-91e5-f6677be376c1",
+          "params_sha256": "cf957175446878ae4dc5004601a1c133b7b97eef8bcc35acdf986b234bc42e79"
         },
         {
           "bytes": 863,
           "method": "steps/turnStart",
-          "id": "14abc12a-1b87-4445-b777-0d3491f194c3",
-          "session_id": "17df021c-c8e9-496c-a119-d736167ede45",
-          "request_id": "88d616da-9809-4906-8ed0-5235b137035c",
-          "params_sha256": "2ede98fae3c7ddda6bd2f265c82fc5380decfd43a34180ee75b9abd2fab36063"
+          "id": "3ad64d6d-6949-4d23-a00f-7fd82bb6e64f",
+          "session_id": "63d82661-1f4a-4e94-98be-1bcb9ecd1de8",
+          "request_id": "bd19d1f4-1c1c-4704-9c32-8035d905acdc",
+          "params_sha256": "ae7f516e9752fdf0d1b5823926fc2876c59768b2d749363f89f856e1dda7f4bf"
         },
         {
           "bytes": 870,
           "method": "steps/userMessage",
-          "id": "32fa7f57-cd8f-49b0-b4d9-3d22043c5ce3",
-          "session_id": "17df021c-c8e9-496c-a119-d736167ede45",
-          "request_id": "e8354a2e-5190-48dc-bc9b-49f8327e94e2",
-          "params_sha256": "e2e0d61b477eec812a7cc26217783e105a8185cc8e8963eb2fc17bfd83edcf1f"
+          "id": "1ed2f874-8261-4457-aa08-820ffdf7bcff",
+          "session_id": "63d82661-1f4a-4e94-98be-1bcb9ecd1de8",
+          "request_id": "54a59678-57cf-4674-9df3-ae953335128b",
+          "params_sha256": "0de30baa71587e1d39cc716784547f528a40270c7997d95665d5ef1de13a3fc3"
         },
         {
           "bytes": 757,
           "method": "steps/sessionEnd",
-          "id": "4ea2ddaf-cbcb-4c0e-bc7d-a7c5fa029928",
-          "session_id": "17df021c-c8e9-496c-a119-d736167ede45",
-          "request_id": "6fc94ede-9bb5-4a47-bef0-b0ebdd56da75",
-          "params_sha256": "1a3ef19849f2457c7386dd0a4a26022a5332267c4806cf285f3f0d53071463d4"
+          "id": "41ca838c-943b-45c6-b023-88d7ccf56c6c",
+          "session_id": "63d82661-1f4a-4e94-98be-1bcb9ecd1de8",
+          "request_id": "c9f199e1-cb55-458b-8124-68425810d617",
+          "params_sha256": "5c50e4ece08e6820e93efebc48ac6bb24ba52c79a7bc0f79a4008d3a233a32f3"
         }
       ]
     },
     {
       "rep": 2,
       "claude_exit": 1,
-      "duration_s": 4.9,
-      "endpoint": "http://127.0.0.1:40135/reset",
-      "guardian_port": 45151,
+      "duration_s": 4.8,
+      "endpoint": "http://127.0.0.1:58253/reset",
+      "guardian_port": 43193,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
-        ".claude-config/backups/.claude.json.backup.1795782704337",
-        ".claude-config/projects/-tmp-acs-reset-2-l9dzfptb/767a71f2-47bb-408a-be70-ec0e545f40a7.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785838383",
+        ".claude-config/projects/-tmp-acs-reset-2-it-iikdc/7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/74e91b7d51f58d12.json",
+        "guardian-state/74e91b7d51f58d12.lock",
+        "handshake-cache/5149e11d506532f97b3d32036560708586a6aa025bfa3eacf112729559b48298.json.ended",
         "stub.jsonl"
       ],
-      "claude_stdout": "API Error: API returned an empty or malformed response (HTTP 200) \u2014 check for a proxy or gateway intercepting the request. Response: content-type event-stream, body is an event stream (the non-streaming request was answered with a stream), 6717 bytes, request-id absent, server other. This was the non-streaming retry of streaming request (no Anthropic request-id), which failed with: stream_truncated, StreamTruncatedError, StreamTruncated; 16 stream events received, first after 5 ms, none in the final 0 ms.\n",
+      "claude_stdout": "API Error: Connection to the API was lost (ECONNRESET). This is usually temporary \u2014 try again.\n",
       "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782707.226,
+          "t": 1795785841.142,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -232,13 +268,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782707.744,
+          "t": 1795785841.66,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -266,13 +303,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782707.752,
+          "t": 1795785841.668,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": false,
           "turn": "first",
+          "served": "application/json",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -300,53 +338,79 @@
           "tool_result": ""
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785841.143,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785841.66,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785841.668,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 1223,
+          "declared": 2447
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=767a71f2 req=9aa3a9c3",
-        "[guardian] steps/sessionStart session=767a71f2 req=0f3f6f03",
-        "[guardian] steps/turnStart session=767a71f2 req=79e9e5b8",
-        "[guardian] steps/userMessage session=767a71f2 req=918ed3eb",
-        "[guardian] steps/sessionEnd session=767a71f2 req=030d1e85"
+        "[guardian] handshake/hello session=7e7a0ca2 req=17902c4d",
+        "[guardian] steps/sessionStart session=7e7a0ca2 req=59d8f36f",
+        "[guardian] steps/turnStart session=7e7a0ca2 req=371f411f",
+        "[guardian] steps/userMessage session=7e7a0ca2 req=f20be65c",
+        "[guardian] steps/sessionEnd session=7e7a0ca2 req=984e9782"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "6120f8a0-a449-472d-8c5e-6022f25a78e1",
-          "session_id": "767a71f2-47bb-408a-be70-ec0e545f40a7",
-          "request_id": "9aa3a9c3-3e57-4fdc-aa9a-4c234e3affd1",
-          "params_sha256": "a5f4c164213ad8c62873e0cba5a02d3c817c44c9c946d9da2ab8a9f1d08803b0"
+          "id": "c51141e6-fce2-4f9a-9a79-00d1f4c75141",
+          "session_id": "7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592",
+          "request_id": "17902c4d-7fee-4cf4-8aa3-047cee5f7420",
+          "params_sha256": "77fc2424d44632ac2a65e6f906000e6e89957e61055d4c7c1c306842262f2d72"
         },
         {
           "bytes": 882,
           "method": "steps/sessionStart",
-          "id": "d8cc0096-4021-4f09-af04-0ba30dfa6544",
-          "session_id": "767a71f2-47bb-408a-be70-ec0e545f40a7",
-          "request_id": "0f3f6f03-fa05-4dbc-9f04-1d9101ae50a6",
-          "params_sha256": "4c34b77dcd3ca93e4662164a7a4992faa2822ae94214e766de37eedd23510959"
+          "id": "524fb812-cbc8-45e2-8caa-9ba99723bcfb",
+          "session_id": "7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592",
+          "request_id": "59d8f36f-62bf-4e65-af07-566b62b8cc57",
+          "params_sha256": "34d053b2c7255c0a5e6399a3bd46cec2ac9f8ffa14efc1ffdbcdd268f104b732"
         },
         {
           "bytes": 863,
           "method": "steps/turnStart",
-          "id": "671a0e22-6ba5-431f-8c21-a777542bad38",
-          "session_id": "767a71f2-47bb-408a-be70-ec0e545f40a7",
-          "request_id": "79e9e5b8-21fd-4745-b80b-1966e3b69769",
-          "params_sha256": "db4ff83a31721da45ec90634d0e181cdb864d4f0914ddc4605545a2ea2cc5c63"
+          "id": "ea7c1d07-a9f3-4832-8423-e155c15f9af2",
+          "session_id": "7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592",
+          "request_id": "371f411f-8dab-4503-a0e6-d12bf05de9e4",
+          "params_sha256": "115c50ffce5ba9cb374e926cb2daad362efd2018df70e8b4ffb400a2850cf325"
         },
         {
           "bytes": 870,
           "method": "steps/userMessage",
-          "id": "6d71626d-c63f-4458-883b-128a2b4bbec5",
-          "session_id": "767a71f2-47bb-408a-be70-ec0e545f40a7",
-          "request_id": "918ed3eb-8395-4113-9d9b-c09c23b0ee8e",
-          "params_sha256": "cf47b32ef915dacfdf34afd6d2e99e1ecdaa0dd7e97f3b10b6549a7027f558b7"
+          "id": "19509931-387e-4cec-813b-ace5c95aefc9",
+          "session_id": "7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592",
+          "request_id": "f20be65c-d43e-40e4-acc1-b3c88ce526e4",
+          "params_sha256": "2642dc2478f619ca6834b68cd7d8fb1400c07e1b7034d7f605a6b8394b4f31e3"
         },
         {
           "bytes": 757,
           "method": "steps/sessionEnd",
-          "id": "f11a320f-b5af-462e-b5f6-a0853ef401ad",
-          "session_id": "767a71f2-47bb-408a-be70-ec0e545f40a7",
-          "request_id": "030d1e85-9a2e-43b5-9c0f-39db91e0d1d3",
-          "params_sha256": "9dbb0f52a889d8a6ad2ddd757eaf76e8a3f2099e4135997ba6a70df6d96ec709"
+          "id": "bdf142d6-b3db-476e-957e-ce410e7271ef",
+          "session_id": "7e7a0ca2-4c1c-4cf7-8f5a-e798ce090592",
+          "request_id": "984e9782-3ff5-4881-b1b5-b3e6a5628083",
+          "params_sha256": "24fc6ee4ef955265d5c9c50274818560c159b6bbc10769437ecd2637865da836"
         }
       ]
     },
@@ -354,29 +418,33 @@
       "rep": 3,
       "claude_exit": 1,
       "duration_s": 5.0,
-      "endpoint": "http://127.0.0.1:36793/reset",
-      "guardian_port": 38385,
+      "endpoint": "http://127.0.0.1:46661/reset",
+      "guardian_port": 38655,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
-        ".claude-config/backups/.claude.json.backup.1795782710452",
-        ".claude-config/projects/-tmp-acs-reset-3-m-4r23v0/48c23b9f-a77e-4915-9e72-c7e5a24a7b0c.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785844371",
+        ".claude-config/projects/-tmp-acs-reset-3-4p9z1zhd/524eab05-e9bd-4b49-b5c7-00893c61504b.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/c9eab1d8034ad0e0.json",
+        "guardian-state/c9eab1d8034ad0e0.lock",
+        "handshake-cache/a227cac565b012add76fdfbee6c8659f66982f4a9c396d57fe29a98300e4d037.json.ended",
         "stub.jsonl"
       ],
-      "claude_stdout": "API Error: API returned an empty or malformed response (HTTP 200) \u2014 check for a proxy or gateway intercepting the request. Response: content-type event-stream, body is an event stream (the non-streaming request was answered with a stream), 6717 bytes, request-id absent, server other. This was the non-streaming retry of streaming request (no Anthropic request-id), which failed with: stream_truncated, StreamTruncatedError, StreamTruncated; 41 stream events received, first after 5 ms, none in the final 0 ms.\n",
+      "claude_stdout": "API Error: Connection to the API was lost (ECONNRESET). This is usually temporary \u2014 try again.\n",
       "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782713.314,
+          "t": 1795785847.253,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -404,13 +472,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782713.953,
+          "t": 1795785847.844,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -438,13 +507,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782713.963,
+          "t": 1795785847.852,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": false,
           "turn": "first",
+          "served": "application/json",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -472,83 +542,113 @@
           "tool_result": ""
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785847.253,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785847.844,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785847.852,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 1223,
+          "declared": 2447
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=48c23b9f req=aa7f0e6c",
-        "[guardian] steps/sessionStart session=48c23b9f req=c028ac5e",
-        "[guardian] steps/turnStart session=48c23b9f req=94305e88",
-        "[guardian] steps/userMessage session=48c23b9f req=e4d22299",
-        "[guardian] steps/sessionEnd session=48c23b9f req=6b3f4c5c"
+        "[guardian] handshake/hello session=524eab05 req=79c0f2bc",
+        "[guardian] steps/sessionStart session=524eab05 req=33a5e608",
+        "[guardian] steps/turnStart session=524eab05 req=a8568ecf",
+        "[guardian] steps/userMessage session=524eab05 req=45360fec",
+        "[guardian] steps/sessionEnd session=524eab05 req=cbd90302"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "c099aba1-4136-49c1-9e81-de8596939021",
-          "session_id": "48c23b9f-a77e-4915-9e72-c7e5a24a7b0c",
-          "request_id": "aa7f0e6c-6440-440a-b748-b665d1252a0b",
-          "params_sha256": "0b53e9740e69753edb5237f712a51d59f4cf899dae6da2511a56bf8570a97625"
+          "id": "33ca3b1a-29bb-4af5-8760-8215bb10e912",
+          "session_id": "524eab05-e9bd-4b49-b5c7-00893c61504b",
+          "request_id": "79c0f2bc-b6d6-4957-9a6d-9290df547f2c",
+          "params_sha256": "811109bdb3fcc2fcec8b7d0158ac17179912d482f942f6d77132eccfb064fd5e"
         },
         {
           "bytes": 882,
           "method": "steps/sessionStart",
-          "id": "5cb6769d-0cd9-4140-a14d-c82e980a0e03",
-          "session_id": "48c23b9f-a77e-4915-9e72-c7e5a24a7b0c",
-          "request_id": "c028ac5e-7c54-4c5c-99ee-3caa18a242aa",
-          "params_sha256": "92adf44ba6ab835c043df7c812634c8f724f88b9bbed576c0bf28046fac6aeda"
+          "id": "dcab679f-94ba-4162-9735-a117736297c9",
+          "session_id": "524eab05-e9bd-4b49-b5c7-00893c61504b",
+          "request_id": "33a5e608-5ff9-41c7-a483-c3600c9e5956",
+          "params_sha256": "c923a0d8d18a0ca539bdbf49740b001944d189f84225a46c427d9ee8127962b8"
         },
         {
           "bytes": 863,
           "method": "steps/turnStart",
-          "id": "7c4762fa-dcd4-40c1-aa0c-1daeb940b0b9",
-          "session_id": "48c23b9f-a77e-4915-9e72-c7e5a24a7b0c",
-          "request_id": "94305e88-5d20-4910-bd3e-679fb8827116",
-          "params_sha256": "dfa12499ea4533265c3d8ef1149272d5530d8f6b4bb9956dd655197b6997b57d"
+          "id": "9c18f33e-0395-4ab3-a188-7b8f51144a9f",
+          "session_id": "524eab05-e9bd-4b49-b5c7-00893c61504b",
+          "request_id": "a8568ecf-7f4d-4fa6-b115-ab0f53ab760c",
+          "params_sha256": "3edf04e5a916be730b8195d9e7c78273d478cd87ec2a83fd2a527cdfec357c34"
         },
         {
           "bytes": 870,
           "method": "steps/userMessage",
-          "id": "51a08b79-6f00-45c4-8248-bee6df608123",
-          "session_id": "48c23b9f-a77e-4915-9e72-c7e5a24a7b0c",
-          "request_id": "e4d22299-8abc-4d1e-a278-d558052b97ba",
-          "params_sha256": "8f06ed44ef5c0eecf29dedd960f51b7b5bfc8218a9992de4345356913c746b92"
+          "id": "bf834e35-a1d8-4003-bc12-039a60a9d314",
+          "session_id": "524eab05-e9bd-4b49-b5c7-00893c61504b",
+          "request_id": "45360fec-f319-435b-ab49-44e8eb5c838e",
+          "params_sha256": "80bdf307312ec5092f00d4a8762cf82eb30ba0d57b0a8db009823d9be9f68741"
         },
         {
           "bytes": 757,
           "method": "steps/sessionEnd",
-          "id": "107640cb-d549-4560-b5a6-079d9d416d75",
-          "session_id": "48c23b9f-a77e-4915-9e72-c7e5a24a7b0c",
-          "request_id": "6b3f4c5c-c5ea-4f63-a5e0-89905d6a1055",
-          "params_sha256": "4e162fc497561ced31de49a5b21708d9153550fbff9d68808eab1725e96bc7ef"
+          "id": "9e4ed323-9c40-4f10-aa5c-e4dcd0c52b84",
+          "session_id": "524eab05-e9bd-4b49-b5c7-00893c61504b",
+          "request_id": "cbd90302-2af4-424a-a298-d4e1b078dc61",
+          "params_sha256": "de2747fa0cd395de1272483f4ac62a81c50e45b2579699f1118d1a18ed23d808"
         }
       ]
     },
     {
       "rep": 4,
       "claude_exit": 1,
-      "duration_s": 5.1,
-      "endpoint": "http://127.0.0.1:48363/reset",
+      "duration_s": 4.8,
+      "endpoint": "http://127.0.0.1:53609/reset",
       "guardian_port": 38189,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
-        ".claude-config/backups/.claude.json.backup.1795782716673",
-        ".claude-config/projects/-tmp-acs-reset-4-7yxd75ax/b7d59769-caab-4a9a-a3c8-b4f8a5112911.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785850502",
+        ".claude-config/projects/-tmp-acs-reset-4--4gymior/4cd52f15-8ac4-41d5-b7b3-b0244e9437f2.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/90d220ea04147b19.json",
+        "guardian-state/90d220ea04147b19.lock",
+        "handshake-cache/ee745805438e8db9fe45bf029ab6571bb9abbb3a777d9d7a4adc7bea343b6dd9.json.ended",
         "stub.jsonl"
       ],
-      "claude_stdout": "API Error: API returned an empty or malformed response (HTTP 200) \u2014 check for a proxy or gateway intercepting the request. Response: content-type event-stream, body is an event stream (the non-streaming request was answered with a stream), 6717 bytes, request-id absent, server other. This was the non-streaming retry of streaming request (no Anthropic request-id), which failed with: stream_truncated, StreamTruncatedError, StreamTruncated; 16 stream events received, first after 4 ms, none in the final 0 ms.\n",
+      "claude_stdout": "API Error: Connection to the API was lost (ECONNRESET). This is usually temporary \u2014 try again.\n",
       "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782719.731,
+          "t": 1795785853.314,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -576,13 +676,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782720.288,
+          "t": 1795785853.833,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -610,13 +711,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782720.302,
+          "t": 1795785853.841,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": false,
           "turn": "first",
+          "served": "application/json",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -644,83 +746,113 @@
           "tool_result": ""
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785853.314,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785853.833,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785853.841,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 1223,
+          "declared": 2447
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=b7d59769 req=67dfb967",
-        "[guardian] steps/sessionStart session=b7d59769 req=9c2a7bb0",
-        "[guardian] steps/turnStart session=b7d59769 req=c54ce4eb",
-        "[guardian] steps/userMessage session=b7d59769 req=05f86286",
-        "[guardian] steps/sessionEnd session=b7d59769 req=10d4a51d"
+        "[guardian] handshake/hello session=4cd52f15 req=687e664a",
+        "[guardian] steps/sessionStart session=4cd52f15 req=2811f3c0",
+        "[guardian] steps/turnStart session=4cd52f15 req=4f1ab907",
+        "[guardian] steps/userMessage session=4cd52f15 req=a9d8fc0f",
+        "[guardian] steps/sessionEnd session=4cd52f15 req=5bfc62c0"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "93f6ffee-e8b3-452e-9d97-d6cdc181deda",
-          "session_id": "b7d59769-caab-4a9a-a3c8-b4f8a5112911",
-          "request_id": "67dfb967-371b-4aa0-8e96-50a1a40b131d",
-          "params_sha256": "630844714d6ee09144cad1b01750fe94ce081120b2ff3390d426dc1d51fc2fe3"
+          "id": "87d69a85-4dd2-4f65-b291-2ed46f95839e",
+          "session_id": "4cd52f15-8ac4-41d5-b7b3-b0244e9437f2",
+          "request_id": "687e664a-ab95-4e3a-9e9e-a34de8d29fab",
+          "params_sha256": "310f7e2b6900144978529bbaad8bf37083f449857434acee1abd8f95e8d6b9fb"
         },
         {
           "bytes": 882,
           "method": "steps/sessionStart",
-          "id": "aa504eaa-5a7f-4ba2-af22-7a88d531d6ff",
-          "session_id": "b7d59769-caab-4a9a-a3c8-b4f8a5112911",
-          "request_id": "9c2a7bb0-f0cd-49a1-808c-89d3229193c1",
-          "params_sha256": "90bb0fd693386f8c95b6adf548baac14b4e6d938212155650d834740ba31fac1"
+          "id": "d0310bc2-ddc2-4f8c-a8c3-d89c3a110eef",
+          "session_id": "4cd52f15-8ac4-41d5-b7b3-b0244e9437f2",
+          "request_id": "2811f3c0-be5e-4172-ac50-3533c236c1b3",
+          "params_sha256": "84e297e695114b3e274a8828126b29b682ab90f9fcbcff988de2fb0add2dbeac"
         },
         {
           "bytes": 863,
           "method": "steps/turnStart",
-          "id": "1248eebe-e651-4d9a-99bb-d42457c31155",
-          "session_id": "b7d59769-caab-4a9a-a3c8-b4f8a5112911",
-          "request_id": "c54ce4eb-9a6e-481f-b405-84ab64cfb661",
-          "params_sha256": "bdd6b214aee2e2047f6b18df7e96c565298ab8cdc271665d60a8337fd4ecd13f"
+          "id": "e9759c13-0a30-4af7-99ac-a6bb475dd3dd",
+          "session_id": "4cd52f15-8ac4-41d5-b7b3-b0244e9437f2",
+          "request_id": "4f1ab907-5739-4681-827d-a2f6305aa779",
+          "params_sha256": "117cc71c96bdc0166b6de098405e748422cbb823ad13a69e1ad9b6a7fc8198b1"
         },
         {
           "bytes": 870,
           "method": "steps/userMessage",
-          "id": "b7b7789d-9ff9-4160-bc53-75a5abdac407",
-          "session_id": "b7d59769-caab-4a9a-a3c8-b4f8a5112911",
-          "request_id": "05f86286-b06f-445d-a4cf-055ca98b28a0",
-          "params_sha256": "79e715e7e632b546fe777a94c81efd18338eef0a0907d53afbbb6465f6c3673c"
+          "id": "1df7c87b-4bc9-44e5-82af-d382d0e9bc88",
+          "session_id": "4cd52f15-8ac4-41d5-b7b3-b0244e9437f2",
+          "request_id": "a9d8fc0f-ba8e-4952-8b17-695292b1738b",
+          "params_sha256": "0e8790e88135bb479951d90a4889b3bfa00587c53c144dcacc8610bb3d960018"
         },
         {
           "bytes": 757,
           "method": "steps/sessionEnd",
-          "id": "e92f29a5-569d-42fa-bb11-5142de103b46",
-          "session_id": "b7d59769-caab-4a9a-a3c8-b4f8a5112911",
-          "request_id": "10d4a51d-ad12-4d3f-91d6-16689260f32f",
-          "params_sha256": "1c6be75fe5b8a049db3d685937918caf15953bbd81d1604b598931f781f3b64e"
+          "id": "ae7f4cc8-84cb-4cc1-867e-f1c4517b8f58",
+          "session_id": "4cd52f15-8ac4-41d5-b7b3-b0244e9437f2",
+          "request_id": "5bfc62c0-ce19-4304-be23-e3632ee4c73a",
+          "params_sha256": "247768501368686eff5d410705dfecdf2b12ee732339968b782a2fd9a3463f56"
         }
       ]
     },
     {
       "rep": 5,
       "claude_exit": 1,
-      "duration_s": 4.9,
-      "endpoint": "http://127.0.0.1:53199/reset",
-      "guardian_port": 42183,
+      "duration_s": 5.1,
+      "endpoint": "http://127.0.0.1:43923/reset",
+      "guardian_port": 41669,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
-        ".claude-config/backups/.claude.json.backup.1795782723034",
-        ".claude-config/projects/-tmp-acs-reset-5-mirl7afr/3861b758-555d-4a07-8188-46c5d68e8ceb.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785856495",
+        ".claude-config/projects/-tmp-acs-reset-5-kqygr0y4/d1ec3494-1bca-4795-8f1e-192500bf3c8b.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/d9a3ab2420572d88.json",
+        "guardian-state/d9a3ab2420572d88.lock",
+        "handshake-cache/bdc965f5b8bde8843c4d61236a18f5c1283c82127d8941c5ee5f06b05a3e636c.json.ended",
         "stub.jsonl"
       ],
-      "claude_stdout": "API Error: API returned an empty or malformed response (HTTP 200) \u2014 check for a proxy or gateway intercepting the request. Response: content-type event-stream, body is an event stream (the non-streaming request was answered with a stream), 6717 bytes, request-id absent, server other. This was the non-streaming retry of streaming request (no Anthropic request-id), which failed with: stream_truncated, StreamTruncatedError, StreamTruncated; 16 stream events received, first after 4 ms, none in the final 0 ms.\n",
+      "claude_stdout": "API Error: Connection to the API was lost (ECONNRESET). This is usually temporary \u2014 try again.\n",
       "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782725.936,
+          "t": 1795785859.468,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -748,13 +880,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782726.462,
+          "t": 1795785860.051,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -782,13 +915,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782726.473,
+          "t": 1795785860.063,
           "mode": "reset",
           "path": "/reset/v1/messages?beta=true",
           "bytes": 61048,
           "endpoint": "messages",
           "stream": false,
           "turn": "first",
+          "served": "application/json",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -816,53 +950,79 @@
           "tool_result": ""
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785859.471,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785860.052,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 6717,
+          "declared": null
+        },
+        {
+          "t": 1795785860.063,
+          "event": "close",
+          "mode": "reset",
+          "how": "RST",
+          "sent": 1223,
+          "declared": 2447
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=3861b758 req=686349e9",
-        "[guardian] steps/sessionStart session=3861b758 req=986915f7",
-        "[guardian] steps/turnStart session=3861b758 req=78e7abcf",
-        "[guardian] steps/userMessage session=3861b758 req=594e03fc",
-        "[guardian] steps/sessionEnd session=3861b758 req=188f7703"
+        "[guardian] handshake/hello session=d1ec3494 req=39e9d85e",
+        "[guardian] steps/sessionStart session=d1ec3494 req=ccefb4cc",
+        "[guardian] steps/turnStart session=d1ec3494 req=2384ab48",
+        "[guardian] steps/userMessage session=d1ec3494 req=fae3670b",
+        "[guardian] steps/sessionEnd session=d1ec3494 req=8d744541"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "c02f9ab8-e61c-47e1-8f98-823eb2b4283f",
-          "session_id": "3861b758-555d-4a07-8188-46c5d68e8ceb",
-          "request_id": "686349e9-0ac5-4d98-b16d-b19a7ecf3554",
-          "params_sha256": "62a8c0c5c7980d10705d3f0d0d3e872cbd719b525b00a83b2bc7386c3682ed37"
+          "id": "f3c664a3-ff68-4487-92bc-7e4831bc92a0",
+          "session_id": "d1ec3494-1bca-4795-8f1e-192500bf3c8b",
+          "request_id": "39e9d85e-929b-4bfc-8983-061130b1d3ca",
+          "params_sha256": "4d697928c27b490f6d28f02e0b9c99155d3517663235c8f46ecea5dae637a2a7"
         },
         {
           "bytes": 882,
           "method": "steps/sessionStart",
-          "id": "dc1fe9bf-fd85-41e8-b890-5420a391883d",
-          "session_id": "3861b758-555d-4a07-8188-46c5d68e8ceb",
-          "request_id": "986915f7-63d7-478b-b119-f140b810b2a6",
-          "params_sha256": "d1acc62c39aadedf01f04efedb65908d050feb015dd1b475b4e4caccde8f9bed"
+          "id": "fdb540eb-7059-49e9-8a16-c1cd84ab18f4",
+          "session_id": "d1ec3494-1bca-4795-8f1e-192500bf3c8b",
+          "request_id": "ccefb4cc-d3d4-4ac0-8590-d600f3a2ab1d",
+          "params_sha256": "fbb84dc59f754d1bcabf0997f6fca3346f231b46dea5c76e1bc2127ca8ba461b"
         },
         {
           "bytes": 863,
           "method": "steps/turnStart",
-          "id": "d3ce9ad0-7208-44e2-b04a-8baeb61049e3",
-          "session_id": "3861b758-555d-4a07-8188-46c5d68e8ceb",
-          "request_id": "78e7abcf-ffa1-484d-ba37-29ec5b32fd2b",
-          "params_sha256": "9950d4a7e342bce2f521061b1f254d78db98f0cbbd5458e335c4b348b01c0485"
+          "id": "3c3d5a4d-edc3-4fc8-9510-2e1dc6e32a24",
+          "session_id": "d1ec3494-1bca-4795-8f1e-192500bf3c8b",
+          "request_id": "2384ab48-d8c5-4adb-ab92-c9c11d2c1c48",
+          "params_sha256": "c4148a4a4d198b365bb4c99e0528b14bfe7d730cf1e880c5b4831db5eb7c5467"
         },
         {
           "bytes": 870,
           "method": "steps/userMessage",
-          "id": "ba4fa734-bc14-4e33-abbd-5234a2bcc702",
-          "session_id": "3861b758-555d-4a07-8188-46c5d68e8ceb",
-          "request_id": "594e03fc-18fe-4a87-80f4-5f6f4097650c",
-          "params_sha256": "04b0d09d52e8fa6c16ba810079b871d25a3824555e492d6990665d50013c420c"
+          "id": "e2b92f01-89b3-46d8-ad5f-8f9c3744b701",
+          "session_id": "d1ec3494-1bca-4795-8f1e-192500bf3c8b",
+          "request_id": "fae3670b-4690-4487-998c-32fe2823a587",
+          "params_sha256": "d717b4ae6878ec4fc8516018650d59cc332dac8846ea0f5e6ea42cb6a71e0132"
         },
         {
           "bytes": 757,
           "method": "steps/sessionEnd",
-          "id": "399d9366-144e-4df5-b856-2aaf11de9e8d",
-          "session_id": "3861b758-555d-4a07-8188-46c5d68e8ceb",
-          "request_id": "188f7703-86a4-423d-8aae-213bd1e127e8",
-          "params_sha256": "079afc37df196b960ab97a5c016549fb40dab854d91369a751547fca7e60cd60"
+          "id": "0c36649e-927c-4f46-969a-115130b49d16",
+          "session_id": "d1ec3494-1bca-4795-8f1e-192500bf3c8b",
+          "request_id": "8d744541-4bf2-40cc-9d47-3f96e8bfcd64",
+          "params_sha256": "73304107abd4983299290fb04d089895343d1e036304203d1749d7a6f8756476"
         }
       ]
     }

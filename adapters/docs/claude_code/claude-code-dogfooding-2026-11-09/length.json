@@ -9,31 +9,35 @@
     {
       "rep": 1,
       "claude_exit": 0,
-      "duration_s": 7.0,
-      "endpoint": "http://127.0.0.1:60485/length",
-      "guardian_port": 39985,
+      "duration_s": 6.8,
+      "endpoint": "http://127.0.0.1:38987/length",
+      "guardian_port": 41103,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782697459",
-        ".claude-config/projects/-tmp-acs-length-1-7iv257c2/c3904ec2-9731-48a2-8729-528f962ddb57.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785835001",
+        ".claude-config/projects/-tmp-acs-length-1-jv0le6xk/2cc2a538-fb15-485e-8695-ba73edf9c59b.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/69ec6ceb6dc2b4d4.json",
+        "guardian-state/69ec6ceb6dc2b4d4.lock",
+        "handshake-cache/105fe15a10c1581989174bc5a942ef480265c1040e1239bc91ac9ef64bd9d17a.json.ended",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:39985/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782700.925,
+          "t": 1795785838.358,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 61051,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -61,13 +65,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782701.006,
+          "t": 1795785838.437,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 62831,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -95,102 +100,124 @@
           "tool_result": "<tool_use_error>InputValidationError: Write was called with input that could not be parsed as JSON.\nYou sent (first 200 of 922 bytes): {\"file_path\": \"report.txt\", \"content\": \"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\nCommon causes: unescaped backslashes in file paths (use / or \\\\), unescaped control characters, or truncated output. Retry with valid JSON.</tool_use_error>"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785838.36,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 6994,
+          "declared": null
+        },
+        {
+          "t": 1795785838.438,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=c3904ec2 req=a2c6b736",
-        "[guardian] steps/sessionStart session=c3904ec2 req=b0197ecc",
-        "[guardian] steps/turnStart session=c3904ec2 req=2fdfa6bc",
-        "[guardian] steps/userMessage session=c3904ec2 req=4acb4a14",
-        "[guardian] steps/agentResponse session=c3904ec2 req=a3ad759b",
-        "[guardian] steps/turnEnd session=c3904ec2 req=5f09706a",
-        "[guardian] steps/sessionEnd session=c3904ec2 req=24749877"
+        "[guardian] handshake/hello session=2cc2a538 req=302d41b8",
+        "[guardian] steps/sessionStart session=2cc2a538 req=f43d8916",
+        "[guardian] steps/turnStart session=2cc2a538 req=fc3a5df6",
+        "[guardian] steps/userMessage session=2cc2a538 req=5175b7f9",
+        "[guardian] steps/agentResponse session=2cc2a538 req=d7acf709",
+        "[guardian] steps/turnEnd session=2cc2a538 req=ddbd5f3d",
+        "[guardian] steps/sessionEnd session=2cc2a538 req=a534cf53"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "a4ca2c02-7b6d-4a2a-ab0f-1580d6659191",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "a2c6b736-f352-442e-8751-2e8fa85656d2",
-          "params_sha256": "75068983014dbdd846021476d1543f22b6b320cd5e67055e2968de9e81a5ff17"
+          "id": "1a369da3-2cb0-4d91-852c-a973427bb50b",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "302d41b8-14f7-4bb8-9f67-ce7f610aab20",
+          "params_sha256": "164c7b5e50f38b749c487298148687a968134dc5db8312194f74846d1f073532"
         },
         {
           "bytes": 887,
           "method": "steps/sessionStart",
-          "id": "31d76920-e16f-450c-a1c5-242a7df59fea",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "b0197ecc-9ba6-4d60-9c29-abf6949083be",
-          "params_sha256": "caeb67afa356f4c706d2dec386fb3032190801c5c75bf5b47736137858b47334"
+          "id": "9b24cc91-c997-480e-bab7-900dbc7bc975",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "f43d8916-3419-4e49-85e0-0019d9362c5e",
+          "params_sha256": "e1a5cd0a0e9d226d0783e4a6bcb077eed1dd6b616e21679ff8eb6d4c14bf6ff9"
         },
         {
           "bytes": 866,
           "method": "steps/turnStart",
-          "id": "07b530c6-a3a2-4971-9c84-891d893d472e",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "2fdfa6bc-2e07-472e-a22b-4b32084a746e",
-          "params_sha256": "8e5d67a09cb74bf81a43a07d448cf846790c8828265233219ab98c636312abeb"
+          "id": "4f7c6d43-cf67-45c4-b585-d2584753b76c",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "fc3a5df6-04d1-4757-9533-2f5a12890bc5",
+          "params_sha256": "0adfeccddb80c2783b3f99c7bd5d0eb023a4bb050ae3b9d3b3d00cae4002bd5e"
         },
         {
           "bytes": 873,
           "method": "steps/userMessage",
-          "id": "2e6090eb-aeb1-4208-b8ad-2f701f724b7a",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "4acb4a14-d0e1-47a0-9153-dd8905ba9e31",
-          "params_sha256": "f902983c85f6eaa7b36d4218efa792e42d5c202ba334a085856ce26170671f78"
+          "id": "583b4288-8b52-4215-a5d0-cf04ff84aebf",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "5175b7f9-71be-44f1-acf0-c1e4afee145d",
+          "params_sha256": "fd4cdc05ed7391b7a4d8dff118198a8c370f5cc8b704ad5a6e2112365b3fe009"
         },
         {
           "bytes": 836,
           "method": "steps/agentResponse",
-          "id": "d7226ad8-98ab-4d43-88ec-38d74a47a2dd",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "a3ad759b-84b4-47a1-a428-8d2b34e4bf63",
-          "params_sha256": "66379c62f6a5447ab06540a69e6af6bfdf1bb52780c17b24564b5dad0d440062"
+          "id": "52ab8bf3-1663-4ee6-a078-1b3e7d0e1e50",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "d7acf709-f6ac-4749-826a-98095da68fdf",
+          "params_sha256": "11ca127662f6cba4924e31a2e43cf01a36f445ba04e66cfab8393c6ae7ddf708"
         },
         {
           "bytes": 856,
           "method": "steps/turnEnd",
-          "id": "3d13ffce-76ce-4707-ab00-0b836bee3362",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "5f09706a-b714-44fd-b64a-a073c051b86c",
-          "params_sha256": "f04cc7b051e25ff2c74de38c8d7581a1e83b78373d3a448257d0ac45fa8434b4"
+          "id": "4c030c90-fcd8-4ba1-947d-fe7889f7833b",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "ddbd5f3d-4e5e-4937-9496-e35853edbd3d",
+          "params_sha256": "5f8580726ee55da3c3a75b2693f677a86a50c0d72ec2e1eb032a6c0ebd0d48e4"
         },
         {
           "bytes": 760,
           "method": "steps/sessionEnd",
-          "id": "1d45d96b-7c93-48e8-960e-31516a2cd5dd",
-          "session_id": "c3904ec2-9731-48a2-8729-528f962ddb57",
-          "request_id": "24749877-77fa-476d-bedb-7ed9d9d84671",
-          "params_sha256": "57d92509a8a3889a00f343556810b91a87f98c9f206bc6a4e982f3ce0eb3af50"
+          "id": "c427f35c-20fd-4ea5-8b8a-ad6e05eb13ae",
+          "session_id": "2cc2a538-fb15-485e-8695-ba73edf9c59b",
+          "request_id": "a534cf53-881f-4120-b3c5-1447d290c85f",
+          "params_sha256": "0587732c4460d4b7e60b173381d227f6b68b6708b5cb94e508308b8e2783c0c5"
         }
       ]
     },
     {
       "rep": 2,
       "claude_exit": 0,
-      "duration_s": 7.5,
-      "endpoint": "http://127.0.0.1:45575/length",
-      "guardian_port": 35357,
+      "duration_s": 6.6,
+      "endpoint": "http://127.0.0.1:46177/length",
+      "guardian_port": 34707,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782705966",
-        ".claude-config/projects/-tmp-acs-length-2-vo-x9v34/74e79ea9-00a0-4c2f-a306-984cea7ceaa5.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785843167",
+        ".claude-config/projects/-tmp-acs-length-2-w82qdz3p/8ff6615d-7129-4c3f-bbb2-5af06be44417.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/5b26977a9793797b.json",
+        "guardian-state/5b26977a9793797b.lock",
+        "handshake-cache/819670f21af61400fa310b9c6ebbdcb880fbd6facea61421cfa0a2a33f36aef7.json.ended",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:35357/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782709.96,
+          "t": 1795785846.525,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 61051,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -218,13 +245,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782710.048,
+          "t": 1795785846.604,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 62831,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -252,102 +280,124 @@
           "tool_result": "<tool_use_error>InputValidationError: Write was called with input that could not be parsed as JSON.\nYou sent (first 200 of 922 bytes): {\"file_path\": \"report.txt\", \"content\": \"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\nCommon causes: unescaped backslashes in file paths (use / or \\\\), unescaped control characters, or truncated output. Retry with valid JSON.</tool_use_error>"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785846.527,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 6994,
+          "declared": null
+        },
+        {
+          "t": 1795785846.606,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=74e79ea9 req=42a18577",
-        "[guardian] steps/sessionStart session=74e79ea9 req=3cd418d1",
-        "[guardian] steps/turnStart session=74e79ea9 req=eadf816c",
-        "[guardian] steps/userMessage session=74e79ea9 req=12d479e2",
-        "[guardian] steps/agentResponse session=74e79ea9 req=5dd9850a",
-        "[guardian] steps/turnEnd session=74e79ea9 req=15d41b94",
-        "[guardian] steps/sessionEnd session=74e79ea9 req=321a704c"
+        "[guardian] handshake/hello session=8ff6615d req=afdefb94",
+        "[guardian] steps/sessionStart session=8ff6615d req=db93ffbe",
+        "[guardian] steps/turnStart session=8ff6615d req=71149e86",
+        "[guardian] steps/userMessage session=8ff6615d req=65cb4a6f",
+        "[guardian] steps/agentResponse session=8ff6615d req=a5bb15d8",
+        "[guardian] steps/turnEnd session=8ff6615d req=ea100a9e",
+        "[guardian] steps/sessionEnd session=8ff6615d req=85aaa3de"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "d3a8d417-3aff-4b9f-ad39-f35fbab458fd",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "42a18577-77bc-4a16-84d7-4495fb993bab",
-          "params_sha256": "cf54bd772db4503cef54099c3446ce661bff02ca20b2a468d91e827dd4e90f89"
+          "id": "581f5362-72eb-49f4-8127-203316681884",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "afdefb94-8905-44af-8a33-ba6abd878faa",
+          "params_sha256": "b7e3bd467f6fab1ce7c57db4c079615086f2c4072d19fddd09524ab72e4f5bf3"
         },
         {
           "bytes": 887,
           "method": "steps/sessionStart",
-          "id": "7b9619a2-5eca-4eb5-a119-e963c7d2a7fb",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "3cd418d1-4216-4be0-9cf9-be1dff3c370f",
-          "params_sha256": "5083bdf467d2211f409668ff6dc37be975201e9a7c5d8b84f29dcd993ed9bb63"
+          "id": "cfb6f06c-3476-4c57-9cfd-1ed0fd0306d3",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "db93ffbe-8701-4123-ab27-247eb73ba08e",
+          "params_sha256": "06381f2061b22f5f3d8b3ed8befe36739188430a85190f92fef33c445bc00c75"
         },
         {
           "bytes": 866,
           "method": "steps/turnStart",
-          "id": "caaac344-49d8-45d7-a4c0-3bb4b0c5e767",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "eadf816c-2bcf-4529-899f-718aab03cbac",
-          "params_sha256": "4fa725a49eab7b9d604cb8bdd43f007a1120fcad1db9315bec3c8491f34b9eac"
+          "id": "52c7b64e-7488-4424-8075-6f6cbf258e17",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "71149e86-33ea-403b-a4c6-f411bef7ec44",
+          "params_sha256": "3405af73a3074aad2f7a164bbdaf5d483c91285e39b4a6c729c6b1087a37f375"
         },
         {
           "bytes": 873,
           "method": "steps/userMessage",
-          "id": "68199168-5b57-488e-8aa6-7e504f93cd48",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "12d479e2-98b5-4192-8300-5ca5900fa32d",
-          "params_sha256": "44fd210b23cd0a4bbb27cb8f5d742dab68c0c0c1b1d02f5791c353a2cd01747b"
+          "id": "0550eee5-a944-4b71-a3f3-0012d31b5b0a",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "65cb4a6f-68d0-4089-9e12-762e5df38dcc",
+          "params_sha256": "be39330a53346a1857254a8556f6435abcdd1e1666e3dbc19e65c499d62f2c7f"
         },
         {
           "bytes": 836,
           "method": "steps/agentResponse",
-          "id": "659594e5-3c4c-4543-b375-bcc16c1687ef",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "5dd9850a-01c5-4d80-ac48-27043a71732c",
-          "params_sha256": "7bdfc6f5e01f6dbdbd9f1d0e9bebf31ae7c4edb788f5dd05059823c18a456b1d"
+          "id": "04015f5c-29ea-4836-996a-3d28d39ae920",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "a5bb15d8-2557-43cc-a334-89258b36fc2c",
+          "params_sha256": "d88eda60d77eaf695d143c63d209d59594e7b1bfa2ab284c5c0e30df556cb8ce"
         },
         {
           "bytes": 856,
           "method": "steps/turnEnd",
-          "id": "e3013034-39d5-4d34-a59e-e5106aa20102",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "15d41b94-f391-4a74-b89f-dc7a90f16788",
-          "params_sha256": "1b2a07b29ef6d88d61512b838c576faa45c62784adb15f5aea49d27906f5bbf4"
+          "id": "5bddba73-dc8a-488c-bd56-d68f60cc8f47",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "ea100a9e-a876-480e-918f-3c15c90ffe10",
+          "params_sha256": "221043ed45135f522bcbb0ce4a8714ad40f99ca41625ace3d663941f25735a82"
         },
         {
           "bytes": 760,
           "method": "steps/sessionEnd",
-          "id": "6a1205e5-c0ab-4277-8fc4-2bb22e7395fd",
-          "session_id": "74e79ea9-00a0-4c2f-a306-984cea7ceaa5",
-          "request_id": "321a704c-845f-4029-ba3b-bae73eba0e22",
-          "params_sha256": "2a263e171fc120a4ef7f14e05625a8a130c86a0ef656247580a7dc397c04cf36"
+          "id": "e304497f-c181-4882-bbeb-0b1b29a9c4e6",
+          "session_id": "8ff6615d-7129-4c3f-bbb2-5af06be44417",
+          "request_id": "85aaa3de-ca28-4119-80ad-f7addbe46fe3",
+          "params_sha256": "4b598cf338eccb1e5272f02de2d63829ffbf23198172d9fa5f38069184cf9900"
         }
       ]
     },
     {
       "rep": 3,
       "claude_exit": 0,
-      "duration_s": 7.3,
-      "endpoint": "http://127.0.0.1:54445/length",
-      "guardian_port": 36317,
+      "duration_s": 6.6,
+      "endpoint": "http://127.0.0.1:51037/length",
+      "guardian_port": 36951,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782714992",
-        ".claude-config/projects/-tmp-acs-length-3-vc096ldn/53d75d7c-17ce-47dd-9db5-d9839ede86c3.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785851083",
+        ".claude-config/projects/-tmp-acs-length-3-lqkyag40/d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/b72e7233a5cb55b8.json",
+        "guardian-state/b72e7233a5cb55b8.lock",
+        "handshake-cache/47f5c6d273c5b9e22e0e9a207a96206495fc364b190418cdf3220ebc3c9b8375.json.ended",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:36317/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782718.693,
+          "t": 1795785854.34,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 61051,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -375,13 +425,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782718.773,
+          "t": 1795785854.44,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 62831,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -409,102 +460,124 @@
           "tool_result": "<tool_use_error>InputValidationError: Write was called with input that could not be parsed as JSON.\nYou sent (first 200 of 922 bytes): {\"file_path\": \"report.txt\", \"content\": \"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\nCommon causes: unescaped backslashes in file paths (use / or \\\\), unescaped control characters, or truncated output. Retry with valid JSON.</tool_use_error>"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785854.343,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 6994,
+          "declared": null
+        },
+        {
+          "t": 1795785854.44,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=53d75d7c req=ee6308ca",
-        "[guardian] steps/sessionStart session=53d75d7c req=2549df77",
-        "[guardian] steps/turnStart session=53d75d7c req=0208ee84",
-        "[guardian] steps/userMessage session=53d75d7c req=97b25cc3",
-        "[guardian] steps/agentResponse session=53d75d7c req=3bce1500",
-        "[guardian] steps/turnEnd session=53d75d7c req=2a52808f",
-        "[guardian] steps/sessionEnd session=53d75d7c req=91bf9cc9"
+        "[guardian] handshake/hello session=d86bbc32 req=12949b55",
+        "[guardian] steps/sessionStart session=d86bbc32 req=10a76571",
+        "[guardian] steps/turnStart session=d86bbc32 req=d3091f7b",
+        "[guardian] steps/userMessage session=d86bbc32 req=9dffe8a7",
+        "[guardian] steps/agentResponse session=d86bbc32 req=2bb9125c",
+        "[guardian] steps/turnEnd session=d86bbc32 req=940b8e81",
+        "[guardian] steps/sessionEnd session=d86bbc32 req=d17f5089"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "ca4a6956-68e0-4c27-8829-9e6c426a4227",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "ee6308ca-26d3-4f05-b898-4fbc6dd9f000",
-          "params_sha256": "fed043e92a3cb78f44ceb81232537e363b6752ab420b6b507d8f316dd5ad1ca3"
+          "id": "c03e6628-183a-45a8-912d-0e0b3c7f00a2",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "12949b55-ca9a-4fce-9559-328730290d04",
+          "params_sha256": "38fd86428ce2fb687956f94cb682077ffeb5afc36e8c574a5289214e02d8052a"
         },
         {
           "bytes": 887,
           "method": "steps/sessionStart",
-          "id": "1e1ab03e-2e0c-4e7a-976b-19fac0322566",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "2549df77-8c8b-4b4c-89b9-cc881450ff42",
-          "params_sha256": "1aa7f3df4d522d8fa86045818f613f3e64dd4bf1637b6ca57d95fb7f30655cf7"
+          "id": "57746831-11e7-4513-b569-a52914f09bfc",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "10a76571-3729-4f3a-b88e-4ba960248802",
+          "params_sha256": "ede58b68b6b91103d999f033199bda36ad96a6691f66d169865b8a8235b3e8e7"
         },
         {
           "bytes": 866,
           "method": "steps/turnStart",
-          "id": "01689c6c-151f-4922-a430-25d52569c771",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "0208ee84-ec68-4dac-b051-3633b3571bd1",
-          "params_sha256": "d6f6f58665dff91ecd6a7457f5fc3aa42fdf06aa0010bb436029ccfe0c242e12"
+          "id": "0c678086-788f-4b3f-8ec9-bda0a48a38a8",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "d3091f7b-c4c3-4aab-826d-2d48286f44be",
+          "params_sha256": "260a845b87c74052dd185c7d7ce8fa8a3c9b24b6fef7418e0fb401b49afcb41a"
         },
         {
           "bytes": 873,
           "method": "steps/userMessage",
-          "id": "39f576e7-1454-48ee-b10b-780b3529ef6b",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "97b25cc3-5d70-419f-9f4d-b5240d24ca6c",
-          "params_sha256": "be822dd97888a5db14b29e07d61324192586f498a13858b61eee4490ac823533"
+          "id": "47a020a3-2362-4e91-8840-b23685e5577f",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "9dffe8a7-a7e5-4b24-9578-8747dee80fc7",
+          "params_sha256": "e943d26ca173973bf7257d5a452ed8d1388f34d1282fdcd5d805a37360b6aa7b"
         },
         {
           "bytes": 836,
           "method": "steps/agentResponse",
-          "id": "cca98c70-c54f-4c9c-9630-1f97f5a6c3ae",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "3bce1500-11cd-4705-9b80-4fa86e2ad006",
-          "params_sha256": "26d2fd61a14b6c3b7714ce45472e69023c6b9ce5058cd488ac20774899d7c460"
+          "id": "e5e53753-613f-46fa-9b95-a1ac56a5791d",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "2bb9125c-fdc2-4367-aebb-beec786dbf9e",
+          "params_sha256": "171a9fc3af4a2ad0d1c37549911e8e16cb9a1c1aef423d9610d0e40e1b847b93"
         },
         {
           "bytes": 856,
           "method": "steps/turnEnd",
-          "id": "bd73fbd6-646d-479f-8f74-cee5d1c84876",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "2a52808f-1fd7-40b1-b1b1-6d3621667031",
-          "params_sha256": "177c572135bd2c33a42a3bd975ccc9cef9506d0cc5138a8c8f301271f79a90aa"
+          "id": "f1dd577a-ad57-4c6e-8f17-45dc48bafddc",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "940b8e81-abd1-4dd5-8047-ab150842731d",
+          "params_sha256": "7f96566c7121690b4e530555cce2fe5137f9463f86024862448bdcb90f84838d"
         },
         {
           "bytes": 760,
           "method": "steps/sessionEnd",
-          "id": "13608079-2b11-4c06-a284-f49710dc8dcf",
-          "session_id": "53d75d7c-17ce-47dd-9db5-d9839ede86c3",
-          "request_id": "91bf9cc9-d560-42d7-a859-3b28366e9f34",
-          "params_sha256": "e0738e609622bd016296b20d849f593e3009b7bb328d125a95ad14dcec09069c"
+          "id": "ec314943-240b-4c3a-a512-541f2900f219",
+          "session_id": "d86bbc32-7bce-4ffb-8bc2-8bc0abb459ad",
+          "request_id": "d17f5089-71a4-4742-9180-8d12c72e81bd",
+          "params_sha256": "70645f2f9e1ddfa620a9477e7a5c05c54171caddda6bf7a4fd9d178d9ba12961"
         }
       ]
     },
     {
       "rep": 4,
       "claude_exit": 0,
-      "duration_s": 7.1,
-      "endpoint": "http://127.0.0.1:43699/length",
-      "guardian_port": 42099,
+      "duration_s": 6.4,
+      "endpoint": "http://127.0.0.1:39419/length",
+      "guardian_port": 43717,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782723821",
-        ".claude-config/projects/-tmp-acs-length-4-16kkagbx/0b0b0e1b-4514-469b-af1b-b1f0edabd882.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785859075",
+        ".claude-config/projects/-tmp-acs-length-4-irp-uoot/7f9223aa-b9c6-450a-af3d-302438a9a960.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/67ef5324bb9fdf5b.json",
+        "guardian-state/67ef5324bb9fdf5b.lock",
+        "handshake-cache/7ce69c1d06bcbde787c02b385ff4533daa851eba4230e288f85430cb3d421c81.json.ended",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:42099/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782727.342,
+          "t": 1795785862.175,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 61051,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -532,13 +605,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782727.427,
+          "t": 1795785862.256,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 62831,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -566,102 +640,124 @@
           "tool_result": "<tool_use_error>InputValidationError: Write was called with input that could not be parsed as JSON.\nYou sent (first 200 of 922 bytes): {\"file_path\": \"report.txt\", \"content\": \"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\nCommon causes: unescaped backslashes in file paths (use / or \\\\), unescaped control characters, or truncated output. Retry with valid JSON.</tool_use_error>"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785862.176,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 6994,
+          "declared": null
+        },
+        {
+          "t": 1795785862.257,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=0b0b0e1b req=36b37cc3",
-        "[guardian] steps/sessionStart session=0b0b0e1b req=210436d7",
-        "[guardian] steps/turnStart session=0b0b0e1b req=9556668a",
-        "[guardian] steps/userMessage session=0b0b0e1b req=932ac272",
-        "[guardian] steps/agentResponse session=0b0b0e1b req=fb7eb279",
-        "[guardian] steps/turnEnd session=0b0b0e1b req=f7b03ae7",
-        "[guardian] steps/sessionEnd session=0b0b0e1b req=4d256bd9"
+        "[guardian] handshake/hello session=7f9223aa req=90c19f11",
+        "[guardian] steps/sessionStart session=7f9223aa req=2f47dcb6",
+        "[guardian] steps/turnStart session=7f9223aa req=89502dbd",
+        "[guardian] steps/userMessage session=7f9223aa req=388fdb23",
+        "[guardian] steps/agentResponse session=7f9223aa req=d255a759",
+        "[guardian] steps/turnEnd session=7f9223aa req=0794bd4b",
+        "[guardian] steps/sessionEnd session=7f9223aa req=9cff4299"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "94f2ee35-daf9-4b83-979e-76f9d7ed1bcc",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "36b37cc3-88e8-417f-9815-3c5a9535b210",
-          "params_sha256": "0d1b6a6301a1f48e7121202cc83e8b7b90695ae0b04780ba265746f1cf0751d0"
+          "id": "642bc57a-e75f-411e-9c82-1fbb07dae102",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "90c19f11-0d0f-4fa8-9042-601910af23e4",
+          "params_sha256": "b1d5828530aaf936c59f3badb552aae64c3692591d9b3289580abbc5c0824f1f"
         },
         {
           "bytes": 887,
           "method": "steps/sessionStart",
-          "id": "cc09ceee-5c03-4236-b3c6-89367c3670a1",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "210436d7-9e12-464d-82af-78da81c66f08",
-          "params_sha256": "d184c21f5bda0c2249bd9ab1e4b23af0858f383185106b18d007cbdd51655e58"
+          "id": "a8ac2132-b589-4216-b173-671ebb6159c5",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "2f47dcb6-e020-4bdf-be32-ad0e620ef78a",
+          "params_sha256": "ef583a729333c8d33cb46506c74735c3bb3e6079a07c5a19b9f78ebb1b10bb82"
         },
         {
           "bytes": 866,
           "method": "steps/turnStart",
-          "id": "ca75288b-449f-4f84-a86d-402b0562ba9f",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "9556668a-bd37-4fe0-9866-fd334389fcdf",
-          "params_sha256": "ac5314fefc9ce7a27ddd2724ae3360cac6f7022c8ca410978bf4cab29890e044"
+          "id": "15e9ecfe-d1a0-4492-b646-0eb3170aa8b1",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "89502dbd-5968-4b25-81b4-6966cad86e1c",
+          "params_sha256": "481b51de1d4c165e3dc17c6ceccb7fa6437e9eb606efe3ad4d5a0f112fc05534"
         },
         {
           "bytes": 873,
           "method": "steps/userMessage",
-          "id": "23309126-d068-4619-84cd-a1fa57859634",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "932ac272-b941-446b-8cb3-0b9ec6f130fa",
-          "params_sha256": "f875e6041cdd64b288e480fb131a797cd9fb47a5c7fafce848e31047c0b60f09"
+          "id": "badc374a-5bb3-49ca-bacd-22929c57de0d",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "388fdb23-5486-49e0-8c56-1d66411d621e",
+          "params_sha256": "9044e6b9d84c1e7a46dfff187db886a0fe9dec01a8bddc1396b428709b900756"
         },
         {
           "bytes": 836,
           "method": "steps/agentResponse",
-          "id": "b1e6681c-f2aa-4c84-9c3b-a7c70edb93ee",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "fb7eb279-f12b-4357-99cf-b6c7f08115d7",
-          "params_sha256": "bfd25964dde3d3bcd43864a7dcfcf6e91e73d9d4e2e0d88920d6b44b7ec44fe9"
+          "id": "18390381-c2a3-495e-b207-89128a909ba5",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "d255a759-4b1c-435a-a602-0bfc058be38d",
+          "params_sha256": "c3e35c2d4685598194c4c06012c606052242a0a8798f8f4d0596bf20d0071507"
         },
         {
           "bytes": 856,
           "method": "steps/turnEnd",
-          "id": "fa7e8568-2b61-4a6e-9700-c6ca2c73b3ab",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "f7b03ae7-e8b6-4ce1-ab5e-130749a2e5c1",
-          "params_sha256": "b40f6916543f121620bd3887c2d29e3e2ed2e41ce4e1fcf45af6efe60a7c2fe7"
+          "id": "d4794990-5e08-42b5-9af0-0287f339762c",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "0794bd4b-6470-49a1-aad8-3d3e471cf6e6",
+          "params_sha256": "edd15176df1fba28deb89bae4a876fa0218ab2d86e2a38f9ba8372ffbf647fe4"
         },
         {
           "bytes": 760,
           "method": "steps/sessionEnd",
-          "id": "bd172d92-4588-49e4-8875-ec378137fc73",
-          "session_id": "0b0b0e1b-4514-469b-af1b-b1f0edabd882",
-          "request_id": "4d256bd9-c7c3-4c00-b05b-a45fd47a443a",
-          "params_sha256": "53a1602664e6436b66dee2334d48f3fc1ac3909ff1e89aeb1329c723e869c7e6"
+          "id": "59dd830e-f0d2-4cb3-a6a3-dac9ffa6774b",
+          "session_id": "7f9223aa-b9c6-450a-af3d-302438a9a960",
+          "request_id": "9cff4299-110b-453b-ae9b-e6f845b5f9ef",
+          "params_sha256": "f84d2103b1c0b686fb42e714952804a20ae53f5d0ca5175ff01e1d3fb0712cbc"
         }
       ]
     },
     {
       "rep": 5,
       "claude_exit": 0,
-      "duration_s": 7.2,
-      "endpoint": "http://127.0.0.1:49461/length",
-      "guardian_port": 38955,
+      "duration_s": 6.2,
+      "endpoint": "http://127.0.0.1:33785/length",
+      "guardian_port": 45307,
       "target_created": false,
       "target_bytes": 0,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782732441",
-        ".claude-config/projects/-tmp-acs-length-5-0zt-dmxy/acad1512-12ee-4a39-94e4-63c9de01e581.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785866878",
+        ".claude-config/projects/-tmp-acs-length-5-ov-o2coa/059d3737-8ae0-473e-9ad4-90dd63f8b08f.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/3cd275c1968452df.json",
+        "guardian-state/3cd275c1968452df.lock",
+        "handshake-cache/a1bbd29928536c273634bdc4f8fd156ce2540b2e532b5c67c5a95d80e7284f49.json.ended",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:38955/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782736.027,
+          "t": 1795785869.963,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 61051,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -689,13 +785,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782736.111,
+          "t": 1795785870.036,
           "mode": "length",
           "path": "/length/v1/messages?beta=true",
           "bytes": 62831,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -723,71 +820,89 @@
           "tool_result": "<tool_use_error>InputValidationError: Write was called with input that could not be parsed as JSON.\nYou sent (first 200 of 922 bytes): {\"file_path\": \"report.txt\", \"content\": \"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\nCommon causes: unescaped backslashes in file paths (use / or \\\\), unescaped control characters, or truncated output. Retry with valid JSON.</tool_use_error>"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785869.966,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 6994,
+          "declared": null
+        },
+        {
+          "t": 1795785870.036,
+          "event": "close",
+          "mode": "length",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=acad1512 req=71edad75",
-        "[guardian] steps/sessionStart session=acad1512 req=59aabb72",
-        "[guardian] steps/turnStart session=acad1512 req=1f4a8b27",
-        "[guardian] steps/userMessage session=acad1512 req=51ff3938",
-        "[guardian] steps/agentResponse session=acad1512 req=acb5a548",
-        "[guardian] steps/turnEnd session=acad1512 req=276a384a",
-        "[guardian] steps/sessionEnd session=acad1512 req=632b8d3b"
+        "[guardian] handshake/hello session=059d3737 req=53a326db",
+        "[guardian] steps/sessionStart session=059d3737 req=02cf1461",
+        "[guardian] steps/turnStart session=059d3737 req=bea54cb0",
+        "[guardian] steps/userMessage session=059d3737 req=b3c31523",
+        "[guardian] steps/agentResponse session=059d3737 req=e54124cb",
+        "[guardian] steps/turnEnd session=059d3737 req=1c8c0ca2",
+        "[guardian] steps/sessionEnd session=059d3737 req=29c685a1"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "1a04a68b-384f-46e9-8316-7eaf312ca099",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "71edad75-03f9-461d-86da-26a9ffa0410b",
-          "params_sha256": "1a7dfd7ac505cc8c0c6a04ddd4851f4757613e6dc47b76b2318c97012f184aff"
+          "id": "825481bf-1d8d-473c-9c4c-27534f2fdf39",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "53a326db-fab6-4d83-856e-d085c8550af8",
+          "params_sha256": "40eb128cd94de7211846fc35840496c760fcfb2c2c354296e31b36827ffc83a9"
         },
         {
           "bytes": 887,
           "method": "steps/sessionStart",
-          "id": "dfaa25d3-f662-45f0-95a6-7077dbb55625",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "59aabb72-71a5-4cfe-9f45-ffee79683951",
-          "params_sha256": "3664f91337813d2b7242c1051a799eb03dafe341dea7ef641fd5f8ead9a5cf38"
+          "id": "3514140e-8e37-41eb-8070-c6c03b8f882a",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "02cf1461-cf89-4f72-a85b-f0d2e0e4b0fa",
+          "params_sha256": "f9ec1d365f754f27da33cf11b2d42b0645f14a9bd830622eeed4752c16c611e8"
         },
         {
           "bytes": 866,
           "method": "steps/turnStart",
-          "id": "9379d168-d971-4a58-bda1-bdaef073c26b",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "1f4a8b27-f406-45ea-a932-1f1d41783348",
-          "params_sha256": "31161153c2c3747e4c6f8562167ad48efb066055d1ed8548a26f6916e3ae0b48"
+          "id": "038729f3-55cb-4580-a607-5dd5a4537d04",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "bea54cb0-9e48-4767-8631-b9deceb117fb",
+          "params_sha256": "0fa7b447fb669e2d1cf57109d772b0c2721027e5414b5251ea3b2788b1c9784a"
         },
         {
           "bytes": 873,
           "method": "steps/userMessage",
-          "id": "6856179a-9063-4ecf-8b48-f3f6e9d85b79",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "51ff3938-e009-4683-82dd-2547f9091ab6",
-          "params_sha256": "318ed7906ec9c0da5d4a443a9390a0da261aa97856f8cf8c990d3269ff6e25af"
+          "id": "ab49f402-8cfc-46dc-94c2-857c89b109e6",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "b3c31523-8dc3-4039-ad49-cd911c4f16a3",
+          "params_sha256": "15f7fd473524bec4ff39b126d754b274b63f5ff61deb0d84f5e0315dfc04b2fe"
         },
         {
           "bytes": 836,
           "method": "steps/agentResponse",
-          "id": "854a3929-25fd-4e31-bf4b-2050af603214",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "acb5a548-90b4-4cc6-92d9-2db8a444f421",
-          "params_sha256": "b555b4b7bfb0b55cdf6149e184d524dfa106d460a1901026745d1f84803520e3"
+          "id": "fc5609ad-e4d5-4532-8d60-fff438a79262",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "e54124cb-b9af-43b0-8630-91239737c8f8",
+          "params_sha256": "b59b35095e302a37ef294ce7f62d0a85602c842eb3f0e0e9ac3fbaed1f6ced16"
         },
         {
           "bytes": 856,
           "method": "steps/turnEnd",
-          "id": "b10dc99b-94d8-45a0-b6a6-2366f1446d62",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "276a384a-597a-4e38-850a-fa735a428ca8",
-          "params_sha256": "abbdf182092bdc80f0581b1dc8d9f3c6529a1b151e22ff8c3f4eaf10b49858a2"
+          "id": "8e541b3a-92e3-4a9a-8f2e-66e3e6f42634",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "1c8c0ca2-ef67-4d33-afb1-abfa24c3eeae",
+          "params_sha256": "1b838576100b32eac0f138acf24c481d533e18a232752a9b9de6621428d109dd"
         },
         {
           "bytes": 760,
           "method": "steps/sessionEnd",
-          "id": "70e07986-7e1c-4ee3-a11a-5147d4c65432",
-          "session_id": "acad1512-12ee-4a39-94e4-63c9de01e581",
-          "request_id": "632b8d3b-9ebe-4960-94f9-e1bff8f778b3",
-          "params_sha256": "a832aada946e2fd3fc55d7dec54fbe5430169c0d36b124554c0790dae9b77d86"
+          "id": "7a3ca20d-42c7-4630-ae34-c02c72e40658",
+          "session_id": "059d3737-8ae0-473e-9ad4-90dd63f8b08f",
+          "request_id": "29c685a1-7e71-448b-8292-e6453556dc0f",
+          "params_sha256": "a741cf8295900b4df881a5781448b70447f0cbb0e045027780b6862e51a4a6ef"
         }
       ]
     }

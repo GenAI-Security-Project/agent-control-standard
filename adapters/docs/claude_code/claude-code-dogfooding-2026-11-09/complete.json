@@ -9,32 +9,36 @@
     {
       "rep": 1,
       "claude_exit": 0,
-      "duration_s": 10.2,
-      "endpoint": "http://127.0.0.1:37399/complete",
-      "guardian_port": 43097,
+      "duration_s": 8.3,
+      "endpoint": "http://127.0.0.1:58763/complete",
+      "guardian_port": 36371,
       "target_created": true,
       "target_bytes": 2120,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782700079",
-        ".claude-config/projects/-tmp-acs-complete-1-y1zzm1tu/c281c1b5-2b68-4fb9-acc2-57b53315dbea.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785828186",
+        ".claude-config/projects/-tmp-acs-complete-1-6wpnvzj9/512e8c22-4e6d-4930-a1be-7ad711588830.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/5b5545eda77e557e.json",
+        "guardian-state/5b5545eda77e557e.lock",
+        "handshake-cache/cea75ff34a33819bb9f5acd91db77393fc5ee6456fbed38f7f84951bbb826858.json.ended",
         "report.txt",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:43097/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782703.569,
+          "t": 1795785831.063,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 61057,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -62,13 +66,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782706.874,
+          "t": 1795785833.744,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 63634,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -96,124 +101,146 @@
           "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785831.064,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 15558,
+          "declared": null
+        },
+        {
+          "t": 1795785833.744,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=c281c1b5 req=d1bf0954",
-        "[guardian] steps/sessionStart session=c281c1b5 req=f707b4f8",
-        "[guardian] steps/turnStart session=c281c1b5 req=c443665f",
-        "[guardian] steps/userMessage session=c281c1b5 req=b7800b1d",
-        "[guardian] steps/toolCallRequest session=c281c1b5 req=31cfc968",
-        "[guardian] steps/toolCallResult session=c281c1b5 req=731060d5",
-        "[guardian] steps/agentResponse session=c281c1b5 req=5bcd84bd",
-        "[guardian] steps/turnEnd session=c281c1b5 req=d89bbbff",
-        "[guardian] steps/sessionEnd session=c281c1b5 req=aee89f9e"
+        "[guardian] handshake/hello session=512e8c22 req=3f0004fb",
+        "[guardian] steps/sessionStart session=512e8c22 req=1212cace",
+        "[guardian] steps/turnStart session=512e8c22 req=e5571c0a",
+        "[guardian] steps/userMessage session=512e8c22 req=d5b1a4ae",
+        "[guardian] steps/toolCallRequest session=512e8c22 req=31cfc968",
+        "[guardian] steps/toolCallResult session=512e8c22 req=bcafd7c1",
+        "[guardian] steps/agentResponse session=512e8c22 req=be66d564",
+        "[guardian] steps/turnEnd session=512e8c22 req=7b5660d9",
+        "[guardian] steps/sessionEnd session=512e8c22 req=4a371513"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "544a9af2-cc83-4a49-96c3-c6003fd5ea21",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "d1bf0954-cb74-4687-9376-20519a8505d9",
-          "params_sha256": "69e4c8dad18c37cc973c4499c147748e5db36d16ee654228425cc389b1654bfe"
+          "id": "e5c585fe-f6e9-495c-8a6e-dbbc0d96a15d",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "3f0004fb-54a1-4a19-9b95-902f24d4cae6",
+          "params_sha256": "04ce920bbd32fdca718e1b5246d24d9589915c5a9f8b1dc9bc9a23496f81462e"
         },
         {
           "bytes": 897,
           "method": "steps/sessionStart",
-          "id": "1ec59278-69fb-4e2f-a544-46d966b236bf",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "f707b4f8-b181-416b-a76a-b575f5442ad7",
-          "params_sha256": "3f3aedd3de034a8e5731c3f9f04b637f3c064c942e4a08a889b112a88d1b982e"
+          "id": "4c4ffb8b-4c9c-4835-b7b9-98c9e0edf1bc",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "1212cace-c1f9-4c08-adde-044dca13ae45",
+          "params_sha256": "690010e8afe3192a09acd20d5337e64efeba78af6c114791fd3e1496d0335f46"
         },
         {
           "bytes": 872,
           "method": "steps/turnStart",
-          "id": "aaf15964-5235-4336-87b3-fd5e734934a7",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "c443665f-ad9a-4c48-8a98-af02db1250e7",
-          "params_sha256": "fb6a39854c1b7900915b3dc41d5d3999521cdbafd621e563a9de530355c5a7f0"
+          "id": "4092e06e-d8af-4b2c-857a-b049db309bb7",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "e5571c0a-f005-4af3-947f-bb880d5c19a3",
+          "params_sha256": "632743e858318cbc06290e176340e5778d5bf12b24589ba5cbd7086b7834ca13"
         },
         {
           "bytes": 879,
           "method": "steps/userMessage",
-          "id": "0799628f-9b5a-4880-9377-29e8a9033867",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "b7800b1d-a802-4dea-bf42-164d0ec007e7",
-          "params_sha256": "1b18039f0752fa74a44f57d0f5cb3572a0ea5dc12458e2aa0fc902c851068854"
+          "id": "775bbbd8-0f5b-4422-b4d1-e146289f63d5",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "d5b1a4ae-d7bb-4e49-b211-4cd915013488",
+          "params_sha256": "3b68d995b6039c547d6f9ef3f8c7434aac94e12e59013122cbe4ad66c5edddea"
         },
         {
           "bytes": 3090,
           "method": "steps/toolCallRequest",
-          "id": "dea1d876-bdce-4eed-a68c-391a12cf8e97",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
+          "id": "eb5eb600-a2af-4985-b1d3-d861da969e8e",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
           "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
-          "params_sha256": "0ea0d4800327407811eb2dfd0c0201d3d8ddd6d380d88049a1aa709267c634b0",
+          "params_sha256": "06a785dd64017f0e6e52688d675396b016ac418f83b8662b873560ab2ccc0c64",
           "tool_name": "Write",
-          "arguments_sha256": "b50be0667f014614f80701bdae1ceb936e77253f1c81bf6a76dc5bf3fd7d612a",
+          "arguments_sha256": "45a41e6e6467a951d56cdde1d01e5bd8d69dbb6726140011baffcf8e3199f31f",
           "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
         },
         {
-          "bytes": 3236,
+          "bytes": 3237,
           "method": "steps/toolCallResult",
-          "id": "ae0c957e-8f2d-4ea9-80b3-f3e9edf06852",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "731060d5-2c1a-46d1-8802-337b5f54acfe",
-          "params_sha256": "2be78dda206842cf857c87965e51891f6422b781cecd1cb712875ed3ee301fa3"
+          "id": "faaec1da-7055-4f59-8a1a-b91983f1e4d5",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "bcafd7c1-80f4-4fc3-b981-583af4a19a95",
+          "params_sha256": "a30709e8613a4bd63eed32f804e4f3aad9df93dba75c194c32412baab69d1df6"
         },
         {
           "bytes": 842,
           "method": "steps/agentResponse",
-          "id": "f2b8777a-1221-4e4a-b0fe-d29b5fd80f20",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "5bcd84bd-db89-4363-8fe0-66e6b8c34873",
-          "params_sha256": "acb7f484d0a5cd596025aa02f61635af6da88f73d9cdc88e08d7014f4ceee24a"
+          "id": "461c73be-6404-4cf8-b9c0-f11e7287730e",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "be66d564-dc5f-4481-b2b6-5bdd18b650ae",
+          "params_sha256": "8b7fbe94b3611bd85eb7b7f8df24f8ac21321b4344e0876ca163793481d20d2d"
         },
         {
           "bytes": 862,
           "method": "steps/turnEnd",
-          "id": "8d88ad64-6fc5-46c7-bd93-34cdb2b0259e",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "d89bbbff-f027-4174-af60-f3a337f8431c",
-          "params_sha256": "aad63e5b345f1173f4fffb6f90f4e46b18e0897d6c9fd81c55b6d195a9bd9354"
+          "id": "65c89828-c998-4eb9-94e0-7360d4cda75f",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "7b5660d9-173c-4591-8fc1-3e0aa1410aad",
+          "params_sha256": "7b18022917c9cb0a2cd207cdca2a4a36c951fb70e2722eee2ef5f835591453b1"
         },
         {
           "bytes": 766,
           "method": "steps/sessionEnd",
-          "id": "42638ed6-cdea-43fc-a6cc-b489e7fba00b",
-          "session_id": "c281c1b5-2b68-4fb9-acc2-57b53315dbea",
-          "request_id": "aee89f9e-b3a3-459a-ba18-97338d9a8de2",
-          "params_sha256": "50b8ea6dfd7bef7c72610c635a74e40e514535069af75e641d80600486e85d36"
+          "id": "c709a885-555f-4db7-9ca1-7bbdd05ab4f0",
+          "session_id": "512e8c22-4e6d-4930-a1be-7ad711588830",
+          "request_id": "4a371513-4317-4318-974d-5d5e9c15f031",
+          "params_sha256": "4060ce294cca3811045ecb189e87ed65a9d1a4615eccf56ac4e9df9fbd019336"
         }
       ]
     },
     {
       "rep": 2,
       "claude_exit": 0,
-      "duration_s": 10.2,
-      "endpoint": "http://127.0.0.1:54495/complete",
-      "guardian_port": 39231,
+      "duration_s": 8.4,
+      "endpoint": "http://127.0.0.1:53945/complete",
+      "guardian_port": 42813,
       "target_created": true,
       "target_bytes": 2120,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782711730",
-        ".claude-config/projects/-tmp-acs-complete-2-gcrieqoi/66611931-3bd6-4180-8ce9-5253052f3b9d.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785837587",
+        ".claude-config/projects/-tmp-acs-complete-2-aoyf9pjr/01395c32-44db-434d-bd1d-801df717fe69.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/a8150897b6858d2e.json",
+        "guardian-state/a8150897b6858d2e.lock",
+        "handshake-cache/8adb22109d9afe31ed325160602ef671c838067d075d9370c3fd59195fe8c3fa.json.ended",
         "report.txt",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:39231/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782715.239,
+          "t": 1795785840.496,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 61057,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -241,13 +268,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782718.597,
+          "t": 1795785843.183,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 63634,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -275,124 +303,146 @@
           "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785840.497,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 15558,
+          "declared": null
+        },
+        {
+          "t": 1795785843.183,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=66611931 req=460176cc",
-        "[guardian] steps/sessionStart session=66611931 req=8a53a75c",
-        "[guardian] steps/turnStart session=66611931 req=cb72236f",
-        "[guardian] steps/userMessage session=66611931 req=98e0ad85",
-        "[guardian] steps/toolCallRequest session=66611931 req=31cfc968",
-        "[guardian] steps/toolCallResult session=66611931 req=d4bf6334",
-        "[guardian] steps/agentResponse session=66611931 req=625ff46b",
-        "[guardian] steps/turnEnd session=66611931 req=c0213f71",
-        "[guardian] steps/sessionEnd session=66611931 req=02df117f"
+        "[guardian] handshake/hello session=01395c32 req=afe01d0b",
+        "[guardian] steps/sessionStart session=01395c32 req=12d2bb30",
+        "[guardian] steps/turnStart session=01395c32 req=e8c15777",
+        "[guardian] steps/userMessage session=01395c32 req=9e200bae",
+        "[guardian] steps/toolCallRequest session=01395c32 req=31cfc968",
+        "[guardian] steps/toolCallResult session=01395c32 req=af9c5af6",
+        "[guardian] steps/agentResponse session=01395c32 req=eb29d818",
+        "[guardian] steps/turnEnd session=01395c32 req=3b7233cd",
+        "[guardian] steps/sessionEnd session=01395c32 req=2d3522e6"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "7a22e6f8-61a6-4dcc-815a-000917632889",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "460176cc-399a-4065-900d-49dcab1afb93",
-          "params_sha256": "ff33080e5808a27e4acccd875f9e4088ec00fc5cfe7294e37979f5f08ba2dc06"
+          "id": "0bdef9b0-f4d0-4ef4-88a2-69442339c738",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "afe01d0b-38d7-42ac-9586-545372d9ef0f",
+          "params_sha256": "6aa1c3d5132356dbd98b49a6c0fda015f365ef655aeeef5d647a5e754dc3600c"
         },
         {
           "bytes": 897,
           "method": "steps/sessionStart",
-          "id": "048d3cef-25d0-4448-b258-38ac55e9c5e9",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "8a53a75c-202b-47f9-a5ac-b6fa5de85895",
-          "params_sha256": "1b4f4a1f8f6f5830c41636d1755f7a878ab37514c069b438b60509e1ddcee536"
+          "id": "a752c4e3-b9bc-4dac-b03e-c5914bad4079",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "12d2bb30-ddf9-4b40-8b09-cbf1058e0ca9",
+          "params_sha256": "7f6af24ed6439d800818690c44390456a72efd91732357405477f2fc3013297d"
         },
         {
           "bytes": 872,
           "method": "steps/turnStart",
-          "id": "a66e86b6-3d46-4b02-b746-9522f78f5de2",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "cb72236f-5195-4a00-9e4c-6ff10d7d31d1",
-          "params_sha256": "8422f7b5082f2de0ff3847e1fe8f9284eb4ccb36249d371d1f66f5e233457f5a"
+          "id": "3865d786-1457-4b80-a590-9577fbad2c3b",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "e8c15777-4621-438e-baa0-7af4c9b2f133",
+          "params_sha256": "10de40d58b08598c257f7026242f9f055a54012ac4e272f8a75970a7a4f25ab8"
         },
         {
           "bytes": 879,
           "method": "steps/userMessage",
-          "id": "c3aae798-d556-486e-bfaa-7da8127acab3",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "98e0ad85-13e5-4598-bc87-f657760d981a",
-          "params_sha256": "1531a779332403665c11aed8c1331e36430cc410c7eb7e605bda9bb36f64570c"
+          "id": "c239e933-4996-4867-bed6-8844ada4a520",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "9e200bae-4e70-4e42-9896-647ae03d08e9",
+          "params_sha256": "5804aefae0b1560ab44610da5c3d587269b5ab4a7b526ca7db6bd53bf3bfe935"
         },
         {
           "bytes": 3090,
           "method": "steps/toolCallRequest",
-          "id": "be2bb7cb-bb16-4781-b393-1ff5f07ea6e5",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
+          "id": "e15a07ae-f84d-41e2-8235-ef1826d70625",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
           "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
-          "params_sha256": "c39553ce4177d0b10d619812df927027dc6b66094409b07cb0f2bbb597a3be28",
+          "params_sha256": "806bf54fd52b4f9655a1c8e28e37afdf0ef8a3f22e9251c576aee43ae57fb197",
           "tool_name": "Write",
-          "arguments_sha256": "a48068e6bafb72428b7e2f468a9e577c05fe51145909583c01aa652bb1b32210",
+          "arguments_sha256": "d6faf99db0d7645fbce60d393bf9537a26f39651d72f427b27a6f2fc4ba35291",
           "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
         },
         {
           "bytes": 3236,
           "method": "steps/toolCallResult",
-          "id": "6f411c05-40e8-4d0c-8ba0-ff6bdd6d5650",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "d4bf6334-658b-42c9-b04c-f2563a555ae5",
-          "params_sha256": "ea15b93ec2e7f3fa82a53d3dbd7e931ef6e03f4295043204b8e8a179aeb53f89"
+          "id": "2d8a7161-e828-45d9-ba77-a2670ea876e6",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "af9c5af6-ec53-4966-9dfd-a5c1b650f544",
+          "params_sha256": "a18f9423590a7be752fdf09286e70e4d16df95e1371eb0d99b4d550f8fe52708"
         },
         {
           "bytes": 842,
           "method": "steps/agentResponse",
-          "id": "992558ca-5c70-47f4-9cec-975c1e0e25c3",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "625ff46b-ab61-4c8a-86a1-b064f2b12dfb",
-          "params_sha256": "5edacc49acd0e1c7be372cad6f09704c44dadd3c7f1d83c11d2b04ecf2376442"
+          "id": "2d47d7f9-ce2a-4605-9db7-c44c1de80304",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "eb29d818-7460-427d-b5e8-efdac35d8783",
+          "params_sha256": "9c1c5408c87d8a60375944cd64f2a939dc7873cd0e6d1c76e668041c49b5332c"
         },
         {
           "bytes": 862,
           "method": "steps/turnEnd",
-          "id": "a075da6c-4900-4e3f-94e7-641eccb18e94",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "c0213f71-99b1-4e5a-9a9c-725890200937",
-          "params_sha256": "21c9bc2ea50f6b5b0b55673e51ebd14137e3672f3c2c7dcf3cfd5f707e05a40f"
+          "id": "972f2a90-17b4-48fc-a797-aec23737c1e3",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "3b7233cd-5f8c-4526-9cc8-194ee8451ff2",
+          "params_sha256": "97ca815620b43f453599cbb71d02153c0711fc0479b124972f9ab42d16ab521d"
         },
         {
           "bytes": 766,
           "method": "steps/sessionEnd",
-          "id": "4e24638e-6228-46ac-8a71-4a246026727c",
-          "session_id": "66611931-3bd6-4180-8ce9-5253052f3b9d",
-          "request_id": "02df117f-a8ea-4dd9-8238-f1dbbe2bdcd3",
-          "params_sha256": "dfa24dd6754a3b0a355721417e05dd69f7f2802394db783019fd7204aa57dbe5"
+          "id": "b47bb473-3af2-44ce-aa14-6da26f237aa1",
+          "session_id": "01395c32-44db-434d-bd1d-801df717fe69",
+          "request_id": "2d3522e6-8864-4503-9a0d-360eaa19c37c",
+          "params_sha256": "dab42c0ccda3d987e28263c4d6169d9114f3a4db838183bd6bc38a7f806fcb17"
         }
       ]
     },
     {
       "rep": 3,
       "claude_exit": 0,
-      "duration_s": 10.0,
-      "endpoint": "http://127.0.0.1:53373/complete",
-      "guardian_port": 34175,
+      "duration_s": 8.6,
+      "endpoint": "http://127.0.0.1:58709/complete",
+      "guardian_port": 40813,
       "target_created": true,
       "target_bytes": 2120,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782723432",
-        ".claude-config/projects/-tmp-acs-complete-3-9gezv38i/fd6a44ea-54a6-4c8a-b1ed-74c8df269834.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785847223",
+        ".claude-config/projects/-tmp-acs-complete-3-l19ocl35/af981674-2096-41ca-bce1-498f7f534c24.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/cd7c11f373b705a3.json",
+        "guardian-state/cd7c11f373b705a3.lock",
+        "handshake-cache/1f519ccf0a94802a37653e149ff43cdebbe36639c4919f9d24eb10a8588549d0.json.ended",
         "report.txt",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:34175/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782726.779,
+          "t": 1795785850.065,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 61057,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -420,13 +470,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782730.087,
+          "t": 1795785853.067,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 63634,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -454,124 +505,146 @@
           "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785850.066,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 15558,
+          "declared": null
+        },
+        {
+          "t": 1795785853.067,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=fd6a44ea req=90ff731f",
-        "[guardian] steps/sessionStart session=fd6a44ea req=cad4c539",
-        "[guardian] steps/turnStart session=fd6a44ea req=4c52ca60",
-        "[guardian] steps/userMessage session=fd6a44ea req=93574585",
-        "[guardian] steps/toolCallRequest session=fd6a44ea req=31cfc968",
-        "[guardian] steps/toolCallResult session=fd6a44ea req=e2b4f53b",
-        "[guardian] steps/agentResponse session=fd6a44ea req=8d25e533",
-        "[guardian] steps/turnEnd session=fd6a44ea req=736cc916",
-        "[guardian] steps/sessionEnd session=fd6a44ea req=15131dfe"
+        "[guardian] handshake/hello session=af981674 req=4fbf4371",
+        "[guardian] steps/sessionStart session=af981674 req=a108ef17",
+        "[guardian] steps/turnStart session=af981674 req=0c0b6477",
+        "[guardian] steps/userMessage session=af981674 req=5c84efd7",
+        "[guardian] steps/toolCallRequest session=af981674 req=31cfc968",
+        "[guardian] steps/toolCallResult session=af981674 req=2feb790b",
+        "[guardian] steps/agentResponse session=af981674 req=385bf2c0",
+        "[guardian] steps/turnEnd session=af981674 req=84d37d79",
+        "[guardian] steps/sessionEnd session=af981674 req=ab15b13d"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "73c7bda1-e44f-400c-b4d8-e6b7729c3618",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "90ff731f-c58a-4d33-8ba6-56ad6b01b23c",
-          "params_sha256": "e1f88ff6a252fb54b9a11da02f963287fb26001a5a3c170601958de2b65e9e2c"
+          "id": "f413b80c-9173-4ee2-8189-70f8f265c576",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "4fbf4371-cd75-4f06-b0df-4abace43dbe9",
+          "params_sha256": "01a5b25d11bc96a6b50f74e90526637aefa2370e7353d6accc46be88c0ca71e3"
         },
         {
           "bytes": 897,
           "method": "steps/sessionStart",
-          "id": "a12f5e6d-fdda-4ab0-98d2-99ecc2450a00",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "cad4c539-1eac-40c8-ab41-1a920866aa10",
-          "params_sha256": "82d44c25a270921a582c2a59da2be4230c7aef8c77b606bd945256dba2c484fb"
+          "id": "01af49aa-2c43-4db5-adf8-2091394a4954",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "a108ef17-de22-4f35-97fe-29cb9fc97776",
+          "params_sha256": "d308b009e889b142610fa7fdd7cc0d57b4f9a80ec89e94a695c74a6547ab0132"
         },
         {
           "bytes": 872,
           "method": "steps/turnStart",
-          "id": "1cc89746-903e-4f99-a76e-e4a1b6e99822",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "4c52ca60-8eef-4f39-a3d6-e90ef01d2c5b",
-          "params_sha256": "026eaffecdeb5367b08d8e6e8b8028139eff7928bbb8957b8c2fbfdbb547711d"
+          "id": "2df1b379-8fc1-47cc-9944-2aa2caa0dfc5",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "0c0b6477-6c68-4336-9964-578e88aedc8e",
+          "params_sha256": "eaea5f2d4d201a796e9ba63794a125032ef9e02062359b968cf817d2b9fe655a"
         },
         {
           "bytes": 879,
           "method": "steps/userMessage",
-          "id": "aa7d2f1b-23ed-4e28-b246-a403d1df8895",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "93574585-8b0d-42c0-9f2e-3735345ea244",
-          "params_sha256": "beeef003dcc6dff39949a26f40a0516905ca877427f7a87f5b0d94b8587666c1"
+          "id": "44422f4d-dd94-47d5-8a26-4dde569a8761",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "5c84efd7-c8cb-4e99-ab20-3f3fa3bbab52",
+          "params_sha256": "0b465ee144d502f67c34cace962542267302906a2365edeb8ca765054ae26a50"
         },
         {
           "bytes": 3090,
           "method": "steps/toolCallRequest",
-          "id": "74a56c9e-3498-470e-a849-9284a68a2ec9",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
+          "id": "75a7f5c7-7997-4582-8cd4-c4042979ae07",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
           "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
-          "params_sha256": "36d797c4833100718779fe6ae86765801b41a5e338163dd37099f4f03b440b6e",
+          "params_sha256": "4c4f6f620b327ed4c66771034c1ae9c10086a42dd62a38aee13b487ac25073e5",
           "tool_name": "Write",
-          "arguments_sha256": "0b0cce2dd2bd8595223952c2e16878d0262dac6da62ac318ba6baa3e75d2fd93",
+          "arguments_sha256": "c0c5af1c3cfa35355d6230d8c1f4774a2370cdbce7fbefc8a1402c76c37c0a22",
           "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
         },
         {
           "bytes": 3236,
           "method": "steps/toolCallResult",
-          "id": "710364c7-83fe-4721-94f7-dc33d4298e2c",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "e2b4f53b-bb37-408d-92d4-b3b48abba30c",
-          "params_sha256": "e8f79a25774acd0b8b50aface810f43e6d619b633808eb22d9413e5461d57b17"
+          "id": "74ea828e-a7b5-45a9-a44d-1320e34d230f",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "2feb790b-f9b9-464d-85f3-e1b18d583d20",
+          "params_sha256": "d281081cdb8c18eb02bd9cd3c89bfb56eafb8b5a41657ebfd4776f465be9b21c"
         },
         {
           "bytes": 842,
           "method": "steps/agentResponse",
-          "id": "32d2047d-c14a-4a15-9572-cb148c56b6c8",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "8d25e533-4413-467b-aff7-93ddf4b46f9f",
-          "params_sha256": "e9b90e307d7724ca67b3fcf202627bd7cb3568897134ffd459ec2c3bcdca1c1b"
+          "id": "2a114b43-7c78-49e0-a57e-e1babd89a4bb",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "385bf2c0-a526-481b-9783-0f9a32e23a24",
+          "params_sha256": "9813bf9f7ba247cd203b6cdeb07e21b78758ec4ecc1015067828340de1b4094a"
         },
         {
           "bytes": 862,
           "method": "steps/turnEnd",
-          "id": "8c81f1bb-561e-4fda-9757-b08157dd229c",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "736cc916-c79d-4766-83c0-829e16f14083",
-          "params_sha256": "664c725c540cb4e08004e51f0c28008e98d62c68654b769474d14e158d5daf38"
+          "id": "b4977342-a5f0-4176-a1bd-d66e049ffe97",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "84d37d79-de4b-4146-912d-ba8d54b880fa",
+          "params_sha256": "cdc76a1fa116816d251d6d2222902db7b962e5ffe66d3d3a7291197af4da4dab"
         },
         {
           "bytes": 766,
           "method": "steps/sessionEnd",
-          "id": "2a90ca2b-8acc-4fc3-92c6-826c57b65f29",
-          "session_id": "fd6a44ea-54a6-4c8a-b1ed-74c8df269834",
-          "request_id": "15131dfe-a34d-4e49-8f39-3d22436a2292",
-          "params_sha256": "7faa4a834356e1fd9a40b271292bc9c9ca186948de9a78051e5997adfadf772e"
+          "id": "6a366c05-9742-43c6-a162-be5903c5cc33",
+          "session_id": "af981674-2096-41ca-bce1-498f7f534c24",
+          "request_id": "ab15b13d-32f5-4075-a883-00ace8c39d37",
+          "params_sha256": "cbd5232b4a8f5c135920e120f55334842314fde99cecc95a6aa96a89d646d117"
         }
       ]
     },
     {
       "rep": 4,
       "claude_exit": 0,
-      "duration_s": 10.7,
-      "endpoint": "http://127.0.0.1:52201/complete",
-      "guardian_port": 43567,
+      "duration_s": 8.7,
+      "endpoint": "http://127.0.0.1:57715/complete",
+      "guardian_port": 40397,
       "target_created": true,
       "target_bytes": 2120,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782734928",
-        ".claude-config/projects/-tmp-acs-complete-4-rd5wd5gg/dc14876c-f25a-4042-a741-fdd223992fc1.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785857045",
+        ".claude-config/projects/-tmp-acs-complete-4--v9y0olg/695a1bf6-0712-4674-a7d8-640b8339de82.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/279bbd29547be3da.json",
+        "guardian-state/279bbd29547be3da.lock",
+        "handshake-cache/c0de7740687fb44f7ca3c26798c17c884b0155174b63ee5d305036e912a1661f.json.ended",
         "report.txt",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:43567/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782738.997,
+          "t": 1795785859.92,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 61057,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -599,13 +672,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782742.277,
+          "t": 1795785862.641,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 63634,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -633,124 +707,146 @@
           "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785859.922,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 15558,
+          "declared": null
+        },
+        {
+          "t": 1795785862.641,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=dc14876c req=9b69202a",
-        "[guardian] steps/sessionStart session=dc14876c req=7273b8a8",
-        "[guardian] steps/turnStart session=dc14876c req=31ff95f3",
-        "[guardian] steps/userMessage session=dc14876c req=365ac4fe",
-        "[guardian] steps/toolCallRequest session=dc14876c req=31cfc968",
-        "[guardian] steps/toolCallResult session=dc14876c req=18c147b9",
-        "[guardian] steps/agentResponse session=dc14876c req=923a83d8",
-        "[guardian] steps/turnEnd session=dc14876c req=cfd0e161",
-        "[guardian] steps/sessionEnd session=dc14876c req=26b88ad6"
+        "[guardian] handshake/hello session=695a1bf6 req=c5f3e43c",
+        "[guardian] steps/sessionStart session=695a1bf6 req=3fae4e4d",
+        "[guardian] steps/turnStart session=695a1bf6 req=cd641beb",
+        "[guardian] steps/userMessage session=695a1bf6 req=a06bca94",
+        "[guardian] steps/toolCallRequest session=695a1bf6 req=31cfc968",
+        "[guardian] steps/toolCallResult session=695a1bf6 req=c21f16f5",
+        "[guardian] steps/agentResponse session=695a1bf6 req=d526a456",
+        "[guardian] steps/turnEnd session=695a1bf6 req=497b50e5",
+        "[guardian] steps/sessionEnd session=695a1bf6 req=46837b2c"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "966dda0b-9924-4a7e-b57d-f6e61a3073bf",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "9b69202a-8252-474d-a02f-d5cc31254bd8",
-          "params_sha256": "b625d75b1deaabda5905aa2c27981ec6a14dde408deb4ce7e6a2bd2104a7bfe5"
+          "id": "6b718b8c-114f-40b6-9b3c-0f091597ccf9",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "c5f3e43c-3e59-4158-8168-fc4b56abb4b8",
+          "params_sha256": "30ec2ab0e7c29bd31f2ba148dc3a02da3d93d57c5fae500cc75fe2923702db0a"
         },
         {
           "bytes": 897,
           "method": "steps/sessionStart",
-          "id": "39653660-797d-4c8e-8315-d5387e60fd7e",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "7273b8a8-46d5-41c4-8954-192041a3df5c",
-          "params_sha256": "19125a53fcdfc45b762d1ef8e398ee3392f495baec579129083a81d51f8b031c"
+          "id": "bce29e37-7ca5-459b-b1db-0980d7919e6c",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "3fae4e4d-c7fe-44c6-9de4-1554e6fbb1b3",
+          "params_sha256": "7be7eed4c5c2a1e2e737573ff531a316248d5a7a76b68e5fb8712f415120f0ff"
         },
         {
           "bytes": 872,
           "method": "steps/turnStart",
-          "id": "456dc9ba-c994-4027-bbee-dbc0a950bc7b",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "31ff95f3-e128-4f3f-a181-5b8aaa90abab",
-          "params_sha256": "42e94fe848408fed7e78c63732d9778ec739cede691ea4da61ecae370a24877e"
+          "id": "fee666db-b93d-4265-a5ba-fe186c3278ea",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "cd641beb-601b-43ad-b15a-c0115e91fb53",
+          "params_sha256": "415d91a3afea75568604ef4f6ea426bb6f3606b04f295fd16ffb0ddbd23ea0fb"
         },
         {
           "bytes": 879,
           "method": "steps/userMessage",
-          "id": "92323436-c593-4ef5-a99f-9be868c9b78d",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "365ac4fe-4313-44bf-96f5-21bb1845b3c7",
-          "params_sha256": "9897d916feea3e4c9c612731931028297bcbe85a82ded44f1f89ab5af41788e3"
+          "id": "c55ecf4d-d5f3-4358-a771-8f6b1463cafb",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "a06bca94-5497-4e13-9c14-f603ad12e3e2",
+          "params_sha256": "c61bb4190638fe3aab6c2bb8f73a525919b7bba07bb82da3fd6b931632dba695"
         },
         {
           "bytes": 3090,
           "method": "steps/toolCallRequest",
-          "id": "d2b915c2-e05d-495d-a1cf-8e3bc0e0cd7e",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
+          "id": "b19115a4-d500-4ccc-bb35-62f02d05c87f",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
           "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
-          "params_sha256": "5edb73e8f20648b3439d72142d8a4f406d3d3fde1f581750904f5fcafd8483d0",
+          "params_sha256": "46897bc733de3aa0485b3a709bd9acb914ebf42585ca6844d20a49a40e704231",
           "tool_name": "Write",
-          "arguments_sha256": "75f62cbdcf785ea43aca0a43e2565b464eb90795d2832a82d865f482a7c7d394",
+          "arguments_sha256": "51ee77dcc547c27de4974205347bc3cc385a20517229934e07fc59304598786f",
           "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
         },
         {
           "bytes": 3236,
           "method": "steps/toolCallResult",
-          "id": "0103debc-bd41-4b74-88f4-134a94eb0f15",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "18c147b9-0d7f-4ecc-9286-a5dd0d861754",
-          "params_sha256": "558f35e02dbf42478a1abc052f6929fdada62bab0bb427b7151d49babb0fcb6a"
+          "id": "5e07f830-ca71-4e68-8a44-8b980a772472",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "c21f16f5-d1c5-40d6-b3f9-bd4808db1d07",
+          "params_sha256": "3c8c4e4ad823ce8768ad8356a61090237343dac39126579b64bff3db1295a1ad"
         },
         {
           "bytes": 842,
           "method": "steps/agentResponse",
-          "id": "495b19c0-32de-443d-9770-e4b1e9fa4646",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "923a83d8-c312-49d0-b50d-f7742e6f19b0",
-          "params_sha256": "f23b4a744cb75ce8341f20432e04f6c2e0f2ef060055b52300d15cdb94b13ce5"
+          "id": "f074ce27-dbf3-42aa-9fcc-c0c85060cb56",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "d526a456-1cbb-4dbe-813b-f09a2f476b6c",
+          "params_sha256": "b95b9265d17f0431ef38a90d48ba6faae906c7f5ecb1d8f792a3ae4b7a60078b"
         },
         {
           "bytes": 862,
           "method": "steps/turnEnd",
-          "id": "0ce7cda7-d516-463b-94c2-29daf95bd3a1",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "cfd0e161-3058-47a9-bf33-a1a3b2ecbcb6",
-          "params_sha256": "e98f622438b672e8daea5bba4cfc40e5feddd91b31d7a18ebcc909eabb372288"
+          "id": "eae45123-c128-4564-954f-182cbcbde134",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "497b50e5-a894-4ae4-a7ac-6352b155f61d",
+          "params_sha256": "885aa1acbf341b4b48ed664e1f71ec7dec040d2af944f9c7625789ead560c336"
         },
         {
           "bytes": 766,
           "method": "steps/sessionEnd",
-          "id": "bef6ad09-e0c5-4e52-bef8-c0993d46b9d3",
-          "session_id": "dc14876c-f25a-4042-a741-fdd223992fc1",
-          "request_id": "26b88ad6-1c37-41d8-a1cd-b36d113de8b9",
-          "params_sha256": "e4b32c6a6b1c8af620b77a71689635a68456f1cdf5dfc6a29cc53c7235cd5998"
+          "id": "8af7b2da-be1b-4948-85c5-e3cee9933e9a",
+          "session_id": "695a1bf6-0712-4674-a7d8-640b8339de82",
+          "request_id": "46837b2c-0a89-4fef-ad87-b75af82cc14d",
+          "params_sha256": "953ccc3735109db287b68064f6190e746cc8fddff24dc3d1a707345d922fe8e1"
         }
       ]
     },
     {
       "rep": 5,
       "claude_exit": 0,
-      "duration_s": 10.2,
-      "endpoint": "http://127.0.0.1:42635/complete",
-      "guardian_port": 46079,
+      "duration_s": 9.3,
+      "endpoint": "http://127.0.0.1:36103/complete",
+      "guardian_port": 45175,
       "target_created": true,
       "target_bytes": 2120,
       "files_left": [
         ".claude-config/.claude.json",
         ".claude-config/.last-cleanup",
-        ".claude-config/backups/.claude.json.backup.1795782747058",
-        ".claude-config/projects/-tmp-acs-complete-5-77ss9-wu/c32b0b83-3b69-438d-a893-1829945469bd.jsonl",
+        ".claude-config/backups/.claude.json.backup.1795785866924",
+        ".claude-config/projects/-tmp-acs-complete-5-7jlv3pqv/77722746-62c7-4f5d-a1a2-4eee32cb3279.jsonl",
         ".claude/settings.json",
         "envelopes.jsonl",
+        "guardian-state/3bc6e85a13fffbe9.json",
+        "guardian-state/3bc6e85a13fffbe9.lock",
+        "handshake-cache/6d80dd5c50d6932827d29651fa1c40ecafd7bbea72fe8398e342e734416d5f48.json.ended",
         "report.txt",
         "stub.jsonl"
       ],
       "claude_stdout": "Done.\n",
-      "claude_stderr": "SessionEnd hook [ACS_GUARDIAN_URL=http://127.0.0.1:46079/acs ACS_HMAC_SECRET=shared-test-harness-secret-not-for-production ACS_HMAC_KEY_ID=test-key $GITHUB_WORKSPACE/acs/adapters/.venv/bin/python $GITHUB_WORKSPACE/acs/adapters/src/acs/integrations/claude_code/adapter.py] failed: Hook cancelled\n",
+      "claude_stderr": "",
       "stub_requests": [
         {
-          "t": 1795782750.368,
+          "t": 1795785870.519,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 61057,
           "endpoint": "messages",
           "stream": true,
           "turn": "first",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -778,13 +874,14 @@
           "tool_result": ""
         },
         {
-          "t": 1795782753.66,
+          "t": 1795785873.48,
           "mode": "complete",
           "path": "/complete/v1/messages?beta=true",
           "bytes": 63634,
           "endpoint": "messages",
           "stream": true,
           "turn": "after_tool_result",
+          "served": "text/event-stream",
           "tools_offered": [
             "Agent",
             "Bash",
@@ -812,92 +909,110 @@
           "tool_result": "File created successfully at: report.txt (file state is current in your context \u2014 no need to Read it back)"
         }
       ],
+      "stub_responses": [
+        {
+          "t": 1795785870.521,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 15558,
+          "declared": null
+        },
+        {
+          "t": 1795785873.48,
+          "event": "close",
+          "mode": "complete",
+          "how": "FIN",
+          "sent": 787,
+          "declared": null
+        }
+      ],
       "guardian_steps": [
-        "[guardian] handshake/hello session=c32b0b83 req=db0db67b",
-        "[guardian] steps/sessionStart session=c32b0b83 req=232ac2d2",
-        "[guardian] steps/turnStart session=c32b0b83 req=3d4326b3",
-        "[guardian] steps/userMessage session=c32b0b83 req=3cb02f20",
-        "[guardian] steps/toolCallRequest session=c32b0b83 req=31cfc968",
-        "[guardian] steps/toolCallResult session=c32b0b83 req=eea0a1c1",
-        "[guardian] steps/agentResponse session=c32b0b83 req=71038911",
-        "[guardian] steps/turnEnd session=c32b0b83 req=6443ee58",
-        "[guardian] steps/sessionEnd session=c32b0b83 req=58f0d60f"
+        "[guardian] handshake/hello session=77722746 req=3468136f",
+        "[guardian] steps/sessionStart session=77722746 req=0db7bb02",
+        "[guardian] steps/turnStart session=77722746 req=0fd9d19e",
+        "[guardian] steps/userMessage session=77722746 req=0fb1b1b2",
+        "[guardian] steps/toolCallRequest session=77722746 req=31cfc968",
+        "[guardian] steps/toolCallResult session=77722746 req=67309bb8",
+        "[guardian] steps/agentResponse session=77722746 req=247a0643",
+        "[guardian] steps/turnEnd session=77722746 req=4ed3bc04",
+        "[guardian] steps/sessionEnd session=77722746 req=11853d3e"
       ],
       "envelopes": [
         {
           "bytes": 999,
           "method": "handshake/hello",
-          "id": "176675f4-de62-4dfa-871c-4790c93edc64",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "db0db67b-c495-42c1-81e1-036b5b3aaac7",
-          "params_sha256": "970c859846b3ec7140d237febacc7cadbe078f4b7b801c5aa78dec36223dbc0d"
+          "id": "48f0545d-69e6-44ba-a068-4475764ad810",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "3468136f-b68b-4ea9-b976-baa75e47d9e5",
+          "params_sha256": "53862802cd287d506841d0f1bf019065984b5fda6572bda028c91d1166d29063"
         },
         {
           "bytes": 897,
           "method": "steps/sessionStart",
-          "id": "271e8ad0-2672-49bc-a90a-c371c2b96ed6",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "232ac2d2-e0c8-4eb7-b18b-673a4ef51b1a",
-          "params_sha256": "5a49bf4b3bbb30cf441a8fa794e24e32549a8e503fa9fe40b2bae5496b7a8f07"
+          "id": "9648e041-2d78-411f-bb7f-0cafe6139688",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "0db7bb02-0049-4377-a13a-3a63e03394ea",
+          "params_sha256": "4e7ad10803b8722e7f4ffe9b1cdbf6424ad02bebea2f5d506fbaa09c82aeff1e"
         },
         {
           "bytes": 872,
           "method": "steps/turnStart",
-          "id": "ec88d9de-4d95-4fc3-b6fd-d3007cb6eaf7",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "3d4326b3-6739-4c40-afdd-00f1073ad8cd",
-          "params_sha256": "f91d753d2988beb05ddf4019fa5943940e7fd9cf728935dc94e6b46dc4078a0a"
+          "id": "8b770dc8-d1c0-4141-96c7-7d97bb56d68c",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "0fd9d19e-aa86-4ba4-a585-88458e06a70b",
+          "params_sha256": "0fb6f4f3774862c83481a0ab9fd1a7a3a4984c95754f59f6c6ef8d54b548131b"
         },
         {
           "bytes": 879,
           "method": "steps/userMessage",
-          "id": "5a7f39cf-b4c4-47e2-b77e-cb307611169b",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "3cb02f20-5af8-4aa3-b8f3-09a3c9029903",
-          "params_sha256": "3fc78d0bdc92f5a4bf22cef95bc1ed6d05ca48c5da644eaafe78824b55b4d7ea"
+          "id": "4b440c51-b60d-4733-9ea7-c54c3ac2811f",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "0fb1b1b2-a28d-439e-9c32-28e6b5d0175a",
+          "params_sha256": "2fb49eab19cf1536fc50a813ad1bb854256fc6b6fd9e4879b831b3bcc3cfa0a0"
         },
         {
           "bytes": 3090,
           "method": "steps/toolCallRequest",
-          "id": "51142d6a-2a8d-4de6-afba-fa034c19666c",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
+          "id": "a473e1fd-dac0-4b02-8cfc-c421d8f4be00",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
           "request_id": "31cfc968-e2f2-5ffe-8ce8-e3e14f0d82e1",
-          "params_sha256": "17d5d40e2dac34b3df4c672c0109bff67104dc45a0c2a99e561e5ea4f242ae0d",
+          "params_sha256": "1e072aca755157bc2676733e339d3517658a35f2eb87544c5a8769bfe740add2",
           "tool_name": "Write",
-          "arguments_sha256": "1e083fec8c3bb959d2aead7443d80a5a2e194b998804e89f55b5ec2c7bccb30e",
+          "arguments_sha256": "811efa9e29d7d798bb6c9d119c227f3ec125f12e4fb23a98c1115b018e9db6e8",
           "arguments_head": "{\"content\":{\"value\":\"line 01: the quick brown fox jumps over the lazy dog\\nline 02: the quick brown fox jumps over the lazy dog\\nline 03: the quick brown fox jumps over the lazy dog\\nline 04: the quick brown fox jumps over the lazy dog\\nlin"
         },
         {
           "bytes": 3236,
           "method": "steps/toolCallResult",
-          "id": "e6b0729e-e8cf-4fdf-b61d-c8d5fa3cca56",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "eea0a1c1-ecd1-4cd4-865c-e324a316afac",
-          "params_sha256": "65f4b8d55faf0e2c2299daee2964b20daaf435cebbe5f2df7e98275cc68ce72d"
+          "id": "7dacccfe-3b6f-4fe2-9105-64b344c13b6e",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "67309bb8-388c-4583-a8b3-702d2645b8e5",
+          "params_sha256": "ad992c6fd006a23f9b16e02af33ae947ecba3b4e98ddd403fa17f28730c40537"
         },
         {
           "bytes": 842,
           "method": "steps/agentResponse",
-          "id": "b1f55924-be6d-475f-9b20-f90d1eb6e0be",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "71038911-3470-4433-a127-113bee7150c3",
-          "params_sha256": "53ce4baec594557d57a1e06ac26dd669617f7bab0bf649f1aba6c6257f8136f7"
+          "id": "4731fd90-42fc-48fe-af4e-2e46a8bdbc91",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "247a0643-c5fa-411d-9b38-63781cbb603c",
+          "params_sha256": "0525f24449e12ca54a2c814ea0861b67342ee04c8e18f95ae33320ce712ad124"
         },
         {
           "bytes": 862,
           "method": "steps/turnEnd",
-          "id": "0ffb9e13-c0a9-4832-bfbc-b395d90c5942",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "6443ee58-c942-453e-93f1-562fd67bbff9",
-          "params_sha256": "fd59a4b8771211d92ef27e11515d6badbb6e346611cd63b4b07ac8d451e8485b"
+          "id": "ed50c7b1-c036-437f-a11b-52cd88cabbbf",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "4ed3bc04-05b6-48ae-86ce-c0ceb88a491d",
+          "params_sha256": "49d4fcee1742cde5f15ae377eba7cd1787a85a55e80289b761ad0807a89f0625"
         },
         {
           "bytes": 766,
           "method": "steps/sessionEnd",
-          "id": "9447bc98-2457-4377-adc6-9cee4253c64b",
-          "session_id": "c32b0b83-3b69-438d-a893-1829945469bd",
-          "request_id": "58f0d60f-3aff-46ba-8671-d7c9cb456917",
-          "params_sha256": "c0627c41faafef9579397e8ce38f23aaf94620e5639191e7126b2e8450c90ae3"
+          "id": "1f6846db-fd81-49c2-8b02-704f49215c94",
+          "session_id": "77722746-62c7-4f5d-a1a2-4eee32cb3279",
+          "request_id": "11853d3e-0fcf-48b9-a908-7a3fa98d6fa0",
+          "params_sha256": "489c596c10976d3f9e8c25755818536507a29b4eaffd5084031124a1fc822c8e"
         }
       ]
     }
