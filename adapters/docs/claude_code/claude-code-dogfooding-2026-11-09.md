@@ -205,12 +205,18 @@ adapters/.venv/bin/python adapters/scripts/dogfood-claude-code.py \
 ```
 
 `--mode` takes `complete`, `length`, `drop`, `reset` or `loop`, and `--record` adds the envelope log
-the captures above include. The envelope section needs the recorder described in the table above; on a
-tree without it, `--record` writes an empty file and nothing else changes. The runner gives each rep
-its own `HOME`, workspace, Guardian, endpoint and `CLAUDE_CONFIG_DIR`, with the Guardian, handshake and
-session state directories under that workspace. To check that rather than assert it, list the host's
-`HOME` before and after the reps and fail on any entry that appeared or changed size outside the
-workspace; the workflow in this run does that, and the five listings compared equal.
+the captures above include. That section needs a recorder on the tree: without one, `--record` writes
+no envelope file, the run records an empty envelope list, and nothing else changes. The recorder is
+not in this repository. It is 17 lines in `simin-yuan/agent-control-standard`, off unless
+`ACS_ENVELOPE_LOG` is set, and the captures above come from that tree:
+
+<https://github.com/simin-yuan/agent-control-standard/commit/88acdfce>
+
+The runner gives each rep its own `HOME`, workspace, Guardian, endpoint and `CLAUDE_CONFIG_DIR`,
+with the Guardian, handshake and session state directories under that workspace. To check that
+rather than assert it, list the host's `HOME` before and after the reps and fail on any entry that
+appeared or changed size outside the workspace; the workflow in this run does that, and the five
+listings compared equal.
 
 The captures above were produced on `ubuntu-latest` by a private workflow that checks out the ACS tree
 and the scripts as two separate trees — the ACS tree at `88acdfce`, the scripts at `b891c88` — installs
