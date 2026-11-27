@@ -84,6 +84,7 @@ nav:
     - Govern an unmodified agent: topics/gateway.md
     - Sign and verify decisions: topics/signed-decisions.md
     - Signature benchmark: topics/signature-benchmark.md
+    - Map ACS to OWASP AISVS 1.01: topics/aisvs_mapping.md
     - Decision Log: decisions/index.md
   - Concepts:
     - Overview: concepts/README.md

@@ -277,6 +277,8 @@ ACS exposes control points and audit surface; the deployment's policy library de
 
 **EU AI Act (high-risk AI systems):** requires logging that allows post-hoc reconstruction, transparency obligations, and human oversight. ACS-Audit's `request_hash`-committing chain produces a tamper-evident reconstruction surface; ACS-Inspect's AgBOM identifies the components, models, and data sources used; ACS-Crypto's signed envelopes give non-repudiation. DEFER and ASK dispositions give human-oversight checkpoints expressible at the wire level.
 
+**[OWASP AISVS 1.01](https://github.com/OWASP/AISVS/tree/main/1.01/en):** [Map ACS to OWASP AISVS 1.01](aisvs_mapping.md) goes through every requirement in C5.2, C6.2, C9, C10 and C12 against ACS release 0.1.5, with a verdict of covered, partial or gap for each.
+
 A deployment claiming `acs-core` + `acs-trace` + `acs-provenance` + `acs-inspect` + `acs-audit` + `acs-crypto` supports selected runtime controls and audit evidence across all three frameworks at the protocol level. Whether the coverage catches a specific attack or satisfies a specific auditor depends on the policy library and the deployment's procedures.
 
 ---
