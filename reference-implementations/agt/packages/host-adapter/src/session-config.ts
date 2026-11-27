@@ -163,10 +163,10 @@ export function createFileSessionConfigStore({
     },
 
     set(config: SessionConfig): void {
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
       const temp = `${path}.tmp-${process.pid}`;
       try {
-        writeFileSync(temp, `${JSON.stringify(config)}\n`);
+        writeFileSync(temp, `${JSON.stringify(config)}\n`, { mode: 0o600 });
         renameSync(temp, path);
       } catch (error) {
         try {
