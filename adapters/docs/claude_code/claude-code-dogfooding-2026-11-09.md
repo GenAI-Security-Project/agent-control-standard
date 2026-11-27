@@ -6,10 +6,10 @@ decide. This report covers that category on one host, and one case that does pro
 the Guardian allows and the host then runs again.
 
 Claude Code `2.1.283`, the shipped `claude_code` adapter and the example Guardian ran five scenarios
-five times each on a clean Linux runner. Two of them never put a `toolCallRequest` on the wire. A
-truncated tool call is rejected by the client, and a truncated response stream is retried below the
-hook. The third repeats an allowed call: five identical `Write` calls, five `allow` decisions, five
-files.
+five times each on a clean Linux runner. Three of them never put a `toolCallRequest` on the wire: a
+truncated tool call is rejected by the client, and a truncated response stream — cut off two different
+ways — is retried below the hook. The fifth repeats an allowed call: five identical `Write` calls,
+five `allow` decisions, five writes to one path.
 
 AngeYobo reported the third outcome first on OpenCode ([report and captures](https://gist.github.com/AngeYobo/4c095d5458a14524ac662a44cee3eff8),
 fixture at PR [#113](https://github.com/GenAI-Security-Project/agent-control-standard/pull/113)). These runs reach
@@ -29,15 +29,18 @@ conformance and does not close #434.
 | Host | Claude Code `2.1.283`, `--print --permission-mode acceptEdits`, `ubuntu-latest` |
 | Adapter | `adapters/src/acs/integrations/claude_code/adapter.py`, wired through a project-level `.claude/settings.json` on all six hook events |
 | Guardian | `acs-example-guardian`, shipped policy, OS-assigned port |
+| Runner and endpoint | `adapters/scripts/dogfood-claude-code.py` and `stub-anthropic-endpoint.py` at `a7bf6d6` on this branch |
 | Transport | Loopback HTTP, HMAC-SHA256 with the secret in the environment, no key file |
-| Model | Local scripted Anthropic `/v1/messages` endpoint, five modes; no model judgment under test |
+| Model | Local scripted Anthropic `/v1/messages` endpoint, five modes; it sends the `stop_reason` a real response sends — `tool_use` when a message ends in a tool call, `max_tokens` when the arguments are cut — so what is scripted is the model, not the wire contract |
 | Python | `3.12.16` |
 
 Results are for ACS db457a8 with Claude Code 2.1.283; they were not re-run on later trees.
 
 Only the model is faked. The client, the adapter and the Guardian are the ones a user installs. Each
-rep got its own scratch workspace, its own Guardian on a fresh port and its own endpoint port; the
-runner's own `~/.claude` was never touched.
+rep got its own scratch workspace, its own Guardian on a fresh port, its own endpoint port and its
+own Claude Code config directory (`CLAUDE_CONFIG_DIR`), so the client's user-level state went into
+that workspace: each capture lists the `.claude-config` files the client wrote there, and the
+workflow fails the job if a `~/.claude` exists on the host after the reps.
 
 The runs were made in a private CI workflow, so the workflow URLs are not public. The five JSON files
 in this directory are the captures: per rep, the endpoint's request log (including the `tool_result`
@@ -55,8 +58,8 @@ decision is asked for, which §6.4 does not cover.
 | --- | --- | --- | --- | --- | --- |
 | Control: complete call | 5/5 | 2 (streamed) | 1, `allow` | yes, 2120 B | `report.txt` written, exit 0 |
 | Arguments cut mid-JSON, `stop_reason: max_tokens` | 5/5 | 2 (streamed) | **0** | no | client rejects the call, exit 0 |
-| Stream ends before `message_stop` | 5/5 | 3 (2 streamed, 1 non-streamed retry) | **0** | no | exit 1, `stream_truncated` |
-| TCP reset mid-stream | 5/5 | 3 (2 streamed, 1 non-streamed retry) | **0** | no | exit 1, `stream_truncated` |
+| Stream ends before `message_stop` (FIN) | 5/5 | 3 (2 streamed, 1 non-streamed retry) | **0** | no | exit 1, `stream_truncated`, all 41 events delivered |
+| Connection reset mid-stream (RST) | 5/5 | 3 (2 streamed, 1 non-streamed retry) | **0** | no | exit 1, `stream_truncated`, 16 of 41 events in 4/5 reps |
 | Same `Write` offered five times | 5/5 | 6 (streamed) | **5, all `allow`**, one distinct `arguments_sha256` | yes, 5 times | exit 0, 2120 B file |
 
 ### Truncated arguments never reach the adapter
@@ -83,15 +86,26 @@ client's own message names it:
 
 The Guardian saw `sessionStart / turnStart / userMessage / sessionEnd` and nothing of the three
 attempts: one prompt, no attempt recorded beneath it. Whatever the retry policy is, it runs below the
-hook. `drop` and `reset` differ only in how the stream dies; both were retried the same way.
+hook.
+
+`drop` and `reset` differ in the connection, not in the verdict. `drop` finishes the body and closes
+with a FIN after the last event; `reset` closes with `SO_LINGER(1, 0)` so the client sees a reset, and
+in four of the five reps its read stopped after 16 of the 41 events. In the fifth rep it had already
+read all 41 when the reset arrived, so the reset is not always observable from the event count alone
+(a second independent run of the same five reps split the same way, 4 and 1). Either way the client
+reports the same failure and retries once, below the hook.
 
 ### A repeated call is dispatched and allowed every time
 
-Five identical `Write` calls: five `toolCallRequest → allow → toolCallResult` pairs, five files
-written, one session, exit 0. Within each session the five step envelopes carry one distinct
-`arguments_sha256` and five distinct `request_id`s. Across the five sessions the argument hash differs
-— the payload carries session-scoped fields — so the identity that matters here is the one inside a
-session, where the repeated action is byte-for-byte the same.
+Five identical `Write` calls: five `toolCallRequest → allow → toolCallResult` pairs, five writes to
+the same path, one file, one session, exit 0. Within each session the five step envelopes carry one
+distinct `arguments_sha256` and five distinct `request_id`s. Across the five sessions the argument hash
+differs — the payload carries session-scoped fields — so the identity that matters here is the one
+inside a session, where the repeated action is byte-for-byte the same.
+
+The endpoint sends `stop_reason: tool_use` here, which is what a real response sends for a message
+that ends in a tool call, so the repetition is not an artifact of a mislabelled stop reason: the same
+five calls came back from an earlier run whose endpoint sent `max_tokens`.
 
 This is the outcome AngeYobo reported on OpenCode, and the two reports reach it as independent paths:
 
@@ -180,8 +194,12 @@ adapters/.venv/bin/python adapters/scripts/dogfood-claude-code.py \
 `--mode` takes `complete`, `length`, `drop`, `reset` or `loop`, and `--record` adds the envelope log
 the captures above include. The envelope section needs the recorder described in the table above; on a
 tree without it, `--record` writes an empty file and nothing else changes. The runner gives each rep
-its own workspace, Guardian and endpoint, writes nothing outside them, and never touches the user's
-`~/.claude`.
+its own workspace, Guardian, endpoint and `CLAUDE_CONFIG_DIR`, writes nothing outside that workspace,
+and the workflow fails if a `~/.claude` exists on the host after the reps.
+
+The captures above were produced on `ubuntu-latest` by a private workflow that checks out the ACS tree
+and the scripts as two separate trees — the ACS tree at `88acdfce`, the scripts at `a7bf6d6` — installs
+`claude-code@2.1.283` from npm, and runs the command above for each mode with `--reps 5`.
 
 The example Guardian imports `fcntl`, so these runs need a POSIX host. Windows is not covered by this
 report and none of its numbers come from a Windows machine.
