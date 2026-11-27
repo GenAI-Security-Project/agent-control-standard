@@ -125,6 +125,11 @@ def main(argv: list[str]) -> int:
         "reps": [],
     }
 
+    def write_out() -> None:
+        out_path = Path(a.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(run, indent=2))
+
     for rep in range(1, a.reps + 1):
         work = Path(tempfile.mkdtemp(prefix=f"acs-{a.mode}-{rep}-"))
         # An empty HOME per rep. Everything the three processes derive from `~` lands in here, so a
@@ -138,106 +143,123 @@ def main(argv: list[str]) -> int:
         for directory in state.values():
             directory.mkdir()
         stub_log = work / "stub.jsonl"
-        stub_port = free_port()
-        stub = subprocess.Popen(
-            [sys.executable, str(Path(a.stub).resolve()), str(stub_port)],
-            env={**os.environ, "BENCH_LOG": str(stub_log), "HOME": str(home)},
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-        )
-        _wait_listening(stub.stdout.readline, 10.0)
-
-        envelopes = work / "envelopes.jsonl"
-        genv = os.environ.copy()
-        genv.update(signing)
-        genv.update({k: str(v) for k, v in state.items()})
-        genv["HOME"] = str(home)
-        if a.record:
-            genv["ACS_ENVELOPE_LOG"] = str(envelopes)
-        genv.pop("ACS_HMAC_SECRET_FILE", None)
-        guardian, guardian_port = launch_guardian(env=genv)
-        glog: list[str] = []
-        threading.Thread(target=_drain, args=(guardian.stderr, glog), daemon=True).start()
-
-        guardian_url = f"http://127.0.0.1:{guardian_port}/acs"
-
-        # Project-level settings only: the hook lives in the rep's own workspace, and the
-        # client's user-level config dir is a fresh one per rep, never the runner's ~/.claude.
-        (work / ".claude").mkdir()
-        hook = " ".join(
-            [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
-            + [f"{k}={shlex.quote(str(v))}" for k, v in signing.items()]
-            + [shlex.join([sys.executable, str(adapter)])]
-        )
-        settings = {"hooks": {ev: [{"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]
-                              for ev in HOOK_EVENTS}}
-        (work / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2))
-
-        env = {
-            **os.environ,
-            "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{stub_port}/{a.mode}",
-            "ANTHROPIC_API_KEY": "sk-ant-api03-bench-placeholder",
-            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-            # Fresh user-level config per rep: without this the client reads and writes the
-            # runner's own ~/.claude (its settings, hooks and session history).
-            "CLAUDE_CONFIG_DIR": str(work / ".claude-config"),
-            # The same empty HOME as the other two processes, and the three state directories
-            # spelled out, so a hook that ignores HOME still writes inside the rep.
-            "HOME": str(home),
-            **{k: str(v) for k, v in state.items()},
-        }
-        # The adapter prefers ACS_HMAC_SECRET_FILE over the key it is handed in the environment, so a
-        # runner that has that variable set would sign with a different secret than this Guardian
-        # verifies with. Removed from the client's environment as well as the Guardian's.
-        env.pop("ACS_HMAC_SECRET_FILE", None)
-        started = time.time()
-        try:
-            proc = subprocess.run(
-                ["claude", "--print", "--permission-mode", "acceptEdits", a.prompt],
-                cwd=work, env=env, capture_output=True, text=True, timeout=a.timeout,
-            )
-            rc, out, err = proc.returncode, proc.stdout, proc.stderr
-        except subprocess.TimeoutExpired as e:
-            # text=True does not apply to a timed-out child on every platform: the captured
-            # output can still be bytes, and json.dumps would then fail at the very end.
-            rc = "timeout"
-            out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-            err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        elapsed = round(time.time() - started, 1)
-
-        stub_records = ([json.loads(ln) for ln in stub_log.read_text().splitlines()]
-                        if stub_log.exists() else [])
         target = work / "report.txt"
-        steps = [ln.rstrip() for ln in glog
-                 if "steps/" in ln or "REFUSING" in ln or "WARNING" in ln or "handshake" in ln]
-        run["reps"].append({
-            "rep": rep,
-            "claude_exit": rc,
-            "duration_s": elapsed,
-            "endpoint": env["ANTHROPIC_BASE_URL"],
-            "guardian_port": guardian_port,
-            "target_created": target.exists(),
-            "target_bytes": target.stat().st_size if target.exists() else 0,
-            "files_left": sorted(str(p.relative_to(work)) for p in work.rglob("*") if p.is_file()),
-            "claude_stdout": (out or "")[-2000:],
-            "claude_stderr": (err or "")[-800:],
-            "stub_requests": [r for r in stub_records if r.get("event") != "close"],
-            "stub_responses": [r for r in stub_records if r.get("event") == "close"],
-            "guardian_steps": steps,
-            "envelopes": [_summarize(json.loads(ln)["body"])
-                          for ln in envelopes.read_text().splitlines()] if envelopes.exists() else [],
-        })
+        glog: list[str] = []
+        stub = guardian = None
+        entry: dict = {"rep": rep}
+        try:
+            stub_port = free_port()
+            stub = subprocess.Popen(
+                [sys.executable, str(Path(a.stub).resolve()), str(stub_port)],
+                env={**os.environ, "BENCH_LOG": str(stub_log), "HOME": str(home)},
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            )
+            _wait_listening(stub.stdout.readline, 10.0)
 
-        for p in (guardian, stub):
-            p.terminate()
+            envelopes = work / "envelopes.jsonl"
+            genv = os.environ.copy()
+            genv.update(signing)
+            genv.update({k: str(v) for k, v in state.items()})
+            genv["HOME"] = str(home)
+            if a.record:
+                genv["ACS_ENVELOPE_LOG"] = str(envelopes)
+            genv.pop("ACS_HMAC_SECRET_FILE", None)
+            guardian, guardian_port = launch_guardian(env=genv)
+            threading.Thread(target=_drain, args=(guardian.stderr, glog), daemon=True).start()
+
+            guardian_url = f"http://127.0.0.1:{guardian_port}/acs"
+
+            # Project-level settings only: the hook lives in the rep's own workspace, and the
+            # client's user-level config dir is a fresh one per rep, never the runner's ~/.claude.
+            (work / ".claude").mkdir()
+            hook = " ".join(
+                [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
+                + [f"{k}={shlex.quote(str(v))}" for k, v in signing.items()]
+                + [shlex.join([sys.executable, str(adapter)])]
+            )
+            settings = {"hooks": {ev: [{"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]
+                                  for ev in HOOK_EVENTS}}
+            (work / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2))
+
+            env = {
+                **os.environ,
+                "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{stub_port}/{a.mode}",
+                "ANTHROPIC_API_KEY": "sk-ant-api03-bench-placeholder",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                # Fresh user-level config per rep: without this the client reads and writes the
+                # runner's own ~/.claude (its settings, hooks and session history).
+                "CLAUDE_CONFIG_DIR": str(work / ".claude-config"),
+                # The same empty HOME as the other two processes, and the three state directories
+                # spelled out, so a hook that ignores HOME still writes inside the rep.
+                "HOME": str(home),
+                **{k: str(v) for k, v in state.items()},
+            }
+            # The adapter prefers ACS_HMAC_SECRET_FILE over the key it is handed in the environment, so a
+            # runner that has that variable set would sign with a different secret than this Guardian
+            # verifies with. Removed from the client's environment as well as the Guardian's.
+            env.pop("ACS_HMAC_SECRET_FILE", None)
+            started = time.time()
             try:
-                p.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                p.kill()
-        print(f"[{a.mode}] rep {rep}/{a.reps}: exit={rc} target={target.exists()} "
-              f"steps={len(steps)} requests={len(run['reps'][-1]['stub_requests'])}", flush=True)
+                proc = subprocess.run(
+                    ["claude", "--print", "--permission-mode", "acceptEdits", a.prompt],
+                    cwd=work, env=env, capture_output=True, text=True, timeout=a.timeout,
+                )
+                rc, out, err = proc.returncode, proc.stdout, proc.stderr
+            except subprocess.TimeoutExpired as e:
+                # text=True does not apply to a timed-out child on every platform: the captured
+                # output can still be bytes, and json.dumps would then fail at the very end.
+                rc = "timeout"
+                out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+                err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
+            elapsed = round(time.time() - started, 1)
 
-    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    Path(a.out).write_text(json.dumps(run, indent=2))
+            stub_records = ([json.loads(ln) for ln in stub_log.read_text().splitlines()]
+                            if stub_log.exists() else [])
+            steps = [ln.rstrip() for ln in glog
+                     if "steps/" in ln or "REFUSING" in ln or "WARNING" in ln or "handshake" in ln]
+            entry = {
+                "rep": rep,
+                "claude_exit": rc,
+                "duration_s": elapsed,
+                "endpoint": env["ANTHROPIC_BASE_URL"],
+                "guardian_port": guardian_port,
+                "target_created": target.exists(),
+                "target_bytes": target.stat().st_size if target.exists() else 0,
+                "files_left": sorted(str(p.relative_to(work)) for p in work.rglob("*") if p.is_file()),
+                "claude_stdout": (out or "")[-2000:],
+                "claude_stderr": (err or "")[-800:],
+                "stub_requests": [r for r in stub_records if r.get("event") != "close"],
+                "stub_responses": [r for r in stub_records if r.get("event") == "close"],
+                "guardian_steps": steps,
+                "envelopes": [_summarize(json.loads(ln)["body"])
+                              for ln in envelopes.read_text().splitlines()] if envelopes.exists() else [],
+            }
+        except Exception as exc:  # noqa: BLE001 - one broken rep must not take the others with it
+            # Anything that raises inside a rep, such as a stub that never announces itself, is this
+            # rep's result, not the run's: record it and go on to the next rep.
+            entry = {"rep": rep, "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            # Both children are stopped whether the rep finishes, fails or raises, before the next
+            # rep starts.
+            for child in (guardian, stub):
+                if child is None:
+                    continue
+                child.terminate()
+                try:
+                    child.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+
+        run["reps"].append(entry)
+        # Rewritten after every rep: a run that dies in rep 4 still leaves reps 1 to 3 on disk.
+        write_out()
+        print(f"[{a.mode}] rep {rep}/{a.reps}: "
+              f"exit={entry.get('claude_exit', entry.get('error'))} "
+              f"target={entry.get('target_created')} "
+              f"steps={len(entry.get('guardian_steps', []))} "
+              f"requests={len(entry.get('stub_requests', []))}", flush=True)
+
+    write_out()
     print(f"wrote {a.out}")
     return 0
 
