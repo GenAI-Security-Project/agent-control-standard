@@ -66,7 +66,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.9.9"
       - name: Install the adapters, the NAT extra and the test group from the lockfile
@@ -86,7 +86,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.9.9"
       - name: Install the adapters and the test group, without the NAT extra
@@ -112,7 +112,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.9.9"
       - name: Install Go for the independent ML-DSA-65 verifier
@@ -155,7 +155,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.9.9"
       - name: Build the sdist and a wheel from it
@@ -176,7 +176,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: "0.9.9"
       - name: Install the gateway and its test group from the lockfile
