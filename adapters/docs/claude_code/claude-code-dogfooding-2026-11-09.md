@@ -93,9 +93,9 @@ match, to the byte. The client reports the two the same way, in one line:
 
 > API Error: Connection to the API was lost (ECONNRESET). This is usually temporary — try again.
 
-The Guardian saw `sessionStart / turnStart / userMessage / turnEnd / sessionEnd` and nothing of the
-three attempts: one prompt, no attempt recorded beneath it. Whatever the retry policy is, it runs
-below the hook.
+The Guardian saw `sessionStart / turnStart / userMessage / sessionEnd` and nothing of the
+three attempts: one prompt, no attempt recorded beneath it. The turn never reached `turnEnd` at
+the Guardian. Whatever the retry policy is, it runs below the hook.
 
 `drop` and `reset` differ in the connection, not in the verdict, and the difference shows up in
 the endpoint's record, not in the client's message. `drop` finishes the body it has and closes
