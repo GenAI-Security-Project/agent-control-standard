@@ -58,6 +58,7 @@ ALLOWED_GITHUB_REPOS = frozenset({
     "ocsf/examples",                                  # OCSF example events, cited in extend_ocsf.md
     "orgs/GenAI-Security-Project",                     # the org's project board, not a repo; same regex shape
     "microsoft/agent-governance-toolkit",             # upstream policy engine the AGT reference implementation governs, cited in README.md
+    "OWASP/AISVS",                                    # OWASP AISVS 1.01 requirement text, cited in topics/aisvs_mapping.md and faq.md
 })
 
 # The namespace every published schema's $id is served from. See tools/publish_schemas.py.
