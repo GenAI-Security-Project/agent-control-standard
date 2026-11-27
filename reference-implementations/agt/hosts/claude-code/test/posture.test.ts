@@ -1250,8 +1250,10 @@ describe("acs-hook — the negotiated posture, end to end", () => {
           ACS_AUDIT_LOG: join(dir, "audit.jsonl"),
         },
       });
-      proc.stdin.write(input);
-      proc.stdin.end();
+      // Awaited so a write to a child that already exited (the #111 failure) fails
+      // here, on this assertion's await chain, rather than as an unhandled rejection.
+      await proc.stdin.write(input);
+      await proc.stdin.end();
       const [stdout, stderr, exitCode] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),

@@ -7,10 +7,18 @@
 # Linux or macOS, and every other job in this repository runs there, so nothing caught
 # it. This job is the only place the shim runs on Windows.
 #
-# The probe needs no Guardian. The shim answers a payload it cannot parse with exit 2,
-# which blocks the call, so piping "not json" into it separates the two cases: exit 2
-# means stdin was read, and exit 0 means the process quit first. A Guardian on Windows
-# also needs ACS_OPA_PATH (issue #110), which this job does not have to set up.
+# The probes need no Guardian, and they check both sides of the fix:
+#
+#   1. "not json" must exit 2 with a JSON parse error. Exit 0 means the process quit
+#      before it read stdin, which is issue #111. Any other exit-2 error means stdin
+#      could not be read at all.
+#   2. A valid PreToolUse payload, sent to a Guardian address nobody listens on, must
+#      exit 0 with "allow" on stdout and one audit entry. That is the ACS default
+#      posture (proceed) with no session negotiated. It shows the shim read the payload
+#      and ran to the end. A fix that blocked every call would pass probe 1 and fail here.
+#
+# A Guardian on Windows also needs ACS_OPA_PATH (issue #110), which these probes do not
+# have to set up.
 #
 # No workflow expression appears inside a `run:` block. The one in `with:` is a matrix
 # value this file defines, and the one in the concurrency group is an integer pull
@@ -21,15 +29,21 @@ on:
   pull_request:
     paths:
       - "reference-implementations/agt/hosts/claude-code/**"
+      - "reference-implementations/agt/packages/host-adapter/**"
       - "reference-implementations/agt/package.json"
       - "reference-implementations/agt/bun.lock"
+      # The Bun version below must follow the pin in this file, so a change to the pin
+      # runs this job too.
+      - ".github/workflows/reference-implementation.yml"
       - ".github/workflows/reference-implementation-windows.yml"
   push:
     branches: ["main", "integration"]
     paths:
       - "reference-implementations/agt/hosts/claude-code/**"
+      - "reference-implementations/agt/packages/host-adapter/**"
       - "reference-implementations/agt/package.json"
       - "reference-implementations/agt/bun.lock"
+      - ".github/workflows/reference-implementation.yml"
       - ".github/workflows/reference-implementation-windows.yml"
   workflow_dispatch:
 
@@ -48,6 +62,9 @@ jobs:
         # the Bun bump moves to, and the 1.4.x line is where issue #111 shows.
         bun: ["1.3.11", "1.4.4"]
     runs-on: windows-latest
+    # A hook that waits on stdin forever would otherwise hold the runner for the
+    # six-hour default.
+    timeout-minutes: 10
     permissions:
       contents: read
     defaults:
@@ -70,18 +87,57 @@ jobs:
       - name: Install dependencies from the lockfile
         run: bun install --frozen-lockfile
 
-      # Exit 2 with an error on stderr is the shim's answer to an unparseable payload.
-      # Exit 0 with empty stdout is issue #111: the process quit before it read stdin.
-      - name: The shim reads piped stdin before it exits (issue #111)
+      - name: Probe 1, an unparseable payload is blocked (issue #111)
         run: |
           set +e
-          printf 'not json' | bun run hosts/claude-code/acs-hook.ts >out.txt 2>err.txt
+          printf 'not json' | timeout 60 bun run hosts/claude-code/acs-hook.ts >out.txt 2>err.txt
           rc=$?
           set -e
           echo "exit code: $rc"
           echo "stdout: $(cat out.txt)"
           echo "stderr: $(cat err.txt)"
+          if [ "$rc" -eq 124 ]; then
+            echo "::error::acs-hook.ts did not exit within 60 seconds on piped input."
+            exit 1
+          fi
           if [ "$rc" -ne 2 ]; then
             echo "::error::acs-hook.ts exited $rc on piped 'not json'. Expected 2. See issue #111."
             exit 1
           fi
+          if ! grep -qi "json" err.txt; then
+            echo "::error::acs-hook.ts exited 2, but stderr shows no JSON parse error, so stdin may not have been read."
+            exit 1
+          fi
+
+      - name: Probe 2, a valid payload runs to a decision
+        env:
+          # Nothing listens on port 1, so no session is negotiated and the ACS default
+          # posture applies.
+          ACS_GUARDIAN_URL: http://127.0.0.1:1/acs
+          ACS_SESSION_DIR: ${{ runner.temp }}/acs-sessions
+          ACS_AUDIT_LOG: ${{ runner.temp }}/acs-audit.jsonl
+        run: |
+          set +e
+          printf '%s' '{"session_id":"ci-111","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}' \
+            | timeout 60 bun run hosts/claude-code/acs-hook.ts >out.txt 2>err.txt
+          rc=$?
+          set -e
+          echo "exit code: $rc"
+          echo "stdout: $(cat out.txt)"
+          echo "stderr: $(cat err.txt)"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::acs-hook.ts exited $rc on a valid payload. Expected 0."
+            exit 1
+          fi
+          if ! grep -q '"permissionDecision":"allow"' out.txt; then
+            echo "::error::acs-hook.ts did not answer allow under the default posture."
+            exit 1
+          fi
+          if [ ! -s "$ACS_AUDIT_LOG" ]; then
+            echo "::error::acs-hook.ts wrote no audit entry."
+            exit 1
+          fi
+
+      # The same check as a test, so the regression test runs where the bug happens.
+      - name: The piped-stdin test from posture.test.ts
+        run: timeout 300 bun test hosts/claude-code/test/posture.test.ts -t "reads piped stdin"
