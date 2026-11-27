@@ -128,7 +128,7 @@ You are building ten things:
 - **An envelope.** JSON-RPC 2.0 carrying `request_id`, `timestamp`, `acs_version`, and `metadata`.
 - **A hook surface.** Enough of the lifecycle that a Guardian sees the session start, the agent's inputs and outputs, tool calls going out and coming back, sub-agent spawns where the framework has them, and the session end.
 - **The disposition vocabulary.** The five dispositions: `allow`, `deny`, `modify`, `ask`, and `defer`.
-- **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on content-bearing responses. Intent is optional at Core and load-bearing for IBAC deployments.
+- **Session state.** `session_id`, a rolling `chain_hash`, and an append-only ContextEntry chain whose head the Guardian publishes on responses for steps that write a chain entry. Intent is optional at Core; when a deployment uses Intent (for example, under an IBAC-style policy), its immutability and extension rules apply.
 - **Replay protection.** A UUID `request_id` and a `timestamp` on every request, which the Guardian checks.
 - **Baseline integrity.** An HMAC-SHA256 signature over the canonical envelope, keyed per session via HKDF.
 - **Decision honoring.** Wait for the verdict and apply it. On timeout, transport failure, or an error with no decision, apply the negotiated `on_decision_failure` posture (`proceed` by default in the specification text today, which is fail-open, with deny decided as the new default) and record every decision failure as an audit event, fail-open or fail-closed.
@@ -311,9 +311,9 @@ How each paradigm composes with ACS:
 - **FIDES** — uses ACS-Provenance lineage from each hook payload to run its integrity / confidentiality label arithmetic. ACS carries the `origin`, `source_id`, and `derived_from` facts; the FIDES Guardian computes the label joins and decides what the planner sees.
 - **CaMeL** — uses per-argument provenance to reconstruct the data-flow dependency graph, then applies its capability calculus against tool calls. ACS carries the dependency facts; the CaMeL Guardian runs the policy against them.
 - **IBAC** — uses SessionContext + Intent for authority binding, the ASK disposition for approver-driven extensions, and the authorize-before-action flow for enforcement. ACS carries the wire fields and enforces `Intent.parsed` immutability; the IBAC Guardian provides the intent parser, capability-matching logic, and approver UX.
-- **AARM** — maps to ACS-Core almost directly. AARM-style deployments declare ACS-Audit for the hash-chained receipt log, add ACS-Crypto when a third party must be able to verify which Guardian issued a receipt, and adopt AARM's receipt conventions on top.
+- **AARM** — aligns at a high level with ACS-Core, ACS-Audit (hash-chained receipt log), ACS-Crypto (third-party receipt verification), and ACS-Provenance (cumulative-context rules), with AARM's receipt conventions layered on top; the formal R1–R9 requirement mapping is tracked separately.
 
-The pattern across all four: ACS contributes the wire format and runtime behavior; the paradigm contributes the policy substance. Together they make the paradigm portable across any conformant framework.
+The pattern across all four: ACS contributes the wire format and runtime behavior; the paradigm contributes the policy substance. Together they make the paradigm portable across any conformant framework. None of the four is required or negotiated by name; see [Authorization Paradigms](./authorization-paradigms.md) for definitions, source papers, OPA/Cedar engines, and v0.1 mapping completeness.
 
 ### How is ACS different from those research artifacts?
 

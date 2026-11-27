@@ -79,6 +79,7 @@ nav:
   - FAQ: topics/faq.md
   - Topics:
     - Core concepts: topics/core_concepts.md
+    - Authorization paradigms: topics/authorization-paradigms.md
     - ACS in Action: topics/ACS_in_action_example.md
     - Run a Guardian: topics/reference-implementations.md
     - Govern an unmodified agent: topics/gateway.md
