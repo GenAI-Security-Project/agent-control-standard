@@ -8,8 +8,10 @@ under test is exactly the commit named in the output. The endpoint is the only t
 anything, and it fakes only the model.
 
 Each rep gets its own temp workspace, its own Guardian on an OS-assigned port, its own stub
-port, and its own Claude Code config directory (CLAUDE_CONFIG_DIR), so neither the user's
-`~/.claude` nor another rep's state is read or written; the stub's request log, the Guardian's
+port, and its own HOME and Claude Code config directory, so neither the user's state nor
+another rep's is read or written. The isolation is checked, not assumed: the workflow compares
+the runner's real HOME before and after the reps and fails if anything new appeared outside
+`$GITHUB_WORKSPACE` (see .github/workflows, private). The stub's request log, the Guardian's
 step log and the files the client left behind are all written into the JSON the run produces.
 """
 from __future__ import annotations
@@ -125,11 +127,21 @@ def main(argv: list[str]) -> int:
 
     for rep in range(1, a.reps + 1):
         work = Path(tempfile.mkdtemp(prefix=f"acs-{a.mode}-{rep}-"))
+        # An empty HOME per rep. Everything the three processes derive from `~` lands in here, so a
+        # component that writes somewhere nobody listed still writes inside the rep, and the
+        # workflow's before/after comparison of the real HOME stays empty.
+        home = work / "home"
+        home.mkdir()
+        state = {"ACS_GUARDIAN_STATE_DIR": work / "guardian-state",
+                 "ACS_HANDSHAKE_CACHE": work / "handshake-cache",
+                 "ACS_SESSION_STATE_DIR": work / "session-state"}
+        for directory in state.values():
+            directory.mkdir()
         stub_log = work / "stub.jsonl"
         stub_port = free_port()
         stub = subprocess.Popen(
             [sys.executable, str(Path(a.stub).resolve()), str(stub_port)],
-            env={**os.environ, "BENCH_LOG": str(stub_log)},
+            env={**os.environ, "BENCH_LOG": str(stub_log), "HOME": str(home)},
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
         _wait_listening(stub.stdout.readline, 10.0)
@@ -137,6 +149,8 @@ def main(argv: list[str]) -> int:
         envelopes = work / "envelopes.jsonl"
         genv = os.environ.copy()
         genv.update(signing)
+        genv.update({k: str(v) for k, v in state.items()})
+        genv["HOME"] = str(home)
         if a.record:
             genv["ACS_ENVELOPE_LOG"] = str(envelopes)
         genv.pop("ACS_HMAC_SECRET_FILE", None)
@@ -166,7 +180,15 @@ def main(argv: list[str]) -> int:
             # Fresh user-level config per rep: without this the client reads and writes the
             # runner's own ~/.claude (its settings, hooks and session history).
             "CLAUDE_CONFIG_DIR": str(work / ".claude-config"),
+            # The same empty HOME as the other two processes, and the three state directories
+            # spelled out, so a hook that ignores HOME still writes inside the rep.
+            "HOME": str(home),
+            **{k: str(v) for k, v in state.items()},
         }
+        # The adapter prefers ACS_HMAC_SECRET_FILE over the key it is handed in the environment, so a
+        # runner that has that variable set would sign with a different secret than this Guardian
+        # verifies with. Removed from the client's environment as well as the Guardian's.
+        env.pop("ACS_HMAC_SECRET_FILE", None)
         started = time.time()
         try:
             proc = subprocess.run(

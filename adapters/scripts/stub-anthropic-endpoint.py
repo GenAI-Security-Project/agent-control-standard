@@ -17,6 +17,17 @@ the middle of line 17.
 Turn 2+ (the request carries a tool_result block) answers "Done." and stops,
 except in `loop`.
 
+Both wire formats are served. A request with `stream: true` gets
+`text/event-stream`, as before. A request with `stream: false` gets a plain
+Messages JSON body (`application/json`, `Content-Length` set to the full
+length), so a client that retries without streaming is answered in the format
+it asked for instead of being handed a stream. In `drop` and `reset` that body
+is cut at half its length and the connection is closed the same way as the
+mode: `drop` ends it with a FIN, `reset` with a RST. Those two are the only
+modes a client retries in. The non-streaming body always carries the whole
+argument object, because a JSON body that stops mid-object cannot parse at
+all; the cut is a property of the stream.
+
 URL layout:  http://127.0.0.1:PORT/<mode>/v1/messages
 Every request is appended as one JSON line to the file named by $BENCH_LOG.
 """
@@ -134,10 +145,15 @@ class Handler(BaseHTTPRequestHandler):
         self._log({"t": round(time.time(), 3), "mode": mode, "path": self.path, "bytes": len(raw),
                    "endpoint": "messages" if "/v1/messages" in self.path else "other",
                    "stream": bool(body.get("stream")), "turn": "after_tool_result" if follow_up else "first",
+                   "served": "text/event-stream" if body.get("stream") else "application/json",
                    "tools_offered": names, "tool_called": None if follow_up else tool,
                    "model": body.get("model"), "tool_result": tool_result_text(body)})
         if "/v1/messages" not in self.path:
             self.send_error(404)
+            return
+        stream = bool(body.get("stream"))
+        if not stream:
+            self._serve_json(mode, follow_up, tool)
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -151,6 +167,58 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 self.wfile.write(chunk)
                 self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        self.close_connection = True
+
+    def _message(self, mode: str, follow_up: bool, tool: str) -> bytes:
+        """The same answer as `_events`, as one Messages JSON body.
+
+        The arguments are spliced in as they are, cut or not, so the body carries exactly what the
+        stream would have carried. `Content-Length` always names the full body, which is what makes a
+        cut visible to the client as a short read rather than as a protocol error.
+        """
+        if follow_up and mode != "loop":
+            return json.dumps({
+                "id": "msg_bench", "type": "message", "role": "assistant", "model": "bench-model",
+                "content": [{"type": "text", "text": "Done."}],
+                "stop_reason": "end_turn", "stop_sequence": None,
+                "usage": {"input_tokens": 12, "output_tokens": 3},
+            }).encode()
+        # A JSON body cannot carry a half-written argument object and still parse, so the
+        # non-streaming answer always carries the whole object; the cut is a property of the
+        # stream. No client asks without streaming in `length`, and `drop`/`reset` cut the body
+        # itself below, which is the failure those two modes exist to show.
+        payload = args_for(tool)
+        stop = "max_tokens" if mode == "length" else "tool_use"
+        head = ('{"id":"msg_bench","type":"message","role":"assistant","model":"bench-model",'
+                '"content":[{"type":"tool_use","id":"toolu_bench%d","name":%s,"input":'
+                % (_loop_turns, json.dumps(tool)))
+        tail = ('}],"stop_reason":"%s","stop_sequence":null,'
+                '"usage":{"input_tokens":12,"output_tokens":40}}' % stop)
+        return (head + payload + tail).encode()
+
+    def _serve_json(self, mode: str, follow_up: bool, tool: str) -> None:
+        payload = self._message(mode, follow_up, tool)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if mode in ("drop", "reset"):
+            try:
+                self.wfile.write(payload[: len(payload) // 2])
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            if mode == "reset":
+                self._hard_close()
+            else:
+                self.close_connection = True  # short body, then a FIN
+            return
+        try:
+            self.wfile.write(payload)
+            self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             return
         self.close_connection = True
