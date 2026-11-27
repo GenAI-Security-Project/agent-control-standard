@@ -1,6 +1,6 @@
 # ACS Adapters
 
-Govern an agent you didn't write, without changing its code. This directory holds the Python side of ACS release 0.1.5: hook adapters that wire Claude Code, Cursor and NVIDIA NAT to a Guardian through **configuration only**, a teaching Guardian to run them against, a gateway that governs an unmodified OpenAI Responses API client, and the tools that check the result. Everything here speaks the ACS wire contract of specification v0.1.0.
+Govern an agent you didn't write, without changing its code. This directory holds the Python side of ACS release 0.1.5: hook adapters that wire Claude Code, Codex, Cursor and NVIDIA NAT to a Guardian through **configuration only**, a teaching Guardian to run them against, a gateway that governs an unmodified OpenAI Responses API client, and the tools that check the result. Everything here speaks the ACS wire contract of specification v0.1.0.
 
 ## What ships here
 
@@ -8,7 +8,7 @@ Pick the row that matches what you want to do. Each one links the page that owns
 
 | Piece | What it does | How you run it | Read more |
 |---|---|---|---|
-| Hook adapters | Turn a host's hook event into a signed ACS request, and the Guardian's answer back into the host's own allow or block. Claude Code and Cursor run a hook process per event, and NAT runs middleware inside the agent. A step with no usable answer is denied by default. | `acs-claude-code-wire`, `acs-cursor-wire` or `acs-nat-wire` writes the host's own config | [Claude Code](docs/claude_code/README.md), [Cursor](docs/cursor/README.md), [NAT](docs/nat/README.md) |
+| Hook adapters | Turn a host's hook event into a signed ACS request, and the Guardian's answer back into the host's own allow or block. Claude Code, Codex and Cursor run a hook process per event, and NAT runs middleware inside the agent. A step with no usable answer is denied by default. | `acs-claude-code-wire`, `acs-cursor-wire` or `acs-nat-wire` writes the host's own config. For Codex, configure `.codex/hooks.json` manually. | [Claude Code](docs/claude_code/README.md), [Codex](docs/codex/README.md), [Cursor](docs/cursor/README.md), [NAT](docs/nat/README.md) |
 | Protocol library | `acs.core` builds, signs and checks envelopes with no I/O. `acs.client` runs the handshake, the round trip, the fail posture and the audit lines. Every other piece here uses the two. | Imported | [Directory layout](#directory-layout), [signing.md](docs/signing.md) |
 | Example Guardian | A small Guardian with a toy deterministic policy, for local runs and tests. Not for production. | `acs-example-guardian` | [Example Guardian](docs/guardian/README.md) |
 | OPA backend | Opt-in. The example Guardian hands `steps/toolCallRequest` and `steps/toolCallResult` to an [Open Policy Agent](https://www.openpolicyagent.org/) server, and every OPA failure denies. A lab convention, off by default. | `ACS_POLICY_BACKEND=opa` and `ACS_OPA_URL` | [OPA backend](docs/guardian/README.md#opa-backend-lab-convention) |
@@ -35,7 +35,7 @@ Running the Guardian, in a terminal window, under `launchd` or `systemd`, or in 
 
 ## Windows: the secret-file check
 
-The secret-file permission check is shared client code, so on Windows it stops **every adapter** — Claude Code, Cursor, and the example Guardian — by default: `stat()` reports 0o666 for every ordinary file there, so the 0600 rule cannot run and the check fails closed. Restrict the key file's NTFS ACL first, then opt in:
+On Windows, the shared permission check refuses secret files by default in every adapter and in the example Guardian. Windows reports ordinary file modes as `0o666`, so the check cannot verify mode `0600`. Restrict the key file's NTFS ACL first, then opt in:
 
 ```bat
 icacls "%ACS_HMAC_SECRET_FILE%" /inheritance:r /grant:r "%USERNAME%:R"
@@ -77,7 +77,7 @@ CI runs each of these checks in `.github/workflows/adapter_tests.yml`, and `run_
 
 | Check | Command, from `adapters/` unless noted | What it covers |
 |---|---|---|
-| Emission conformance | `uv sync --locked --group test`, then `uv run python run_conformance.py claude cursor` (add `--extra nat` to the sync and `nat` to the command for NAT) | The shared Guardian, library and package checks and the adapter suites you name, described below |
+| Emission conformance | `uv sync --locked --group test`, then `uv run python run_conformance.py claude codex cursor` (add `--extra nat` to the sync and `nat` to the command for NAT) | The shared Guardian, library and package checks and the adapter suites you name, described below |
 | Example Guardian | `uv run pytest tests/guardian -q` | The OPA backend, decision signing, the `GET /keys` route and `acs-verify` |
 | Import boundaries | `uv run lint-imports` | `integrations` imports `client`, which imports `core`, and none of them imports `guardian`, `examples` or `testing` |
 | ML-DSA-65 and Go interop | `uv sync --locked --extra pqc --group test`, then `ACS_REQUIRE_GO_INTEROP=1 uv run --extra pqc python -m pytest tests/interop -q` | Go's own `crypto/mldsa` verifies the library's signatures. Needs Go 1.27 or later. See [signing.md](docs/signing.md) |
@@ -91,7 +91,7 @@ CI also builds the wheel and checks it outside the repository with `scripts/chec
 
 Known limitations kept in view: Cursor's real-framework wiring is a manual GUI procedure, and Wrapped MCP is validated for namespace shape only, not full wrapping. ACS-Core requires `protocols/MCP/*` for any session that involves MCP and lets only MCP `tools/call` collapse into the generic tool hooks. These adapters perform that collapse and wrap no other MCP surface, so a session that uses MCP falls short of ACS-Core there. The adapters also emit no Trace events and do not claim ACS-Trace: `ACS_AUDIT` lines are local audit records, not OpenTelemetry or OCSF output.
 
-One command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. It is the conformance gate, not every test: the table above lists the suites it leaves out. At least one platform is required, and there is no implicit run-all default. Name one, two, or all three platforms in any order:
+One command runs the shared Guardian checks, shared-library tests, and the adapter suites you name. It is the conformance gate, not every test: the table above lists the suites it leaves out. At least one platform is required, and there is no implicit run-all default. Name one or more platforms in any order:
 
 ```bash
 cd adapters
@@ -105,7 +105,7 @@ uv run python run_conformance.py claude cursor
 
 # All platforms. NAT needs the nat extra, or its skips count as
 # unexpected and fail.
-uv run python run_conformance.py claude cursor nat
+uv run python run_conformance.py claude codex cursor nat
 ```
 
 `claude-code` is also accepted as an alias for `claude`. Repeating a platform does not run it twice. The Guardian, shared-library (`_common`), `core`, `client`, `package` and `benchmarks` checks run once for every command, regardless of the platform selection.
@@ -125,7 +125,7 @@ Under the hood it drives two complementary layers:
 
 Breaking any adapter's method mapping, envelope/payload field, or signing turns the suite red against the schema files themselves. The oracle is proven non-vacuous by `tests/common/test_capture_guardian.py` (feed it broken envelopes, assert it flags each defect class + the signature KAT). Schemas load from the copy bundled in the package, or from `specification/v0.1.0/` in a source checkout (`ACS_SPEC_DIR` overrides); missing schemas are a hard FAIL. Format checking (`uuid`, `date-time`) is enforced via `rfc3339-validator`.
 
-**Where each adapter's emission is actually exercised:** Claude Code and Cursor run headless here and in CI (real subprocess). NAT's emission tests drive the real middleware and require `nvidia-nat-core`; they run in the CI `tests` job (which installs the NAT extra) and `skipUnless` it locally — a skip is never counted as a pass (`run_conformance.py nat` and the CI job both fail on an unexpected NAT skip). Cursor's *end-to-end framework* wiring (real Cursor GUI in the loop) remains a manual procedure in `docs/cursor/live_verification.md`; the emission suite proves the adapter, the manual test proves the wiring.
+**Where the emission tests run.** The Claude Code, Codex and Cursor suites start the adapters as subprocesses locally and in CI. NAT's tests drive the middleware and require `nvidia-nat-core`. The CI `tests` job installs the NAT extra, and both that job and `run_conformance.py nat` fail on an unexpected NAT skip. To verify the host wiring, follow the [live Codex CLI check](docs/codex/README.md#verify-enforcement-in-the-real-codex-cli) or the [manual Cursor procedure](docs/cursor/live_verification.md).
 
 **Wrapped MCP caveat.** The suite verifies the wire-format *shape* of `protocols/MCP/*` only (a harness-built envelope validates, the Guardian returns a structured response, no crash). Nothing here demonstrates real MCP **wrapping**: the adapters flatten MCP onto `steps/toolCallRequest`/`Result` (Cursor's `beforeMCPExecution`, Claude's `mcp__*` tools) rather than emitting the wrapped `protocols/MCP/*` form, and the example Guardian does not implement intact wrapping, version negotiation, or request/result correlation for it. **Do not read any of this as "we wrap MCP."** ACS-Core states the requirement directly. Deployments whose sessions involve MCP at any point MUST implement `protocols/MCP/*`. MCP `tools/call` MAY instead flow through `steps/toolCallRequest` and `steps/toolCallResult` when tool-level policy suffices, but capability negotiation, prompt fetches, resource reads, and notifications MUST be wrapped. These adapters cover the `tools/call` case only: they flatten MCP tool calls onto `steps/toolCallRequest` and `steps/toolCallResult` and send nothing for the other MCP surfaces. A Claude Code or Cursor session that uses MCP therefore falls short of ACS-Core on those surfaces, a known limitation. See `test_acs_core_conformance.py::Core10_WrappedMcp`.
 
@@ -133,7 +133,7 @@ Breaking any adapter's method mapping, envelope/payload field, or signing turns 
 
 The adapters are **translators**. Each one speaks its framework's hook protocol on one side and ACS JSON-RPC on the other. The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual layer between them.
 
-### The general pattern (same for all three adapters)
+### The general pattern (same for every adapter)
 
 For each event the framework fires:
 
@@ -239,7 +239,7 @@ Notice the shape: `acs_version` / `request_id` / `timestamp` / `metadata` live i
 
 **Step 6.** Claude Code applies its own permission rules. `echo` is one of its read-only commands, which run without a prompt, so the Bash tool runs and you see `hello` printed.
 
-**What this costs, measured honestly.** For the shell-spawned adapters (Claude Code, Cursor), the dominant cost is NOT the Guardian round-trip — it's the per-event Python process spawn: interpreter start plus imports. Measured on an M-series MacBook (warm cache, local Guardian): ~60–90 ms per hook event end-to-end, of which the Guardian's policy evaluation is single-digit milliseconds. Your numbers will differ with hardware and Python version; measure with `/usr/bin/time` before quoting any. The first event of a session additionally pays the `handshake/hello` round-trip (cached afterward). NAT's adapter runs in-process and pays no spawn cost — its overhead is the HTTP round-trip alone.
+**Hook overhead.** Claude Code, Codex and Cursor start a Python process and load its imports for each event. Previous measurements on Claude Code and Cursor took about 60–90 ms per event on an M-series MacBook with a warm cache and a local Guardian. Policy evaluation took single-digit milliseconds. Hardware and Python version affect those numbers. The first event of a session also makes the `handshake/hello` round trip and caches the answer. NAT runs in-process, so it pays only for the HTTP round trip.
 
 **Degraded-Guardian behavior.** The first event of a session handshakes, and the answer decides the whole session (§4.1). A Guardian that refuses (`SESSION_REFUSED`, `UNSUPPORTED_VERSION`, `PROVENANCE_REQUIRED`) refuses every step of that session. When no answer arrives within `ACS_HANDSHAKE_TIMEOUT_SECONDS` (default 5s), the session has no negotiated Guardian for its lifetime, and each hook's `ACS_STARTUP_POSTURE` decides: `proceed` lets the step run, audited, with nothing sent to the Guardian, and `refuse`, the default, denies it. With a negotiated Guardian, a step that gets no usable decision is denied unless the hook's own environment sets `ACS_DEFAULT_DENY=0`, and a ServerHello that declares `on_decision_failure: deny` overrides that opt-in, so the Guardian can only tighten the posture. A dead Guardian costs one timeout per session, and the next session handshakes again. **Incident procedure:** set `ACS_DISABLED=1` in the adapter's environment to bypass all hooks immediately (one stderr line per event, no Guardian traffic); unset to re-enable. This is faster and more reversible than editing hook config files per machine mid-incident.
 
@@ -251,24 +251,24 @@ Same as above, but with `command: "rm -rf /home/u"`:
 - **Step 5:** Adapter emits `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "destructive Bash pattern in: rm -rf /home/u", "additionalContext": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}, "systemMessage": "ACS blocked this tool call: destructive Bash pattern in: rm -rf /home/u"}`
 - **Step 6:** Claude Code reads `permissionDecision: "deny"`, does not execute the Bash tool, and surfaces the reason: *"The command was blocked: a policy denied the Bash tool call, so it never ran."*
 
-### What changes across the three adapters
+### What changes across the adapters
 
 The general pattern is identical. The framework-specific translation differs:
 
-| | Claude Code | Cursor | NAT |
-|---|---|---|---|
-| **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
-| **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
-| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, the input in `context.modified_args[0]` or `context.modified_kwargs` |
-| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{}` on allow for a tool call, `{"permission": "deny"}` on stdout to block, `{"continue": false}` for a prompt, exit code 0 | Raise `ACSGuardianDenied`, or set `context.action = InvocationAction.SKIP` where NAT has it |
-| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `updated_input` | Rewrite the input in `context.modified_args[0]` when it is passed positionally, else in `context.modified_kwargs`; replace `context.output` for output |
-| **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
+| | Claude Code | Codex | Cursor | NAT |
+|---|---|---|---|---|
+| **Where the adapter lives** | Separate shell process spawned per hook | Separate shell process spawned per hook | Separate shell process spawned per hook | In-process Python class, same memory space as the agent |
+| **How the framework sends the event** | JSON on stdin; event type is a field inside the JSON (`hook_event_name`) | JSON on stdin; event type is a field inside the JSON (`hook_event_name`); only `PreToolUse` is mapped | JSON on stdin; event type passed as a CLI argument (one command per event in `hooks.json`) | Python method call: `pre_invoke(context)` with `context.function_context.name` |
+| **Native event field names** | `tool_name`, `tool_input`, `tool_response` | `tool_name`, `tool_input`, `tool_use_id`, `turn_id` | `tool_name`, `tool_input`, `tool_output`, `command` (for shell) | `context.function_context.name`, the input in `context.modified_args[0]` or `context.modified_kwargs` |
+| **Native allow/deny output** | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | Nothing on allow; `{"hookSpecificOutput": {"permissionDecision": "deny"}}` on stdout to block | `{}` on allow for a tool call, `{"permission": "deny"}` on stdout to block, `{"continue": false}` for a prompt, exit code 0 | Raise `ACSGuardianDenied`, or set `context.action = InvocationAction.SKIP` where NAT has it |
+| **Native modify mechanism** | `hookSpecificOutput.updatedInput` with `permissionDecision: "ask"` | `hookSpecificOutput.updatedInput` with `permissionDecision: "allow"`, since Codex has no `ask` | `updated_input` | Rewrite the input in `context.modified_args[0]` when it is passed positionally, else in `context.modified_kwargs`; replace `context.output` for output |
+| **Process model** | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | OS spawns a Python process for every hook event | Zero IPC; everything in the same Python interpreter |
 
-The Guardian-side wire format is **the same** for all three. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.
+The Guardian-side wire format is **the same** for every adapter. The adapter is bilingual: it knows the framework's protocol on one side and ACS on the other.
 
 ### Decision honoring is a framework property
 
-Every adapter relies on its framework providing the §6.4 guarantee: the framework MUST wait for the verdict and apply it before the action executes. If a framework fired the hook fire-and-forget and continued the action without waiting, the adapter would still send to the Guardian and the audit chain would still record the decision — but the framework wouldn't apply it. That would be non-conformant. None of the three frameworks here does that; how each one delivers the guarantee is in the per-adapter README.
+Under §6.4, the framework MUST wait for the Guardian's verdict and apply it before the action executes. A framework that continues before the verdict arrives can still leave an audit record of a decision it never applied. Each adapter's README describes which hooks the framework waits for and where enforcement depends on host behavior.
 
 ### The key insight
 
@@ -278,7 +278,7 @@ ACS standardizes the wire format and the decision contract. Adapters live where 
 2. Knows ACS (always the same).
 3. Translates between them.
 
-The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual translator that makes them speak. **One Guardian, one ACS contract, three adapters that translate three different protocols into that contract.** Add a new framework, write a new adapter, the Guardian doesn't change.
+The framework's agent code is untouched. The Guardian's policy code is untouched. The adapter is the bilingual translator that makes them speak. **One Guardian, one ACS contract, and one adapter per framework protocol, each translating into that contract.** Add a new framework, write a new adapter, the Guardian doesn't change.
 
 ---
 
@@ -295,9 +295,9 @@ adapters/
 │   ├── core/                       # no I/O: envelopes, HMAC and ML-DSA-65 signing, the keyring, decisions, error codes, bundled schemas
 │   ├── client/                     # I/O: settings and fail posture, the trusted-file reader, the handshake, the round trip, key documents, session state and turns, audit
 │   ├── integrations/<framework>/
-│   │   ├── hook.py                 # the installed hook command (Claude Code, Cursor)
+│   │   ├── hook.py                 # the installed hook command (Claude Code, Codex, Cursor)
 │   │   ├── adapter.py              # the hook, or the NAT middleware
-│   │   └── wire.py                 # writes the framework's own config
+│   │   └── wire.py                 # writes the framework's own config (except Codex)
 │   ├── guardian/
 │   │   ├── example_guardian.py     # the example Guardian: wire handling, replay, skew, the session chain, GET /keys
 │   │   ├── opa_backend.py          # the opt-in OPA backend
@@ -320,7 +320,7 @@ adapters/
 
 Imports flow `integrations → client → core`, and none of the three imports `guardian`, `examples` or `testing`; `uv run lint-imports` checks both rules in CI.
 
-Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`). NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point. Two more tools run as modules, with no command of their own: `python -m acs.testing.verify` is `acs-verify`, and `python -m acs.guardian.decision_keys` writes the ML-DSA-65 decision key, which needs the `pqc` extra. The gateway's `acs-gateway` command comes from its own project: run `uv sync --locked` in `adapters/gateway/`.
+Installing the package (`uv tool install ./adapters`, or `pip install ./adapters`) puts these commands on your PATH: `acs-claude-code-hook`, `acs-codex-hook`, `acs-cursor-hook <event>`, `acs-claude-code-wire`, `acs-cursor-wire`, `acs-nat-wire` and `acs-example-guardian`. For NAT, install the `nat` extra (`pip install './adapters[nat]'`). NAT then finds `_type: acs_guardian` through the package's `nat.components` entry point. Two more tools run as modules, with no command of their own: `python -m acs.testing.verify` is `acs-verify`, and `python -m acs.guardian.decision_keys` writes the ML-DSA-65 decision key, which needs the `pqc` extra. The gateway's `acs-gateway` command comes from its own project: run `uv sync --locked` in `adapters/gateway/`.
 
 ---
 

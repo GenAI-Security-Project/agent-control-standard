@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 REPO_SCHEMAS = Path(__file__).resolve().parents[2] / "specification" / "v0.1.0"
-SCRIPTS = ("acs-claude-code-hook", "acs-claude-code-wire", "acs-cursor-hook",
+SCRIPTS = ("acs-claude-code-hook", "acs-claude-code-wire", "acs-codex-hook", "acs-cursor-hook",
            "acs-cursor-wire", "acs-nat-wire", "acs-example-guardian")
 failures: list[str] = []
 
@@ -60,12 +60,14 @@ def base_checks(env_dir: Path, wheel_version: str, cwd: Path) -> None:
 
     p = run([py, "-c", "import json; from importlib.metadata import entry_points as e; "
              "print(json.dumps(sorted(x.name for x in e(group='acs.integrations'))))"], cwd)
-    check("acs.integrations lists claude_code, cursor and nat",
-          p.returncode == 0 and json.loads(p.stdout) == ["claude_code", "cursor", "nat"], p.stdout + p.stderr)
+    check("acs.integrations lists claude_code, codex, cursor and nat",
+          p.returncode == 0 and json.loads(p.stdout) == ["claude_code", "codex", "cursor", "nat"],
+          p.stdout + p.stderr)
 
     for script in SCRIPTS:
         check(f"{script} is installed", (bindir / script).is_file())
-    for script, label in (("acs-claude-code-hook", "claude-code"), ("acs-cursor-hook", "cursor")):
+    for script, label in (("acs-claude-code-hook", "claude-code"), ("acs-codex-hook", "codex"),
+                          ("acs-cursor-hook", "cursor")):
         p = run([str(bindir / script), "--version"], cwd)
         check(f"{script} --version", p.returncode == 0 and f"({label}) {wheel_version}" in p.stdout, p.stdout + p.stderr)
     for script in ("acs-claude-code-wire", "acs-cursor-wire"):
@@ -85,6 +87,12 @@ def base_checks(env_dir: Path, wheel_version: str, cwd: Path) -> None:
     degraded = {"PYTHONPATH": str(shadow), "ACS_DEFAULT_DENY": "1"}
     p = run([str(bindir / "acs-claude-code-hook")], cwd, input=event, env=degraded)
     check("acs-claude-code-hook without rfc8785 audits and denies",
+          p.returncode == 0 and '"permissionDecision": "deny"' in p.stdout
+          and "adapter_unavailable" in p.stderr, p.stdout + p.stderr[-300:])
+    codex_event = json.dumps({"hook_event_name": "PreToolUse", "session_id": "s", "turn_id": "t",
+                              "tool_use_id": "c", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+    p = run([str(bindir / "acs-codex-hook")], cwd, input=codex_event, env=degraded)
+    check("acs-codex-hook without rfc8785 audits and denies",
           p.returncode == 0 and '"permissionDecision": "deny"' in p.stdout
           and "adapter_unavailable" in p.stderr, p.stdout + p.stderr[-300:])
     p = run([str(bindir / "acs-cursor-hook"), "preToolUse"], cwd, input=event, env=degraded)

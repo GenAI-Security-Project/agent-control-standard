@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(Bash|apply_patch|spawn_agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'ACS_GUARDIAN_URL=http://127.0.0.1:8787/acs ACS_HMAC_SECRET_FILE=/absolute/path/to/.acs/hmac.key ACS_HMAC_KEY_ID=2026-11 ACS_AUDIT_FILE=/absolute/path/to/.acs/audit.log ACS_DEFAULT_DENY=1 /absolute/path/to/acs-codex-hook || { echo ACS hook could not run, so the call is blocked >&2; exit 2; }'",
+            "timeout": 30,
+            "statusMessage": "Checking with the ACS Guardian"
+          }
+        ]
+      }
+    ]
+  }
+}

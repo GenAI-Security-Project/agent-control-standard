@@ -12,6 +12,7 @@ import acs
 SCRIPTS = {
     "acs-claude-code-hook": "acs.integrations.claude_code.hook:main",
     "acs-claude-code-wire": "acs.integrations.claude_code.wire:main",
+    "acs-codex-hook": "acs.integrations.codex.hook:main",
     "acs-cursor-hook": "acs.integrations.cursor.hook:main",
     "acs-cursor-wire": "acs.integrations.cursor.wire:main",
     "acs-nat-wire": "acs.integrations.nat.wire:main",
@@ -22,11 +23,12 @@ SCRIPTS = {
 class Metadata(unittest.TestCase):
     def test_one_version_from_package_metadata(self) -> None:
         from acs.integrations.claude_code import adapter as claude
+        from acs.integrations.codex import adapter as codex
         from acs.integrations.cursor import adapter as cursor
         from acs.integrations.nat import adapter as nat
         version = metadata.version("acs-adapters")
         self.assertEqual(acs.__version__, version)
-        for module in (claude, cursor, nat):
+        for module in (claude, codex, cursor, nat):
             with self.subTest(module=module.__name__):
                 self.assertEqual(module.ADAPTER_VERSION, version)
 
@@ -43,7 +45,7 @@ class Metadata(unittest.TestCase):
 
     def test_integrations_entry_point_group_lists_each_integration(self) -> None:
         group = {e.name: e for e in entry_points(group="acs.integrations")}
-        self.assertEqual(set(group), {"claude_code", "cursor", "nat"})
+        self.assertEqual(set(group), {"claude_code", "codex", "cursor", "nat"})
         for name, entry in group.items():
             with self.subTest(integration=name):
                 self.assertEqual(entry.load().__name__, f"acs.integrations.{name}")
@@ -54,7 +56,8 @@ class Metadata(unittest.TestCase):
 
     def test_installed_hook_scripts_run(self) -> None:
         bindir = Path(sys.executable).parent
-        for name, label in (("acs-claude-code-hook", "claude-code"), ("acs-cursor-hook", "cursor")):
+        for name, label in (("acs-claude-code-hook", "claude-code"), ("acs-codex-hook", "codex"),
+                            ("acs-cursor-hook", "cursor")):
             with self.subTest(script=name):
                 p = subprocess.run([str(bindir / name), "--version"],
                                    capture_output=True, text=True, timeout=30)
