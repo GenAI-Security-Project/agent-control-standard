@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { readFile, lstat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -108,5 +109,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const mode = process.argv.includes('--public') ? 'public' : 'local';
   const port = 4173;
   const server = await createViewerServer({ mode });
-  server.listen(port, hostname, () => console.log('AgBOM Viewer · http://' + hostname + ':' + port + (mode === 'public' ? docsPath : '/')));
+  try {
+    server.listen(port, hostname);
+    await once(server, 'listening');
+    console.log('AgBOM Viewer · http://' + hostname + ':' + port + (mode === 'public' ? docsPath : '/'));
+  } catch (error) {
+    if (error.code !== 'EADDRINUSE') throw error;
+    console.error(`Cannot start the AgBOM Viewer. ${hostname}:${port} is already in use. Stop the process using port ${port} and rerun this command.`);
+    process.exitCode = 1;
+  }
 }

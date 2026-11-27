@@ -5,6 +5,7 @@ unset entirely, Material emitted <script src=".../gtag/js?id=">. No env value su
 it, so the analytics block had to be removed. Removing it alone was not enough: the theme
 also fetched Roboto from fonts.googleapis.com on all 37 pages.
 """
+import hashlib
 import json
 import os
 import re
@@ -51,7 +52,7 @@ def test_agbom_viewer_source_matches_public_package():
     index_path = "examples/index.json"
     allowed = {
         "index.html", "viewer.css", "viewer.js", "use-cases.js", "viewer-data.js",
-        "assets/InterVariable.woff2", "assets/OFL.txt", index_path,
+        "assets/InterVariable.woff2", "assets/OFL.txt", "assets/CHECKSUMS.txt", index_path,
     }
     files = set()
     unexpected = set()
@@ -84,6 +85,9 @@ def test_agbom_viewer_source_matches_public_package():
         [f"Unexpected viewer path: {(viewer_path / name).as_posix()}" for name in sorted(unexpected)]
         + [f"Missing viewer file: {(viewer_path / name).as_posix()}" for name in sorted(missing)]
     )
+    digest, filename = (viewer / "assets/CHECKSUMS.txt").read_text(encoding="utf-8").split()
+    assert filename == "InterVariable.woff2"
+    assert hashlib.sha256((viewer / "assets" / filename).read_bytes()).hexdigest() == digest
 
 
 def test_built_site_loads_nothing_from_google(built_site):

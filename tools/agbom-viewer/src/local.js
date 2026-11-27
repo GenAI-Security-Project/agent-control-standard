@@ -275,10 +275,15 @@ function populate(result) {
   selector.replaceChildren(...[...personal].map(([id, current]) => option(id, captureLabel(current))));
   if (personal.has(previous)) selector.value = previous;
   byId('personal-inspector').hidden = !personal.size;
-  byId('local-notices').replaceChildren(...(result.notices.length ? [
-    element('details', '', element('summary', '', 'Local data notices (' + result.notices.length + ')'),
-      element('ul', '', ...result.notices.map((note) => element('li', '', note))))] : []),
-    ...(result.scenarioIssue ? [element('p', 'muted', 'Developer-support evidence unavailable · ' + result.scenarioIssue)] : []));
+  const notices = byId('local-notices');
+  notices.replaceChildren();
+  if (result.notices.length) {
+    const details = element('details', '', element('summary', '', 'Local data notices (' + result.notices.length + ')'),
+      element('ul', '', ...result.notices.map((note) => element('li', '', note))));
+    details.open = result.limitReached;
+    notices.append(details);
+  }
+  if (result.scenarioIssue) notices.append(element('p', 'muted', 'Developer-support evidence unavailable · ' + result.scenarioIssue));
   selectPersonal();
   manualComparison();
   personalHistory();
