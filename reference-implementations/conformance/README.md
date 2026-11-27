@@ -3,7 +3,7 @@
 An independent, language-independent conformance suite for OWASP **Agent Control Standard (ACS)** v0.1.0 Guardians. It points at any Guardian over its HTTP endpoint and asks two questions:
 
 1. **Protocol conformance (Layer A)**: does the Guardian speak ACS correctly? Handshake/ServerHello, schema-valid decision envelopes, refusal of undeclared methods, `system/ping`, and §10 message authentication (a valid HMAC-SHA256 signature accepted; tampered, stale-timestamp, and replayed requests rejected).
-2. **Invariant conformance (Layer B)**: does a *protocol-perfect* Guardian actually preserve a security invariant? ACS-Core states it "does not assert that policies are strict." This layer drives the delegated-authority, cumulative-limit scenarios (OWASP Agentic ASI03); a shared grant consumed under concurrency, lost acknowledgements, and retries; and measures, from an independent world ledger, whether the committed total ever exceeds the grant.
+2. **Invariant conformance (Layer B)**: does a *protocol-perfect* Guardian actually preserve a security invariant? ACS-Core states it "does not assert that policies are strict." This layer drives the delegated-authority, cumulative-limit scenarios; a shared grant consumed under concurrency, lost acknowledgements, and retries; and measures, from an independent world ledger, whether the committed total ever exceeds the grant.
 
 Built in response to [issue #311](https://github.com/GenAI-Security-Project/agent-control-standard/issues/311) (a language-independent Guardian contract test suite) and issue #19 (no independent conformance steward in v0.1.0).
 
@@ -11,7 +11,7 @@ Built in response to [issue #311](https://github.com/GenAI-Security-Project/agen
 
 ```
 python3 run_conformance.py --selftest          # Layer A + B against the three bundled mock Guardians
-python3 matrix.py                              # the T1–T10 reconciliation matrix (OWASP AIMM Pillar 2 §5.1 cases)
+python3 matrix.py                              # the T1–T10 reconciliation matrix (the delegated-authority reconciliation cases)
 python3 preforward.py                          # the T4 pilot's pre-forward R1 (Test Contract V0.3), P0–P11
 python3 verify.py                              # re-derive every verdict from the wire transcripts
 python3 run_conformance.py --guardian-url http://localhost:8787/acs   # point Layer A/B at a real Guardian
@@ -33,7 +33,7 @@ The point of Layer B in one line: a destination that passes the obvious concurre
 
 ## The T1–T10 reconciliation matrix
 
-The OWASP delegated-authority discussion took the 3×40 case well past the race, into a full reconciliation model: an operation/attempt split, holding a reservation on a lost acknowledgement, ordered admission, limit changes mid-flight, revocation, authority-basis drift (a tool redefined under an unchanged name), partial fulfilment, and behaviour drift under an unchanged digest. Those cases (T1–T10) began as prose in that thread. `matrix.py` makes them executable and measures each one from an independent, `operation_id`-idempotent ERP ledger. §5.1 (AIMM Pillar 2) was marked **Approved** in November 2026; this suite is its executable reference point for these cases, run as tests against the stable model.
+The OWASP delegated-authority discussion took the 3×40 case well past the race, into a full reconciliation model: an operation/attempt split, holding a reservation on a lost acknowledgement, ordered admission, limit changes mid-flight, revocation, authority-basis drift (a tool redefined under an unchanged name), partial fulfilment, and behaviour drift under an unchanged digest. Those cases (T1–T10) began as prose in that thread. `matrix.py` makes them executable and measures each one from an independent, `operation_id`-idempotent ERP ledger. These cases come from the OWASP GenAI Security Project's delegated-authority discussion, run as tests against the stable model.
 
 | | T1 | T2 | T3 | T4a | T4b | T5 | T6 | T7 | T8 | T9 | T10 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -42,7 +42,7 @@ The OWASP delegated-authority discussion took the 3×40 case well past the race,
 
 T8 is partial fulfilment (the ERP confirms 20 of a 40-unit request; consumption counts the confirmed effect, the remainder stays reserved until the key closes, and a fill after close is counted and the grant flagged `reconciliation_required`). T9 is an **expected-miss**: a digest attests the declaration, not the behaviour behind it, so a changed-behaviour/unchanged-digest case is outside what any digest check can catch; the suite records the ceiling rather than pretending to cover it. T10 is the reconciliation discrepancy T3 stops short of: a commit that lands after the operation was reconciled as `non_effect` (the ERP record shows up late) must be counted and flagged `reconciliation_required`, even within the limit, rather than silently absorbed; `naive` absorbs it (the gap, caught by Paolo Costanzo reading the source). `matrix.py` also runs a commitment-boundary sweep (each pre-cut stage against each declared boundary, 12 cells), a **boundary-conformance invariant**, and a non-idempotent ledger variant (separating a guarantee the Guardian provides from one the resource provides). The model is credited to the thread's participants; the encoding, and the questions it does not pretend to settle (whether a committed overrun is a violation, how to model per-attempt records), are written up in [SCENARIO_T1_T10.md](SCENARIO_T1_T10.md).
 
-The boundary-conformance invariant enforces the condition §5.1 settled: a Guardian may declare its own commitment boundary, but at that boundary the maximum remaining exposure must be bounded and accounted against the authority. Once an operation is past the declared boundary it can no longer be cancelled, so the suite cuts the limit, then offers a competing op sized to fit only if the immune operation's exposure were freed. A Guardian that honours its boundary keeps that exposure accounted and denies the competitor; the `boundary-blind` foil declares a boundary but frees the exposure on the cut and overruns. `reconciling` passes at every boundary (committed 80), `boundary-blind` fails at every boundary (committed 100); a check only a correct Guardian passes, with a plausible-but-wrong one made to fail it.
+The boundary-conformance invariant enforces the boundary-conformance condition: a Guardian may declare its own commitment boundary, but at that boundary the maximum remaining exposure must be bounded and accounted against the authority. Once an operation is past the declared boundary it can no longer be cancelled, so the suite cuts the limit, then offers a competing op sized to fit only if the immune operation's exposure were freed. A Guardian that honours its boundary keeps that exposure accounted and denies the competitor; the `boundary-blind` foil declares a boundary but frees the exposure on the cut and overruns. `reconciling` passes at every boundary (committed 80), `boundary-blind` fails at every boundary (committed 100); a check only a correct Guardian passes, with a plausible-but-wrong one made to fail it.
 
 ## Comparison with ARC (declaration-time)
 

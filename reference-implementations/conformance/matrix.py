@@ -319,7 +319,7 @@ def sweep(cli, stage, boundary):
 
 
 # ---------------------------------------------------------------- boundary-conformance invariant
-# §5.1 (Approved) does not mandate a universal boundary; it allows an action-class-specific one
+# §5.1 does not mandate a universal boundary; it allows an action-class-specific one
 # that is "explicitly defined, stable for that action class, and grounded in the actual
 # cancellation or commitment semantics of the execution path. By that point, the maximum
 # remaining consequential exposure must already be bounded and accounted against the applicable
