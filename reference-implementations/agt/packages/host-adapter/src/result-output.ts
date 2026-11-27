@@ -458,6 +458,121 @@ export function replacingOutput(location: HostOutputLocation, replacement: unkno
 }
 
 /**
+ * The replacing output for a withholding: `replacingOutput` with
+ * `WITHHELD_OUTPUT`, and every declared companion that holds text replaced the
+ * same way.
+ *
+ * A companion is a field the model reads that is not a copy of the leaf (see
+ * `HookmapOutputs.companions`). The policy evaluates the leaf alone, so a
+ * withholding is the one decision that can say something about the rest of the
+ * object: the output is not deliverable, and withholding the leaf while a
+ * neighbour still carries what the tool printed withholds nothing.
+ *
+ * Without `companions` this is `replacingOutput(location, WITHHELD_OUTPUT)`,
+ * unchanged. With them:
+ *
+ *   - a companion the payload does not carry is skipped, and an empty one is
+ *     left as it is, because neither holds anything to withhold;
+ *   - a companion holding something other than text throws, for the reason
+ *     `replacingOutput` throws on a leaf of another type;
+ *   - an absent leaf is tolerated when at least one companion holds text. The
+ *     replacement then patches the fields that exist and adds none, which keeps
+ *     the tool's own shape. With no leaf and no text to withhold it throws, as
+ *     `replacingOutput` does.
+ *
+ * A redaction does not come through here. `replacingOutput` carries a rewrite of
+ * the leaf, and the companions stay as the host produced them.
+ */
+export function withheldOutput(location: HostOutputLocation): Record<string, unknown> {
+  const { payload, outputs } = location;
+  const declared = outputs.companions ?? [];
+  if (declared.length === 0) {
+    return replacingOutput(location, WITHHELD_OUTPUT);
+  }
+
+  const withinSegments = pathSegments(outputs.within);
+  const fromSegments = pathSegments(outputs.from);
+  const leafSegments = fromSegments.slice(withinSegments.length);
+  const container = resolvePath(payload, outputs.within);
+  const pathsRelate = withinSegments.every((segment, index) => fromSegments[index] === segment);
+  if (!isPlainObject(container) || !pathsRelate || leafSegments.length === 0) {
+    // `replacingOutput` owns the message for each of these three.
+    return replacingOutput(location, WITHHELD_OUTPUT);
+  }
+
+  const companions = declared.map((companion) => {
+    const segments = pathSegments(companion);
+    if (!withinSegments.every((segment, index) => segments[index] === segment)) {
+      throw new Error(
+        `result-output: hookmap companion ${JSON.stringify(companion)} is not inside ` +
+          `${JSON.stringify(outputs.within)}, so it names no field of the output object`,
+      );
+    }
+    const relative = segments.slice(withinSegments.length);
+    if (relative.length === 0) {
+      throw new Error(
+        `result-output: hookmap companion ${JSON.stringify(companion)} names the same object as ` +
+          `"outputs.within" ${JSON.stringify(outputs.within)} itself, not a field inside it`,
+      );
+    }
+    if (pathsOverlap(leafSegments, relative)) {
+      throw new Error(
+        `result-output: hookmap companion ${JSON.stringify(companion)} and leaf path ` +
+          `${JSON.stringify(outputs.from)} are not disjoint -- a companion names a field DIFFERENT from the leaf`,
+      );
+    }
+    for (const mirror of outputs.mirrors ?? []) {
+      if (pathsOverlap(pathSegments(mirror).slice(withinSegments.length), relative)) {
+        throw new Error(
+          `result-output: hookmap companion ${JSON.stringify(companion)} and mirror ${JSON.stringify(mirror)} ` +
+            `are not disjoint -- a companion holds text of its own, a mirror holds a copy of the leaf`,
+        );
+      }
+    }
+    return { companion, relative };
+  });
+  for (let i = 0; i < companions.length; i += 1) {
+    for (let j = i + 1; j < companions.length; j += 1) {
+      const first = companions[i] as { companion: string; relative: string[] };
+      const second = companions[j] as { companion: string; relative: string[] };
+      if (pathsOverlap(first.relative, second.relative)) {
+        throw new Error(
+          `result-output: hookmap companions ${JSON.stringify(first.companion)} and ` +
+            `${JSON.stringify(second.companion)} are not disjoint (equal, ancestor, or descendant)`,
+        );
+      }
+    }
+  }
+
+  const leafPresent = resolveSegments(container, leafSegments) !== undefined;
+  let patched: Record<string, unknown> = leafPresent ? replacingOutput(location, WITHHELD_OUTPUT) : { ...container };
+  let withheld = leafPresent;
+  for (const { companion, relative } of companions) {
+    const value = resolveSegments(patched, relative);
+    if (value === undefined || value === "") {
+      continue;
+    }
+    if (typeof value !== "string") {
+      throw new Error(
+        `result-output: hookmap companion ${JSON.stringify(companion)} holds a ${typeof value}, not text -- ` +
+          `the host validates a replacement against the tool's own output shape and delivers the ORIGINAL when ` +
+          `it does not match, so a text replacement there withholds nothing`,
+      );
+    }
+    patched = patchedClone(patched, relative, WITHHELD_OUTPUT, companion);
+    withheld = true;
+  }
+  if (!withheld) {
+    throw new Error(
+      `result-output: hookmap path ${JSON.stringify(outputs.from)} resolves to no value in this payload and no ` +
+        `declared companion holds text, so there is nothing to withhold and no shape to patch -- a replacement ` +
+        `that added a field could be declined by the host, and a declined replacement delivers the original output`,
+    );
+  }
+  return patched;
+}
+
+/**
  * Throws unless a replacing output can be built for this payload at all --
  * asked, deliberately, by building one.
  *
@@ -490,7 +605,7 @@ export function replacingOutput(location: HostOutputLocation, replacement: unkno
  * is in whether it could be made.
  */
 export function assertOutputIsReplaceable(location: HostOutputLocation): void {
-  replacingOutput(location, WITHHELD_OUTPUT);
+  withheldOutput(location);
 }
 
 /**
@@ -703,7 +818,7 @@ export function withResultOutput(decision: AcsDecision, location: HostOutputLoca
     return decision;
   }
   if (withholdsAtResultGate(decision.decision)) {
-    return { ...decision, applied_output: replacingOutput(location, WITHHELD_OUTPUT) } satisfies ValidatedAcsDecision;
+    return { ...decision, applied_output: withheldOutput(location) } satisfies ValidatedAcsDecision;
   }
   if (decision.decision === DELIVERS_A_REPLACEMENT && (decision as ValidatedAcsDecision).applied_output === undefined) {
     throw new Error(
