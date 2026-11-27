@@ -11,7 +11,7 @@ first one:
   2. the same envelope again, same request_id           -> -32005 REPLAY_DETECTED
 
 Exit code 0 when both hold, 1 otherwise. This isolates the mechanism described
-in docs/claude_code/prehook-coverage-2026-11-09.md from any host: a conformant
+in docs/claude_code/claude-code-dogfooding-2026-11-09.md from any host: a conformant
 Guardian rejects a repeated envelope and has nothing to reject when the action
 repeats under fresh ids. It reads the policy the example Guardian ships with,
 which allows a `Write`.

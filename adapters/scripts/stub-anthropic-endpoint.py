@@ -1,19 +1,21 @@
 """Fake Anthropic Messages (/v1/messages) server that truncates a tool call.
 
-The sibling of `server.py`, for clients that speak the Anthropic wire format
-instead of Chat Completions. Same scenario, same mode vocabulary, same idea:
-the "model" asks for one file write with 40 lines of content, and the call
-arrives cut in the middle of line 17.
+It speaks the Anthropic wire format rather than Chat Completions: the "model"
+asks for one file write with 40 lines of content, and the call arrives cut in
+the middle of line 17.
 
-  complete  full arguments, the stream ends with stop_reason=end_turn
+  complete  full arguments, the stream ends with stop_reason=tool_use
             (control: proves execution can be observed at all)
   length    arguments cut mid-line, stream ends with stop_reason=max_tokens
   drop      arguments cut mid-line, then the HTTP body ends cleanly: no
-            message_delta, no message_stop
-  reset     arguments cut mid-line, then the TCP connection is closed without
-            finishing the chunked body (transport error)
+            message_delta, no message_stop (FIN)
+  reset     arguments cut mid-line, then the connection is reset with
+            SO_LINGER(1, 0) before the body finishes (RST)
+  loop      full arguments, offered again on every request that carries the
+            tool_result, up to MAX_LOOP_TURNS times
 
-Turn 2+ (the request carries a tool_result block) answers "Done." and stops.
+Turn 2+ (the request carries a tool_result block) answers "Done." and stops,
+except in `loop`.
 
 URL layout:  http://127.0.0.1:PORT/<mode>/v1/messages
 Every request is appended as one JSON line to the file named by $BENCH_LOG.
@@ -23,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import struct
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -155,14 +158,11 @@ class Handler(BaseHTTPRequestHandler):
     def _hard_close(self) -> None:
         try:
             self.wfile.flush()
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER,
-                                       socket.pack("ii", 1, 0))
-            self.connection.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the client already went away; the socket is reset below either way
+        # SO_LINGER (onoff=1, linger=0) makes close() send RST instead of FIN.
+        self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        self.connection.close()
         self.close_connection = True
 
     def _log(self, rec: dict) -> None:
@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
         if mode == "drop":
             return  # body ends here: no content_block_stop, no message_delta, no message_stop
         yield sse("content_block_stop", {"type": "content_block_stop", "index": 0})
-        stop = "end_turn" if mode == "complete" else "max_tokens"
+        stop = "max_tokens" if mode == "length" else "tool_use"
         yield sse("message_delta", {"type": "message_delta",
                                     "delta": {"stop_reason": stop, "stop_sequence": None},
                                     "usage": {"output_tokens": 40}})

@@ -1,15 +1,16 @@
 """One conformance run against a real client, without touching the ACS tree.
 
     real Claude Code  ->  ACS claude_code adapter (hook)  ->  example Guardian
-                      ->  a controlled Anthropic /v1/messages endpoint (stub_server.py)
+                      ->  a controlled Anthropic /v1/messages endpoint (stub-anthropic-endpoint.py)
 
 The ACS checkout under --acs is used as-is: it is imported from, never patched, so the version
 under test is exactly the commit named in the output. The endpoint is the only thing that fakes
 anything, and it fakes only the model.
 
-Each rep gets its own temp workspace, its own Guardian on an OS-assigned port, and its own stub
-port; the stub's request log, the Guardian's step log and the files the client left behind are
-all written into the JSON the run produces.
+Each rep gets its own temp workspace, its own Guardian on an OS-assigned port, its own stub
+port, and its own Claude Code config directory (CLAUDE_CONFIG_DIR), so neither the user's
+`~/.claude` nor another rep's state is read or written; the stub's request log, the Guardian's
+step log and the files the client left behind are all written into the JSON the run produces.
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -92,7 +94,7 @@ def _summarize(raw: str) -> dict:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--acs", required=True, help="path to the ACS adapters/ directory")
-    ap.add_argument("--stub", required=True, help="path to stub_server.py")
+    ap.add_argument("--stub", required=True, help="path to stub-anthropic-endpoint.py")
     ap.add_argument("--mode", default="complete", choices=("complete", "length", "drop", "reset", "loop"))
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--prompt", default="Write report.txt with the standard 40 lines.")
@@ -144,12 +146,13 @@ def main(argv: list[str]) -> int:
 
         guardian_url = f"http://127.0.0.1:{guardian_port}/acs"
 
-        # Project-level settings only: the runner's own ~/.claude is never touched.
+        # Project-level settings only: the hook lives in the rep's own workspace, and the
+        # client's user-level config dir is a fresh one per rep, never the runner's ~/.claude.
         (work / ".claude").mkdir()
         hook = " ".join(
-            [f"ACS_GUARDIAN_URL={guardian_url}"]
-            + [f"{k}={v}" for k, v in signing.items()]
-            + [f"{sys.executable} {adapter}"]
+            [f"ACS_GUARDIAN_URL={shlex.quote(guardian_url)}"]
+            + [f"{k}={shlex.quote(str(v))}" for k, v in signing.items()]
+            + [shlex.join([sys.executable, str(adapter)])]
         )
         settings = {"hooks": {ev: [{"matcher": "*", "hooks": [{"type": "command", "command": hook}]}]
                               for ev in HOOK_EVENTS}}
@@ -160,6 +163,9 @@ def main(argv: list[str]) -> int:
             "ANTHROPIC_BASE_URL": f"http://127.0.0.1:{stub_port}/{a.mode}",
             "ANTHROPIC_API_KEY": "sk-ant-api03-bench-placeholder",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            # Fresh user-level config per rep: without this the client reads and writes the
+            # runner's own ~/.claude (its settings, hooks and session history).
+            "CLAUDE_CONFIG_DIR": str(work / ".claude-config"),
         }
         started = time.time()
         try:
@@ -169,7 +175,11 @@ def main(argv: list[str]) -> int:
             )
             rc, out, err = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired as e:
-            rc, out, err = "timeout", e.stdout or "", e.stderr or ""
+            # text=True does not apply to a timed-out child on every platform: the captured
+            # output can still be bytes, and json.dumps would then fail at the very end.
+            rc = "timeout"
+            out = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+            err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         elapsed = round(time.time() - started, 1)
 
         target = work / "report.txt"
