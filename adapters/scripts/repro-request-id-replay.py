@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -49,10 +51,15 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def start_guardian() -> tuple[subprocess.Popen, int]:
-    """Pick a port, start the shipped Guardian on it, and wait until it answers."""
+def start_guardian(state_dir: Path) -> tuple[subprocess.Popen, int]:
+    """Pick a port, start the shipped Guardian on it, and wait until it answers.
+
+    `state_dir` holds the Guardian's own state for the length of the run. Without it the Guardian
+    falls back to `~/.cache/acs-guardian-state`, so every run of this script would write into the
+    user's home; the caller removes the directory afterwards.
+    """
     port = free_port()
-    env = {**os.environ, **signing_env()}
+    env = {**os.environ, **signing_env(), "ACS_GUARDIAN_STATE_DIR": str(state_dir)}
     env.pop("ACS_HMAC_SECRET_FILE", None)
     process = subprocess.Popen(
         [sys.executable, str(GUARDIAN), "--port", str(port)],
@@ -110,7 +117,8 @@ def main() -> int:
     first_id = str(uuid.uuid4())
     second_id = str(uuid.uuid4())
 
-    process, port = start_guardian()
+    state_dir = Path(tempfile.mkdtemp(prefix="acs-repro-state-"))
+    process, port = start_guardian(state_dir)
     try:
         session_id = str(uuid.uuid4())
         payload_free = {}
@@ -137,6 +145,13 @@ def main() -> int:
         steps.append(("same nonce, second send", outcome(with_nonce_b)))
     finally:
         process.terminate()
+        try:
+            process.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        # Everything the Guardian wrote went into the temporary directory, so the user's home is
+        # exactly as it was before the run.
+        shutil.rmtree(state_dir, ignore_errors=True)
 
     for label, (kind, value) in steps:
         print(f"{label:38s} {kind}: {value}")
