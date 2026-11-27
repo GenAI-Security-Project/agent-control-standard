@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,6 +120,9 @@ type harness struct {
 	signer *guardian.HMACSigner
 	server *httptest.Server
 	now    time.Time
+	// held maps the token of a timed request to the time serve charges the
+	// Guardian with for it.
+	held sync.Map
 }
 
 type option func(*guardian.Config)
@@ -147,15 +151,54 @@ func newHarness(t *testing.T, opts ...option) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.server = httptest.NewServer(h.g)
+	h.server = httptest.NewServer(http.HandlerFunc(h.serve))
 	t.Cleanup(h.server.Close)
 	return h
+}
+
+// timingHeader carries the token of a timed request to serve.
+const timingHeader = "Acs-Test-Timing"
+
+// timingToken is the context key under which a timed request's token reaches
+// post.
+type timingToken struct{}
+
+// overrunKey is the context key under which a timed request carries its
+// overrun to the store calls the Guardian makes for it: how long stalled
+// calls ran late, which slowStore.stall adds to.
+type overrunKey struct{}
+
+// serve hands a request to the Guardian and, for a timed request, records
+// the time the Guardian is charged with. The clock starts before the Guardian
+// sets the arrival its deadlines count from, and stops once the answer is
+// flushed to the connection, so it covers sending the answer, which the
+// answer margin reserves time for.
+//
+// The request's overrun is subtracted. The Guardian waits on each store call,
+// and a loaded host can deliver a context's cancellation to a stalled call
+// hundreds of milliseconds late. That delay belongs to the host.
+func (h *harness) serve(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get(timingHeader)
+	if token == "" {
+		h.g.ServeHTTP(w, r)
+		return
+	}
+	var overrun atomic.Int64
+	start := time.Now()
+	h.g.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), overrunKey{}, &overrun)))
+	_ = http.NewResponseController(w).Flush()
+	// The client finishes reading only after net/http ends the response,
+	// which happens after serve returns, so timedDecision finds this entry.
+	h.held.Store(token, time.Since(start)-time.Duration(overrun.Load()))
 }
 
 func (h *harness) post(ctx context.Context, body []byte) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.server.URL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
+	}
+	if token, ok := ctx.Value(timingToken{}).(string); ok {
+		req.Header.Set(timingHeader, token)
 	}
 	resp, err := h.server.Client().Do(req)
 	if err != nil {
@@ -187,7 +230,12 @@ func (h *harness) session() *observedagent.Client {
 // send sends one request and fails the test on a transport error.
 func (h *harness) send(c *observedagent.Client, r observedagent.Request) observedagent.Outcome {
 	h.t.Helper()
-	o, err := c.Send(context.Background(), r)
+	return h.sendContext(context.Background(), c, r)
+}
+
+func (h *harness) sendContext(ctx context.Context, c *observedagent.Client, r observedagent.Request) observedagent.Outcome {
+	h.t.Helper()
+	o, err := c.Send(ctx, r)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -197,7 +245,29 @@ func (h *harness) send(c *observedagent.Client, r observedagent.Request) observe
 // decision sends a step and requires a signed decision back.
 func (h *harness) decision(c *observedagent.Client, methodName string, payload any) *acs.Result {
 	h.t.Helper()
-	o := h.send(c, observedagent.Request{Method: methodName, Payload: payload})
+	return h.decisionContext(context.Background(), c, methodName, payload)
+}
+
+// timedDecision sends a step through this harness's Guardian, requires a
+// signed decision back, and returns the time serve charges the Guardian with.
+// A step's deadline counts from the request's arrival at the Guardian, so a
+// test of that deadline measures this time. Building, signing, sending and
+// verifying the request on the agent's side happen outside it, and on a
+// loaded host they take tens of milliseconds the Guardian does not control.
+func (h *harness) timedDecision(c *observedagent.Client, methodName string, payload any) (*acs.Result, time.Duration) {
+	h.t.Helper()
+	token := observedagent.NewUUID()
+	r := h.decisionContext(context.WithValue(context.Background(), timingToken{}, token), c, methodName, payload)
+	held, ok := h.held.LoadAndDelete(token)
+	if !ok {
+		h.t.Fatalf("%s: the request did not reach this harness's Guardian", methodName)
+	}
+	return r, held.(time.Duration)
+}
+
+func (h *harness) decisionContext(ctx context.Context, c *observedagent.Client, methodName string, payload any) *acs.Result {
+	h.t.Helper()
+	o := h.sendContext(ctx, c, observedagent.Request{Method: methodName, Payload: payload})
 	if o.Result == nil {
 		h.t.Fatalf("%s: no decision: %s", methodName, o.Raw)
 	}
