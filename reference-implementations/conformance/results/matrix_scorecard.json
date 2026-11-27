@@ -1,0 +1,385 @@
+{
+  "scorecards": {
+    "reconciling": [
+      {
+        "case": "T1",
+        "measures": "undispatched reservation re-admitted on a limit cut (ledger stays within the new limit)",
+        "erp": 40,
+        "limit": 60,
+        "verdict": "PASS",
+        "detail": "committed 40 vs limit 60"
+      },
+      {
+        "case": "T2",
+        "measures": "a pre-cut in-flight commit over the new limit is FLAGGED as an overrun, not silently accepted",
+        "erp": 80,
+        "flagged": true,
+        "verdict": "PASS",
+        "detail": "committed 80, overrun flagged=True"
+      },
+      {
+        "case": "T3",
+        "measures": "lost ack with no committed effect: reservation released, a fresh retry denied against the reduced limit",
+        "erp": 40,
+        "retry": "deny",
+        "verdict": "PASS",
+        "detail": "committed 40, retry=deny"
+      },
+      {
+        "case": "T4a",
+        "measures": "definition digest drift, enforced: operation held for reauthorization, never committed",
+        "erp": 40,
+        "op_b_state": "held",
+        "verdict": "PASS",
+        "detail": "op-B held at dispatch, committed 40"
+      },
+      {
+        "case": "T4b",
+        "measures": "definition digest drift, recorded-not-enforced: operation commits but the attempt is flagged mismatched",
+        "erp": 80,
+        "flagged": true,
+        "verdict": "PASS",
+        "detail": "committed 80, basis_mismatch flagged=True"
+      },
+      {
+        "case": "T5",
+        "measures": "a transport resend of a known operation_id is idempotent (allowed, no second consumption; books match the ledger)",
+        "erp": 80,
+        "resend": "allow",
+        "consumed": 80,
+        "verdict": "PASS",
+        "detail": "resend=allow, guardian consumed 80 vs ledger 80"
+      },
+      {
+        "case": "T6",
+        "measures": "a limit cut below already-committed consumption flags an overrun on the grant",
+        "erp": 40,
+        "flagged": true,
+        "verdict": "PASS",
+        "detail": "committed 40 vs limit 30, overrun flagged=True"
+      },
+      {
+        "case": "T7",
+        "measures": "revocation releases the not-yet-dispatched; nothing new commits; a prior commit is not retro-flagged",
+        "erp": 40,
+        "reconfirm": "deny",
+        "verdict": "PASS",
+        "detail": "committed 40, re-confirm=deny, post-revoke-commit flag=False"
+      },
+      {
+        "case": "T8",
+        "measures": "partial fulfilment (Paolo's rule): confirmed effect counted, remainder held until the key closes (a competing op denied meanwhile); a fill after close is counted and the grant flagged reconciliation_required, not silently absorbed",
+        "erp": 80,
+        "opc": "deny",
+        "consumed": 80,
+        "verdict": "PASS",
+        "detail": "op-C=deny, committed 80, reconciliation_required=True"
+      },
+      {
+        "case": "T9",
+        "measures": "unchanged definition digest, changed server behaviour: a digest attests the declaration, not the behaviour behind it \u2014 the boundary of digest-based attestation, measured, not pretended covered",
+        "erp": 80,
+        "digest_stable": true,
+        "behaviour_drifted": true,
+        "verdict": "EXPECTED-MISS",
+        "detail": "digest def-v1 held, behaviour drifted b1->b2, op-B committed unflagged (committed 80)"
+      },
+      {
+        "case": "T10",
+        "measures": "a commit that lands after a non_effect reconciliation (the ERP record appears late) is counted and flagged reconciliation_required, not silently absorbed, even within the limit",
+        "erp": 80,
+        "flagged": true,
+        "verdict": "PASS",
+        "detail": "committed 80 within limit 100, reconciliation_required=True"
+      }
+    ],
+    "naive": [
+      {
+        "case": "T1",
+        "measures": "undispatched reservation re-admitted on a limit cut (ledger stays within the new limit)",
+        "erp": 80,
+        "limit": 60,
+        "verdict": "FAIL",
+        "detail": "committed 80 vs limit 60"
+      },
+      {
+        "case": "T2",
+        "measures": "a pre-cut in-flight commit over the new limit is FLAGGED as an overrun, not silently accepted",
+        "erp": 80,
+        "flagged": false,
+        "verdict": "FAIL",
+        "detail": "committed 80, overrun flagged=False"
+      },
+      {
+        "case": "T3",
+        "measures": "lost ack with no committed effect: reservation released, a fresh retry denied against the reduced limit",
+        "erp": 40,
+        "retry": "deny",
+        "verdict": "PASS",
+        "detail": "committed 40, retry=deny"
+      },
+      {
+        "case": "T5",
+        "measures": "a transport resend of a known operation_id is idempotent (allowed, no second consumption; books match the ledger)",
+        "erp": 80,
+        "resend": "deny",
+        "consumed": 80,
+        "verdict": "FAIL",
+        "detail": "resend=deny, guardian consumed 80 vs ledger 80"
+      },
+      {
+        "case": "T6",
+        "measures": "a limit cut below already-committed consumption flags an overrun on the grant",
+        "erp": 40,
+        "flagged": false,
+        "verdict": "FAIL",
+        "detail": "committed 40 vs limit 30, overrun flagged=False"
+      },
+      {
+        "case": "T7",
+        "measures": "revocation releases the not-yet-dispatched; nothing new commits; a prior commit is not retro-flagged",
+        "erp": 80,
+        "reconfirm": "deny",
+        "verdict": "FAIL",
+        "detail": "committed 80, re-confirm=deny, post-revoke-commit flag=True"
+      },
+      {
+        "case": "T8",
+        "measures": "partial fulfilment (Paolo's rule): confirmed effect counted, remainder held until the key closes (a competing op denied meanwhile); a fill after close is counted and the grant flagged reconciliation_required, not silently absorbed",
+        "erp": 120,
+        "opc": "allow",
+        "consumed": 120,
+        "verdict": "FAIL",
+        "detail": "op-C=allow, committed 120, reconciliation_required=False"
+      },
+      {
+        "case": "T10",
+        "measures": "a commit that lands after a non_effect reconciliation (the ERP record appears late) is counted and flagged reconciliation_required, not silently absorbed, even within the limit",
+        "erp": 80,
+        "flagged": false,
+        "verdict": "FAIL",
+        "detail": "committed 80 within limit 100, reconciliation_required=False"
+      }
+    ]
+  },
+  "sweep": [
+    {
+      "stage": "queued",
+      "boundary": "queue_admission",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B queued, boundary queue_admission, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "queued",
+      "boundary": "dispatch",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B queued, boundary dispatch, limit 100->60; committed 40 (expect 40)"
+    },
+    {
+      "stage": "queued",
+      "boundary": "resource_acceptance",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B queued, boundary resource_acceptance, limit 100->60; committed 40 (expect 40)"
+    },
+    {
+      "stage": "queued",
+      "boundary": "transaction_commit",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B queued, boundary transaction_commit, limit 100->60; committed 40 (expect 40)"
+    },
+    {
+      "stage": "dispatched",
+      "boundary": "queue_admission",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B dispatched, boundary queue_admission, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "dispatched",
+      "boundary": "dispatch",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B dispatched, boundary dispatch, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "dispatched",
+      "boundary": "resource_acceptance",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B dispatched, boundary resource_acceptance, limit 100->60; committed 40 (expect 40)"
+    },
+    {
+      "stage": "dispatched",
+      "boundary": "transaction_commit",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B dispatched, boundary transaction_commit, limit 100->60; committed 40 (expect 40)"
+    },
+    {
+      "stage": "resource_accepted",
+      "boundary": "queue_admission",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B resource_accepted, boundary queue_admission, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "resource_accepted",
+      "boundary": "dispatch",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B resource_accepted, boundary dispatch, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "resource_accepted",
+      "boundary": "resource_acceptance",
+      "erp": 80,
+      "immune": true,
+      "overrun": true,
+      "verdict": "PASS",
+      "detail": "op-B resource_accepted, boundary resource_acceptance, limit 100->60; committed 80 (expect 80)"
+    },
+    {
+      "stage": "resource_accepted",
+      "boundary": "transaction_commit",
+      "erp": 40,
+      "immune": false,
+      "overrun": false,
+      "verdict": "PASS",
+      "detail": "op-B resource_accepted, boundary transaction_commit, limit 100->60; committed 40 (expect 40)"
+    }
+  ],
+  "boundary_conformance": [
+    {
+      "policy": "reconciling",
+      "boundary": "queue_admission",
+      "opc": "deny",
+      "erp": 80,
+      "op_b_after_cut": "reserved",
+      "overrun_flagged": true,
+      "verdict": "PASS",
+      "detail": "boundary queue_admission: op-B reserved after the cut, op-C=deny, committed 80"
+    },
+    {
+      "policy": "reconciling",
+      "boundary": "dispatch",
+      "opc": "deny",
+      "erp": 80,
+      "op_b_after_cut": "reserved",
+      "overrun_flagged": true,
+      "verdict": "PASS",
+      "detail": "boundary dispatch: op-B reserved after the cut, op-C=deny, committed 80"
+    },
+    {
+      "policy": "reconciling",
+      "boundary": "resource_acceptance",
+      "opc": "deny",
+      "erp": 80,
+      "op_b_after_cut": "reserved",
+      "overrun_flagged": true,
+      "verdict": "PASS",
+      "detail": "boundary resource_acceptance: op-B reserved after the cut, op-C=deny, committed 80"
+    },
+    {
+      "policy": "boundary-blind",
+      "boundary": "queue_admission",
+      "opc": "allow",
+      "erp": 100,
+      "op_b_after_cut": "released",
+      "overrun_flagged": true,
+      "verdict": "FAIL",
+      "detail": "boundary queue_admission: op-B released after the cut, op-C=allow, committed 100"
+    },
+    {
+      "policy": "boundary-blind",
+      "boundary": "dispatch",
+      "opc": "allow",
+      "erp": 100,
+      "op_b_after_cut": "released",
+      "overrun_flagged": true,
+      "verdict": "FAIL",
+      "detail": "boundary dispatch: op-B released after the cut, op-C=allow, committed 100"
+    },
+    {
+      "policy": "boundary-blind",
+      "boundary": "resource_acceptance",
+      "opc": "allow",
+      "erp": 100,
+      "op_b_after_cut": "released",
+      "overrun_flagged": true,
+      "verdict": "FAIL",
+      "detail": "boundary resource_acceptance: op-B released after the cut, op-C=allow, committed 100"
+    }
+  ],
+  "comparison": [
+    {
+      "policy": "reconciling",
+      "case": "t4_underlying",
+      "erp": 80,
+      "flagged": true,
+      "outcome": "catches",
+      "detail": "reconciling: basis_mismatch flagged=True, committed 80"
+    },
+    {
+      "policy": "declaration-bound",
+      "case": "t4_underlying",
+      "erp": 80,
+      "flagged": false,
+      "outcome": "misses",
+      "detail": "declaration-bound: basis_mismatch flagged=False, committed 80"
+    }
+  ],
+  "ledger": [
+    {
+      "policy": "reconciling",
+      "ledger": "idempotent",
+      "erp": 80,
+      "verdict": "HOLD",
+      "detail": "reconciling on a idempotent ledger: committed 80"
+    },
+    {
+      "policy": "reconciling",
+      "ledger": "non-idempotent",
+      "erp": 80,
+      "verdict": "HOLD",
+      "detail": "reconciling on a non-idempotent ledger: committed 80"
+    },
+    {
+      "policy": "resource-reliant",
+      "ledger": "idempotent",
+      "erp": 80,
+      "verdict": "HOLD",
+      "detail": "resource-reliant on a idempotent ledger: committed 80"
+    },
+    {
+      "policy": "resource-reliant",
+      "ledger": "non-idempotent",
+      "erp": 120,
+      "verdict": "DOUBLE-SPEND",
+      "detail": "resource-reliant on a non-idempotent ledger: committed 120"
+    }
+  ]
+}

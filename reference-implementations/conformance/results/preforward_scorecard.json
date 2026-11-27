@@ -1,0 +1,89 @@
+{
+  "contract": "boris-ai-sec/ai-security-lab@6154918bc62dd497263f619a8cb6496082ac83f3 labs/aimm-p2-executable-evidence/TEST_CONTRACT_V0.3.md",
+  "r1_definition_source": "contract_fixture_current",
+  "limit": 100,
+  "gateway_timeout_s": 1.0,
+  "digests": [
+    {
+      "label": "D0",
+      "computed": "679a28ff301bd6768372767948fd0758b7a29ab8db2f0bcc7a52b5e4d8f52060",
+      "published": "679a28ff301bd6768372767948fd0758b7a29ab8db2f0bcc7a52b5e4d8f52060",
+      "bytes": 446,
+      "match": true
+    },
+    {
+      "label": "D1",
+      "computed": "25fa0f7bf8b75ef67b3da1d399b78807ab9c5f90a40f9d5a7e2016da1087c0b6",
+      "published": "25fa0f7bf8b75ef67b3da1d399b78807ab9c5f90a40f9d5a7e2016da1087c0b6",
+      "bytes": 446,
+      "match": true
+    }
+  ],
+  "cases": [
+    {
+      "case": "P0",
+      "measures": "C0 baseline: D0 at A1 and R1, enforced -> pre-forward allow, forward 40",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P2",
+      "measures": "C2 drift, enforced: D1 at R1 -> ask (HELD) before any send, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P2r",
+      "measures": "C2, then a fresh attempt_id for the same HELD operation -> deny reservation_held, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P3",
+      "measures": "C3 drift, declaration-bound: no digest check -> allow, forward 120 against Q=40, L=100 (expected miss)",
+      "verdict": "EXPECTED-MISS"
+    },
+    {
+      "case": "P3b",
+      "measures": "C3 with a post-persistence 409: readback shows the 120 the HTTP status hid",
+      "verdict": "EXPECTED-MISS"
+    },
+    {
+      "case": "P4",
+      "measures": "T4b recorded-not-enforced (extra case): allow, basis_mismatch flagged, forward 120",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P5",
+      "measures": "no out-of-band basis for the R1 attempt -> deny, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P6",
+      "measures": "R1 reuses the A1 attempt_id -> deny attempt_replayed, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P7",
+      "measures": "Guardian unreachable -> gateway fails closed, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P8",
+      "measures": "Guardian slower than the gateway timeout -> fails closed, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P9",
+      "measures": "allow for a different request_id -> fails closed, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P10",
+      "measures": "schema-invalid allow -> fails closed, no forward",
+      "verdict": "PASS"
+    },
+    {
+      "case": "P11",
+      "measures": "dispatch_report mode: the R1-triggering toolCallResult is ACKed allow while the reservation is HELD",
+      "verdict": "FINDING-REPRODUCED"
+    }
+  ]
+}

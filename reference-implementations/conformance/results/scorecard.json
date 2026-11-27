@@ -1,0 +1,171 @@
+{
+  "target": "selftest (all mock policies)",
+  "limit": 100,
+  "scorecards": [
+    {
+      "policy": "stateless",
+      "limit": 100,
+      "protocol": [
+        {
+          "check": "handshake returns a schema-valid ServerHello (v0.1.0 $def required fields)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "system/ping answers (liveness probe)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "toolCallRequest returns schema-valid AcsResult",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "check": "undeclared method is refused (JSON-RPC error)",
+          "ok": true
+        },
+        {
+          "check": "\u00a710 valid HMAC-SHA256 signature is accepted",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710 tampered request is rejected (SIGNATURE_INVALID -32004)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 out-of-window timestamp is rejected (TIMESTAMP_OUT_OF_WINDOW -32006)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 replayed request_id is rejected (REPLAY_DETECTED -32005)",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "committed": {
+        "race": 120,
+        "continue": 110,
+        "retry": 80
+      },
+      "verdict": {
+        "race": "OVERSHOOT",
+        "continue": "LEAK",
+        "retry": "DOUBLE-SPEND"
+      }
+    },
+    {
+      "policy": "reserve-only",
+      "limit": 100,
+      "protocol": [
+        {
+          "check": "handshake returns a schema-valid ServerHello (v0.1.0 $def required fields)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "system/ping answers (liveness probe)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "toolCallRequest returns schema-valid AcsResult",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "check": "undeclared method is refused (JSON-RPC error)",
+          "ok": true
+        },
+        {
+          "check": "\u00a710 valid HMAC-SHA256 signature is accepted",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710 tampered request is rejected (SIGNATURE_INVALID -32004)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 out-of-window timestamp is rejected (TIMESTAMP_OUT_OF_WINDOW -32006)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 replayed request_id is rejected (REPLAY_DETECTED -32005)",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "committed": {
+        "race": 80,
+        "continue": 110,
+        "retry": 80
+      },
+      "verdict": {
+        "race": "HOLD",
+        "continue": "LEAK",
+        "retry": "DOUBLE-SPEND"
+      }
+    },
+    {
+      "policy": "holding",
+      "limit": 100,
+      "protocol": [
+        {
+          "check": "handshake returns a schema-valid ServerHello (v0.1.0 $def required fields)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "system/ping answers (liveness probe)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "toolCallRequest returns schema-valid AcsResult",
+          "ok": true,
+          "detail": []
+        },
+        {
+          "check": "undeclared method is refused (JSON-RPC error)",
+          "ok": true
+        },
+        {
+          "check": "\u00a710 valid HMAC-SHA256 signature is accepted",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710 tampered request is rejected (SIGNATURE_INVALID -32004)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 out-of-window timestamp is rejected (TIMESTAMP_OUT_OF_WINDOW -32006)",
+          "ok": true,
+          "detail": ""
+        },
+        {
+          "check": "\u00a710.3 replayed request_id is rejected (REPLAY_DETECTED -32005)",
+          "ok": true,
+          "detail": ""
+        }
+      ],
+      "committed": {
+        "race": 80,
+        "continue": 40,
+        "retry": 40
+      },
+      "verdict": {
+        "race": "HOLD",
+        "continue": "HOLD",
+        "retry": "HOLD"
+      }
+    }
+  ]
+}

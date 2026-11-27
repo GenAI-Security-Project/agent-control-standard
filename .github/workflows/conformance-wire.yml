@@ -1,0 +1,65 @@
+# Proposed workflow for the ACS repo at .github/workflows/conformance-wire.yml
+# Wires the language-independent conformance suite (#311) into CI against the TS reference Guardian.
+# Verified facts behind every line:
+#   - Guardian start: `bun run guardian` from reference-implementations/agt (package.json script
+#     "guardian": "bun run packages/guardian/src/main.ts"); it logs "Guardian listening at
+#     http://localhost:8787/acs" and serves the ACS wire path /acs on 127.0.0.1:8787.
+#   - Pinned action SHAs copied from the repo's own reference-implementation.yml (zizmor requires
+#     SHA-pinned actions): actions/checkout v7.0.1, oven-sh/setup-bun v2.0.2.
+#   - In CI there is no container port-mapping, so the Guardian's default 127.0.0.1 bind is reachable
+#     directly; ACS_GUARDIAN_HOST=0.0.0.0 (needed only for Docker port-mapping) is NOT set here.
+#   - The suite is stdlib-only Python, so the runner's preinstalled python3 needs no setup action.
+#   - Readiness waits for the Guardian's own documented log line, not an endpoint probe (JSON-RPC
+#     errors are HTTP 200, so an endpoint probe is ambiguous before the handshake).
+#   - run_conformance.py gates on a hard Layer A failure (after the run_conformance-ci-gate.patch);
+#     verify.py already exits 2 on a verification failure.
+name: Wire conformance
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt/**"
+      - "reference-implementations/conformance/**"
+      - ".github/workflows/conformance-wire.yml"
+  push:
+    branches: [integration]
+permissions: {}
+jobs:
+  wire-conformance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+      - name: Install Guardian dependencies
+        working-directory: reference-implementations/agt
+        run: bun install --frozen-lockfile
+      - name: Start the reference Guardian
+        working-directory: reference-implementations/agt
+        run: |
+          bun run guardian > "${RUNNER_TEMP}/guardian.log" 2>&1 &
+          echo "$!" > "${RUNNER_TEMP}/guardian.pid"
+      - name: Wait for the Guardian to listen
+        run: |
+          for _ in $(seq 1 60); do
+            if grep -q "Guardian listening" "${RUNNER_TEMP}/guardian.log" 2>/dev/null; then
+              echo "Guardian is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Guardian did not start in time:"; cat "${RUNNER_TEMP}/guardian.log"; exit 1
+      - name: Run the conformance suite
+        working-directory: reference-implementations/conformance
+        run: |
+          python3 run_conformance.py --guardian-url http://127.0.0.1:8787/acs
+          python3 verify.py
+      - name: Stop the Guardian
+        if: always()
+        run: |
+          if [ -f "${RUNNER_TEMP}/guardian.pid" ]; then
+            kill "$(cat "${RUNNER_TEMP}/guardian.pid")" 2>/dev/null || true
+          fi

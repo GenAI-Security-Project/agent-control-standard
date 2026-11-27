@@ -1,0 +1,7 @@
+{"policy": "external", "scenario": "race", "operation_id": "op-0", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "race", "operation_id": "op-1", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "race", "operation_id": "op-2", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "continue", "operation_id": "L1", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "continue", "operation_id": "L2", "amount": 70, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "retry", "operation_id": "L1", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
+{"policy": "external", "scenario": "retry", "operation_id": "L1", "amount": 40, "decision": "deny", "executed": false, "reason": "evaluation_failed"}
