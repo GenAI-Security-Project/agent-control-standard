@@ -1,0 +1,47 @@
+{
+  "coverage": "supported",
+  "evidenceBasis": "artifact",
+  "expected": {
+    "code": null,
+    "codeValue": null,
+    "unmeasurableBecause": "under the HMAC baseline the verification key is the signing key, and both the Guardian and the Observed Agent hold it. The Observed Agent's MAC verifies under the key the key_id resolves to exactly as the Guardian's would, so nothing in the head or the public material says which of them computed it. Section 8.6 states the bound: non-repudiation, proving to a third party that a specific Guardian issued a specific head, requires the asymmetric ACS-Crypto profile. Graded allow, the member would credit the Guardian with a head it may not have issued; graded deny, it would attribute the head to a signer nobody can identify.",
+    "verdict": "unmeasurable"
+  },
+  "family": "acs-f-10",
+  "id": "v9f011986566cb7bc",
+  "kind": "indeterminate",
+  "payload": {
+    "context_entry": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "step_id": "st-0003",
+      "step_type": "hooks/toolCallRequest"
+    },
+    "guardian_response": {
+      "chain_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+      "decision": "allow",
+      "signature": {
+        "algorithm": "HMAC-SHA256",
+        "key_id": "session-k1",
+        "value": "AAAA"
+      }
+    },
+    "key_id_resolves_to": {
+      "class": "symmetric",
+      "key_id": "session-k1",
+      "signing_key_held_by": [
+        "guardian",
+        "observed_agent"
+      ]
+    },
+    "profile": "ACS-Core",
+    "signed_by": "observed_agent",
+    "signed_with": "session-k1"
+  },
+  "requirements": [
+    "ACS-R-022",
+    "ACS-R-021"
+  ],
+  "specVersion": "0.1.0",
+  "suite": "acs-core-negative-conformance",
+  "witnessScope": "SELF"
+}
