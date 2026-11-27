@@ -1,0 +1,87 @@
+# Runs the Claude Code hook shim on Windows, where issue #111 happens.
+#
+# Under Bun 1.4.x on Windows, the shim at
+# reference-implementations/agt/hosts/claude-code/acs-hook.ts exited 0 with nothing on
+# stdout before it read piped stdin. Claude Code reads that as "no objection", so the
+# tool call went through with no envelope and no audit entry. The bug does not show on
+# Linux or macOS, and every other job in this repository runs there, so nothing caught
+# it. This job is the only place the shim runs on Windows.
+#
+# The probe needs no Guardian. The shim answers a payload it cannot parse with exit 2,
+# which blocks the call, so piping "not json" into it separates the two cases: exit 2
+# means stdin was read, and exit 0 means the process quit first. A Guardian on Windows
+# also needs ACS_OPA_PATH (issue #110), which this job does not have to set up.
+#
+# No workflow expression appears inside a `run:` block. The one in `with:` is a matrix
+# value this file defines, and the one in the concurrency group is an integer pull
+# request number or a ref name GitHub validates.
+name: Reference implementation on Windows
+
+on:
+  pull_request:
+    paths:
+      - "reference-implementations/agt/hosts/claude-code/**"
+      - "reference-implementations/agt/package.json"
+      - "reference-implementations/agt/bun.lock"
+      - ".github/workflows/reference-implementation-windows.yml"
+  push:
+    branches: ["main", "integration"]
+    paths:
+      - "reference-implementations/agt/hosts/claude-code/**"
+      - "reference-implementations/agt/package.json"
+      - "reference-implementations/agt/bun.lock"
+      - ".github/workflows/reference-implementation-windows.yml"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: reference-implementation-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude-code-shim:
+    strategy:
+      fail-fast: false
+      matrix:
+        # 1.3.11 is the version reference-implementation.yml pins. 1.4.4 is the version
+        # the Bun bump moves to, and the 1.4.x line is where issue #111 shows.
+        bun: ["1.3.11", "1.4.4"]
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: reference-implementations/agt
+        shell: bash
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing here pushes with git, so the checkout's token has no reason to
+          # stay behind in .git/config.
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: ${{ matrix.bun }}
+
+      - name: Install dependencies from the lockfile
+        run: bun install --frozen-lockfile
+
+      # Exit 2 with an error on stderr is the shim's answer to an unparseable payload.
+      # Exit 0 with empty stdout is issue #111: the process quit before it read stdin.
+      - name: The shim reads piped stdin before it exits (issue #111)
+        run: |
+          set +e
+          printf 'not json' | bun run hosts/claude-code/acs-hook.ts >out.txt 2>err.txt
+          rc=$?
+          set -e
+          echo "exit code: $rc"
+          echo "stdout: $(cat out.txt)"
+          echo "stderr: $(cat err.txt)"
+          if [ "$rc" -ne 2 ]; then
+            echo "::error::acs-hook.ts exited $rc on piped 'not json'. Expected 2. See issue #111."
+            exit 1
+          fi
