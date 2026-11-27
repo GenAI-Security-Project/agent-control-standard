@@ -17,6 +17,7 @@ package agtbridge
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -25,15 +26,13 @@ import (
 	"strings"
 	"time"
 
-	jsonv2 "github.com/go-json-experiment/json"
-
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"
 )
 
-// reasonMCPCallPending is the reason code of a wrapped tools/call denied
-// because its MCP id is already awaiting a response.
-const reasonMCPCallPending = "mcp_call_pending"
+// reasonMCPResultUnreadable is the reason code of a wrapped MCP response
+// denied because its result or error does not decode.
+const reasonMCPResultUnreadable = "mcp_result_unreadable"
 
 // DefaultAskTimeout is the ask_details.timeout_seconds of an Ask when
 // Options.AskTimeout is zero.
@@ -132,13 +131,12 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	if err != nil {
 		return guardian.PolicyDecision{}, err
 	}
-	before := len(state.MCPCalls)
-	p, err := project(in.Request, &state)
-	if errors.Is(err, errMCPCallPending) {
+	p, err := project(in.Request, in.Session.MCPCalls)
+	if errors.Is(err, errMCPResultUnreadable) {
 		return guardian.PolicyDecision{Decision: acs.Decision{
 			Disposition: acs.Deny,
-			Reasoning:   "Another tools/call with this MCP id is still awaiting its response, so their results could not be told apart.",
-			ReasonCodes: []string{reasonMCPCallPending},
+			Reasoning:   "The result policy cannot check this MCP response: " + err.Error() + ".",
+			ReasonCodes: []string{reasonMCPResultUnreadable},
 		}}, nil
 	}
 	if err != nil {
@@ -147,12 +145,7 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	req := p.req
 	point, ok := e.mapping.point(req.Method)
 	if !ok || !e.evaluator.Governs(point) {
-		pd := guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}
-		p.settle(&state, acs.Allow)
-		if len(state.MCPCalls) != before || p.outputs != nil {
-			pd.State, err = jsonv2.Marshal(state)
-		}
-		return pd, err
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}}, nil
 	}
 	var head struct {
 		Tool acs.Tool `json:"tool"`
@@ -191,12 +184,8 @@ func (e *Engine) Decide(ctx context.Context, in guardian.PolicyInput) (guardian.
 	// AGT omits an empty result_labels, so labels arrive only to replace the
 	// session's; absent, they leave it unchanged, as the TypeScript
 	// Guardian's persistIfcLabels does.
-	labelled := len(v.ResultLabels) > 0
-	if labelled {
+	if len(v.ResultLabels) > 0 {
 		state.IFCLabels = v.ResultLabels
-	}
-	p.settle(&state, d.Disposition)
-	if labelled || len(state.MCPCalls) != before || p.outputs != nil {
 		if pd.State, err = jsonv2.Marshal(state); err != nil {
 			return guardian.PolicyDecision{}, err
 		}
@@ -221,11 +210,10 @@ func cloneMap(source map[string]string) map[string]string {
 // policyState is what the engine keeps with a session: the
 // information-flow labels AGT's last verdict returned as result_labels,
 // which the next step supplies back as source labels, since AGT's core
-// stores nothing; and the tool name of each wrapped MCP tools/call awaiting
-// its response, by MCP id.
+// stores nothing. The tool of a wrapped MCP response comes from the
+// Guardian's SessionContext.MCPCalls.
 type policyState struct {
-	IFCLabels []string          `json:"ifc_labels"`
-	MCPCalls  map[string]string `json:"mcp_calls,omitzero"`
+	IFCLabels []string `json:"ifc_labels"`
 }
 
 // initialLabels are the labels a session starts with, the TypeScript

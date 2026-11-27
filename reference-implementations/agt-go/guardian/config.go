@@ -109,9 +109,9 @@ type Config struct {
 	// step that finds no place is answered DENY. Zero means
 	// DefaultMaxEngineCalls.
 	MaxEngineCalls int
-	// MaxPolicyStateBytes bounds PolicyDecision.State; a larger state is
-	// not kept, and the step is answered DENY. Zero means
-	// DefaultMaxPolicyStateBytes.
+	// MaxPolicyStateBytes bounds PolicyDecision.State, and separately the
+	// ids and tools of a session's open MCP calls; a step past either bound
+	// is answered DENY. Zero means DefaultMaxPolicyStateBytes.
 	MaxPolicyStateBytes int
 	// Now is the Guardian's clock; nil means time.Now.
 	Now func() time.Time

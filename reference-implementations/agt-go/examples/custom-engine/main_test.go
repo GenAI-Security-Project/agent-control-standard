@@ -5,13 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/go-json-experiment/json/jsontext"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/guardian"

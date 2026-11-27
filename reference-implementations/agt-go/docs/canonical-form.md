@@ -7,10 +7,10 @@ that form and how each use is proved.
 
 ## Canonicalize once, the same way everywhere
 
-`internal/jcs` produces the JCS form with `jsontext.Value.Canonicalize` from
-`github.com/go-json-experiment/json`, the upstream of Go's `encoding/json/v2`, which
-implements RFC 8785 directly. Go's `encoding/json` v1 never produces canonical bytes: it
-escapes `<`, `>`, `&`, U+2028 and U+2029, and formats numbers its own way.
+`internal/jcs` produces the JCS form with `jsontext.Value.Canonicalize` from Go's
+`encoding/json/jsontext` package. `Canonicalize` implements RFC 8785 directly. Go's
+`encoding/json` v1 does not guarantee RFC 8785 output: it escapes `<`, `>`, `&`, U+2028
+and U+2029, and formats numbers its own way.
 
 `internal/envelope` decodes every request with the same JSON library. It refuses a duplicate member name, invalid UTF-8
 and an unpaired surrogate, and it matches member names case-sensitively. A request two
@@ -32,7 +32,7 @@ The signature value is standard base64 with padding.
 ## Tests
 
 The JCS tests protect the bytes used by this module; they do not test the
-external library's internal design. An update that changes one number or
+standard library's internal design. A Go update that changes one number or
 Unicode encoding must fail locally before it changes ACS signatures or chain
 hashes. The 5,000 compressed number cases occupy 75 KiB.
 

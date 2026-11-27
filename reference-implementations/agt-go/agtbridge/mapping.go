@@ -3,13 +3,13 @@ package agtbridge
 import (
 	"bytes"
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
 	"slices"
 	"strings"
 
-	jsonv2 "github.com/go-json-experiment/json"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"

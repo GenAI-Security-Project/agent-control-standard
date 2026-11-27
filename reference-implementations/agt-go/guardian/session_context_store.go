@@ -99,6 +99,11 @@ type Session struct {
 	// store that archives Entries keeps this map so compacted steps remain
 	// identifiable.
 	Lineage map[string][]string
+	// MCPCalls maps the canonical MCP id of each open wrapped tools/call to
+	// its tool. A call is open from the final decision that lets it through
+	// until its response. An MCP response names only the id, so its tool is
+	// found here. Nil or empty while no call is open.
+	MCPCalls map[string]string
 	// PolicyState is what the policy engine keeps across the session's
 	// steps, nil until the engine keeps anything.
 	PolicyState json.RawMessage
@@ -149,6 +154,9 @@ type Conclusion struct {
 	AskStepID string
 	// Deferred counts one Defer decision.
 	Deferred bool
+	// MCPCalls, when not nil, replaces Session.MCPCalls. An empty map
+	// means no call is open.
+	MCPCalls map[string]string
 	// PolicyState, when not nil, replaces Session.PolicyState.
 	PolicyState json.RawMessage
 	// ApproveSkill, when not nil, records an allowed steps/skillRegister,

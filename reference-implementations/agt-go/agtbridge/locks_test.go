@@ -1,10 +1,9 @@
 package agtbridge_test
 
 import (
+	jsonv2 "encoding/json/v2"
 	"os"
 	"testing"
-
-	jsonv2 "github.com/go-json-experiment/json"
 )
 
 // agtTree is the TypeScript reference tree, whose manifest, bundle and

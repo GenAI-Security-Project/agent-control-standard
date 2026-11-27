@@ -8,18 +8,22 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
-	jsonv2 "github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
+	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/jcs"
 )
 
 // Protocol is the name MCP carries in protocols/MCP/* and in
 // wrapped_protocols.
 const Protocol = "MCP"
+
+// ToolsCall is the MCP method a tool call travels in.
+const ToolsCall = "tools/call"
 
 // methodName is the form every MCP method name takes: slash-separated
 // segments of letters, digits and underscores (initialize,
@@ -102,8 +106,61 @@ func Read(method string, payload json.RawMessage) (Message, error) {
 	return m, nil
 }
 
+// ToolCall is a wrapped tools/call as the Guardian tracks it from request to
+// response. An MCP response names only the id of its request, so the
+// Guardian keeps each request's tool by ID.
+type ToolCall struct {
+	// ID is the canonical JSON of the message's id, so equivalent spellings
+	// of one id match. It is empty for a request without an id.
+	ID string
+	// Tool is a request's tool name, empty for a response.
+	Tool string
+	// Response is set for a response.
+	Response bool
+}
+
+// ReadToolCall reads payload as a wrapped tools/call message.
+func ReadToolCall(payload json.RawMessage) (ToolCall, error) {
+	m, err := Read(ToolsCall, payload)
+	if err != nil {
+		return ToolCall{}, err
+	}
+	id, err := CorrelationID(m.ID)
+	if err != nil {
+		return ToolCall{}, err
+	}
+	if m.IsResponse() {
+		return ToolCall{ID: id, Response: true}, nil
+	}
+	var params struct {
+		Name string `json:"name"`
+	}
+	if len(m.Params) > 0 {
+		if err := jsonv2.Unmarshal(m.Params, &params); err != nil {
+			return ToolCall{}, fmt.Errorf("the wrapped tools/call's params cannot be read: %w", err)
+		}
+	}
+	return ToolCall{ID: id, Tool: params.Name}, nil
+}
+
+// CorrelationID is the canonical JSON of an MCP id, empty for none.
+func CorrelationID(id jsontext.Value) (string, error) {
+	if len(id) == 0 {
+		return "", nil
+	}
+	canonical, err := jcs.Canonicalize(id)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize MCP id: %w", err)
+	}
+	return string(canonical), nil
+}
+
 // Check implements method.WrappedHandler.
 func (Handler) Check(method string, payload json.RawMessage) error {
+	if method == ToolsCall {
+		_, err := ReadToolCall(payload)
+		return err
+	}
 	_, err := Read(method, payload)
 	return err
 }

@@ -3,12 +3,12 @@ package guardian
 import (
 	"container/list"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 )
@@ -280,6 +280,9 @@ func (m *MemorySessionContextStore) Conclude(_ context.Context, sessionID string
 	if c.Deferred {
 		s.state.Deferrals++
 	}
+	if c.MCPCalls != nil {
+		s.state.MCPCalls = maps.Clone(c.MCPCalls)
+	}
 	if c.PolicyState != nil {
 		s.state.PolicyState = slices.Clone(c.PolicyState)
 	}
@@ -346,6 +349,7 @@ func (s Session) clone() (Session, error) {
 			out.Lineage[k] = slices.Clone(v)
 		}
 	}
+	out.MCPCalls = maps.Clone(s.MCPCalls)
 	out.PolicyState = slices.Clone(s.PolicyState)
 	return out, nil
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -137,11 +138,34 @@ func TestSessionContextStore(t *testing.T, newStore func(t *testing.T) guardian.
 		if err := store.Conclude(ctx, "s1", guardian.Conclusion{}); err != nil {
 			t.Fatal(err)
 		}
+		// A conclusion that carries the open MCP calls replaces them whole,
+		// an empty map included; one that does not carry them keeps them.
+		for i, step := range []struct {
+			c    guardian.Conclusion
+			want map[string]string
+		}{
+			{guardian.Conclusion{MCPCalls: map[string]string{"3": "Read"}}, map[string]string{"3": "Read"}},
+			{guardian.Conclusion{MCPCalls: map[string]string{"3": "Read", `"a"`: "Write"}}, map[string]string{"3": "Read", `"a"`: "Write"}},
+			{guardian.Conclusion{AskStepID: "keeps-calls"}, map[string]string{"3": "Read", `"a"`: "Write"}},
+			{guardian.Conclusion{MCPCalls: map[string]string{}}, map[string]string{}},
+			{guardian.Conclusion{MCPCalls: map[string]string{`"a"`: "Write"}}, map[string]string{`"a"`: "Write"}},
+		} {
+			if err := store.Conclude(ctx, "s1", step.c); err != nil {
+				t.Fatal(err)
+			}
+			s, found, err := store.Load(ctx, "s1")
+			if err != nil || !found {
+				t.Fatalf("load after conclusion %d: found %v, %v", i, found, err)
+			}
+			if len(s.MCPCalls) != len(step.want) || (len(step.want) > 0 && !maps.Equal(s.MCPCalls, step.want)) {
+				t.Fatalf("after conclusion %d, open MCP calls %v, want %v", i, s.MCPCalls, step.want)
+			}
+		}
 		s, _, err := store.Load(ctx, "s1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if s.Deferrals != 3 || !slices.Equal(s.AskSteps, []string{"ask-0", "ask-1", "ask-2"}) || string(s.PolicyState) != `{"labels":["secret"]}` {
+		if s.Deferrals != 3 || !slices.Equal(s.AskSteps, []string{"ask-0", "ask-1", "ask-2", "keeps-calls"}) || string(s.PolicyState) != `{"labels":["secret"]}` {
 			t.Fatalf("deferrals %d, ask steps %v, policy state %s", s.Deferrals, s.AskSteps, s.PolicyState)
 		}
 		if err := store.Conclude(ctx, "nobody", guardian.Conclusion{Deferred: true}); !errors.Is(err, guardian.ErrSessionNotFound) {
@@ -243,12 +267,15 @@ func TestSessionContextStore(t *testing.T, newStore func(t *testing.T) guardian.
 		negotiate(t, store, "s1", "r0")
 		appendOK(t, store, "s1", guardian.Append{Reservation: guardian.Reservation{RequestID: "r1"}, Entry: entry(1, "")})
 		approved := guardian.SkillApproval{SkillID: "skill-a", DigestAlgorithm: "sha-256", DigestValue: "aa"}
-		stale := guardian.Conclusion{ExpectedHead: "", Deferred: true, AskStepID: "a", PolicyState: json.RawMessage(`{}`), ApproveSkill: &approved}
+		if err := store.Conclude(ctx, "s1", guardian.Conclusion{ExpectedHead: digest(1), MCPCalls: map[string]string{"1": "Read"}}); err != nil {
+			t.Fatal(err)
+		}
+		stale := guardian.Conclusion{ExpectedHead: "", Deferred: true, AskStepID: "a", MCPCalls: map[string]string{}, PolicyState: json.RawMessage(`{}`), ApproveSkill: &approved}
 		if err := store.Conclude(ctx, "s1", stale); !errors.Is(err, guardian.ErrHeadMoved) {
 			t.Fatalf("%v, want ErrHeadMoved", err)
 		}
 		s, _, _ := store.Load(ctx, "s1")
-		if s.Deferrals != 0 || len(s.AskSteps) != 0 || s.PolicyState != nil {
+		if s.Deferrals != 0 || len(s.AskSteps) != 0 || !maps.Equal(s.MCPCalls, map[string]string{"1": "Read"}) || s.PolicyState != nil {
 			t.Fatalf("a stale conclusion changed the session: %+v", s)
 		}
 		if ok, _ := store.SkillApproved(ctx, approved); ok {
@@ -261,11 +288,13 @@ func TestSessionContextStore(t *testing.T, newStore func(t *testing.T) guardian.
 		negotiate(t, store, "s1", "r0")
 		intent := &acs.Intent{Parsed: []acs.Capability{{Tool: "Bash"}}}
 		appendOK(t, store, "s1", guardian.Append{Reservation: guardian.Reservation{RequestID: "r1"}, Entry: entry(1, ""), Intent: intent, Lineage: []string{"p1"}})
-		if err := store.Conclude(ctx, "s1", guardian.Conclusion{ExpectedHead: digest(1), AskStepID: "ask", PolicyState: json.RawMessage(`{"a":1}`)}); err != nil {
+		calls := map[string]string{"1": "Read"}
+		if err := store.Conclude(ctx, "s1", guardian.Conclusion{ExpectedHead: digest(1), AskStepID: "ask", MCPCalls: calls, PolicyState: json.RawMessage(`{"a":1}`)}); err != nil {
 			t.Fatal(err)
 		}
 		// The caller's own values are not kept by reference either.
 		intent.Parsed[0].Tool = "changed by the caller"
+		calls["1"] = "changed by the caller"
 		s, _, err := store.Load(ctx, "s1")
 		if err != nil {
 			t.Fatal(err)
@@ -275,13 +304,14 @@ func TestSessionContextStore(t *testing.T, newStore func(t *testing.T) guardian.
 		s.Handshake.Server.NegotiatedVersion = "changed"
 		s.AskSteps[0] = "changed"
 		s.Lineage["step-1"][0] = "changed"
+		s.MCPCalls["1"] = "changed"
 		s.PolicyState[0] = 'x'
 		again, _, err := store.Load(ctx, "s1")
 		if err != nil {
 			t.Fatal(err)
 		}
 		if again.Entries[0].StepID != "step-1" || again.Intent.Parsed[0].Tool != "Bash" || again.Handshake.Server.NegotiatedVersion != acs.Version ||
-			again.AskSteps[0] != "ask" || again.Lineage["step-1"][0] != "p1" || string(again.PolicyState) != `{"a":1}` {
+			again.AskSteps[0] != "ask" || again.Lineage["step-1"][0] != "p1" || again.MCPCalls["1"] != "Read" || string(again.PolicyState) != `{"a":1}` {
 			t.Fatalf("a change to a loaded session reached the store: %+v", again)
 		}
 	})
