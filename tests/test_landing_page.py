@@ -27,7 +27,8 @@ def page() -> str:
 
 def test_the_hero_diagram_is_present(page):
     assert "<svg" in page
-    for label in ["LLM", "Tool", "Output", "Sub", "Memory", "Code", "ACS"]:
+    # Each node names an ACS hook, and the center names the Guardian that answers them.
+    for label in ["User", "Tool", "Agent", "Sub", "Memory", "Skill", "Guardian"]:
         assert label in page
 
 
@@ -239,7 +240,7 @@ def test_the_specification_is_not_listed_as_an_external_resource(page):
         external.append(url)
     assert not [url for url in external if url.startswith(LANDING_ROOT + "docs/")], external
     hosts = {url.split("/")[2] for url in external}
-    assert hosts == {"github.com", "owasp.slack.com"}, external
+    assert hosts == {"github.com", "owasp.org"}, external
     docs_root = [row for row in rows[:start] if row[2] == LANDING_ROOT + "docs/"]
     assert [row[0] for row in docs_root] == [1], "the docs root sits at the top of the pane"
 
@@ -431,3 +432,48 @@ def test_no_pane_link_has_target_or_rel(page):
     links = [attrs for tag, attrs, stack in _Tags(page).tags if tag == "a" and "nav#site-nav" in stack]
     assert len(links) >= 12
     assert not [attrs for attrs in links if "target" in attrs or "rel" in attrs]
+
+
+def test_no_interactive_element_is_nested_inside_summary(page):
+    """Nesting <a> or <button> inside <summary> breaks keyboard focus and screen readers (WCAG 4.1.2)."""
+    nested = [
+        (tag, attrs)
+        for tag, attrs, stack in _Tags(page).tags
+        if tag in ("a", "button") and "summary" in stack
+    ]
+    assert not nested, f"interactive element nested inside <summary>: {nested}"
+
+
+def test_starburst_uses_css_motion_not_smil_and_has_pause_control(page):
+    """SMIL ignores CSS display:none under reduced motion; CSS opt-in plus a Pause button satisfies WCAG 2.2.2."""
+    svg = (LANDING / "assets" / "starburst.svg").read_text(encoding="utf-8")
+    for smil in ("<animate ", "<animate>", "<animateMotion", "<animateTransform"):
+        assert smil not in svg, f"SMIL element {smil!r} remains in starburst.svg"
+    assert "prefers-reduced-motion: no-preference" in svg
+    assert "prefers-reduced-motion: reduce" in svg
+    assert "vector-effect: non-scaling-stroke;" in svg
+    assert "animation: acs-particle-travel 5s linear infinite backwards;" in svg
+
+    css = (LANDING / "assets" / "acs.css").read_text(encoding="utf-8")
+    assert ".has-motion-control .diagram-motion-toggle" in css
+    assert ".has-drawer .diagram-motion-toggle" not in css
+
+    buttons = [attrs for tag, attrs, _ in _Tags(page).tags if tag == "button" and attrs.get("id") == "diagram-motion-toggle"]
+    assert len(buttons) == 1
+    assert buttons[0].get("type") == "button"
+    # Toggling visible button text ("Pause animation" / "Play animation") must not pair with aria-pressed.
+    assert "aria-pressed" not in buttons[0]
+
+
+def test_landing_nav_targets_meet_minimum_size_and_video_has_text_description(page):
+    css = (LANDING / "assets" / "acs.css").read_text(encoding="utf-8")
+    assert "min-block-size: 24px;" in css
+    assert "min-inline-size: 24px;" in css
+    assert "color-scheme: light;" in css and "color-scheme: dark;" in css
+
+    videos = [attrs for tag, attrs, _ in _Tags(page).tags if tag == "video"]
+    assert len(videos) == 1
+    transcript_id = videos[0].get("aria-details")
+    assert transcript_id == "demo-transcript"
+    details_ids = [attrs.get("id") for tag, attrs, _ in _Tags(page).tags if tag == "details"]
+    assert transcript_id in details_ids

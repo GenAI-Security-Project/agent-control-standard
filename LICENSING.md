@@ -12,12 +12,13 @@ Copyright 2025-2026 The OWASP GenAI Security Project and the ACS contributors.
 | `.github/**` | Apache License 2.0 | `Apache-2.0` |
 | `pyproject.toml`, `uv.lock`, `mkdocs.yml`, `.vscode/**` | Apache License 2.0 | `Apache-2.0` |
 | Code samples embedded in any Markdown file | Apache License 2.0 | `Apache-2.0` |
+| `docs/spec/inspect/agbom-viewer/**` except `assets/**` | Apache License 2.0 | `Apache-2.0` |
 | `docs/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTORS.md`, `STYLE.md`, `SPEC_REVIEW_PRINCIPLES.md`, `LICENSING.md` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `landing/**`, `tools/**`, `tests/**` | Apache License 2.0 | `Apache-2.0` |
 | `overrides/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `design/**` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
-| `landing/assets/fonts/**` | SIL Open Font License 1.1 | `OFL-1.1` |
+| `landing/assets/fonts/**`, `docs/spec/inspect/agbom-viewer/assets/**` | SIL Open Font License 1.1 | `OFL-1.1` |
 | `CHANGELOG.md` | CC BY-SA 4.0 | `CC-BY-SA-4.0` |
 | `reference-implementations/agt/policy/lib/**` | MIT License, Copyright (c) Microsoft Corporation | `MIT` |
 | Everything else, including any new top-level directory | Apache License 2.0 | `Apache-2.0` |
@@ -82,7 +83,7 @@ For a source file:
 For a document derived from ACS prose:
 
 ```markdown
-Adapted from the OWASP Agent Control Standard, licensed under CC BY-SA 4.0.
+Adapted from the OWASP GenAI Security Project Agent Control Standard, licensed under CC BY-SA 4.0.
 Source: https://github.com/GenAI-Security-Project/agent-control-standard
 ```
 
@@ -92,7 +93,7 @@ Contributions land under the license that governs the file you touch. Sign your 
 
 ## Trademarks
 
-These licenses cover copyright. They grant no rights to the OWASP name, the OWASP GenAI Security Project name, the OWASP Agent Control Standard name, or any associated logo. Describe your implementation as ACS-conformant. Do not imply endorsement.
+These licenses cover copyright. They grant no rights to the OWASP name, the OWASP GenAI Security Project name, the OWASP GenAI Security Project Agent Control Standard name, or any associated logo. Describe your implementation as ACS-conformant. Do not imply endorsement.
 
 ## License history
 

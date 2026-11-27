@@ -40,7 +40,7 @@ The `nat` extra installs NAT itself, the middleware (NAT finds `_type: acs_guard
 Both the adapter and the Guardian read this file. Mode 0600 is enforced — anything looser and the adapter refuses to start.
 
 ```bash
-mkdir -p ~/.acs
+mkdir -p -m 700 ~/.acs
 openssl rand -hex 32 > ~/.acs/hmac.key
 chmod 600 ~/.acs/hmac.key
 ```
@@ -110,6 +110,7 @@ uv run python -m unittest tests.integrations.nat.test_live -v
 
 - **NAT**: `nvidia-nat-core` 1.7.x, installed with the `nat` extra (`pip install "$ACS_REPO/adapters[nat]"`).
 - **Python 3.11+**. The `nat` extra also brings `ruamel.yaml` for `acs-nat-wire`. To run the test suites: `cd "$ACS_REPO/adapters" && uv sync --locked --extra nat --group test`.
+- **HMAC-SHA256 only**: the `nat` and `pqc` extras can't be installed together, because `nvidia-nat-core` pins `cryptography` below the release ML-DSA-65 needs. A NAT deployment therefore signs and verifies with HMAC-SHA256 and can't use the example Guardian's ML-DSA-65 decision signing. A move from NAT to NVIDIA NeMo Relay is planned, and it would remove the conflict.
 - **Canonical ACS schemas**: bundled in the package, and read from `specification/v0.1.0/` when running from a clone of this repo. Set `ACS_SPEC_DIR` only to validate against a different spec checkout.
 
 ## Coverage discipline (the YAML-only rule)
@@ -128,14 +129,14 @@ What this gives you: **the same hard-stop guarantee Cursor's `failClosed: true` 
 
 ## Smoke tests
 
-Five tests, ordered from broadest to most specific. Run any/all.
+Seven checks, ordered from broadest to most specific. Run any/all.
 
 ### Smoke #1 — automated test suite (~10s)
 
 ```bash
 cd "$ACS_REPO/adapters"
 uv run python run_conformance.py nat
-# Runs the shared Guardian, _common, core, client and package checks, then NAT's suite.
+# Runs the shared Guardian, _common, core, client, package and benchmarks checks, then NAT's suite.
 ```
 
 Sync with the `nat` extra first (`uv sync --locked --extra nat --group test`). A missing NAT dependency produces an unexpected skip and fails the command.
@@ -206,15 +207,15 @@ mw = ACSMiddleware(cfg)
 
 Send a malformed envelope (Guardian returns -32600 Invalid Request):
 ```
-ACS_AUDIT {"acs_audit_event": "decision_failure_fail_closed", "cause": "malformed_envelope_response", ...}
+ACS_AUDIT {"acs_audit_event": "guardian_refusal_fail_closed", "cause": "malformed_envelope_response", ...}
 ```
 
 Send a stale request (Guardian returns -32006 timestamp out of window):
 ```
-ACS_AUDIT {"acs_audit_event": "decision_failure_fail_closed", "cause": "timestamp_out_of_window_response", ...}
+ACS_AUDIT {"acs_audit_event": "guardian_refusal_fail_closed", "cause": "timestamp_out_of_window_response", ...}
 ```
 
-Same `acs_audit_event`; the `cause` field is what operators grep on.
+Both codes are Guardian refusals, so they deny under either posture and log `guardian_refusal_fail_closed`, apart from the `decision_failure_fail_closed` of an unreachable Guardian. The `cause` field says which refusal it was.
 
 ### Smoke #7 — coverage-gap detection
 
@@ -229,7 +230,7 @@ Have your Guardian log the `tool.name` of every `steps/toolCallRequest` it recei
 - `pyproject.toml`'s `nat` extra: runtime deps (`nvidia-nat-core`, `ruamel.yaml`).
 - `docs/nat/mapping.md`: NAT lifecycle point → ACS step method table.
 - `tests/integrations/nat/test_adapter.py` — integration tests against the real NAT API + the `_extract_arguments` regression set covering the LangChain-shape input bug.
-- `tests/integrations/nat/test_live.py` — 5 live workflow tests exercising NAT's `function_middleware_invoke` orchestration end-to-end.
+- `tests/integrations/nat/test_live.py`. 6 live workflow tests exercising NAT's `function_middleware_invoke` orchestration end-to-end.
 - `tests/integrations/nat/test_dispositions_live.py` — every ACS disposition (ALLOW, DENY, MODIFY, ASK, DEFER, post_invoke DENY) verified on the `modified_args[0]` Pydantic-model path the LangChain react_agent uses in production.
 - `tests/integrations/nat/test_envelope_schema.py` — JSON-RPC envelope shape validation against canonical schemas.
 - `tests/integrations/nat/test_lifecycle.py`: a run's function and LLM steps add no lifecycle hooks.
@@ -262,7 +263,7 @@ The shared protocol layer is identical: the Guardian sees the same ACS JSON-RPC 
 |---|---|---|
 | `_type` | `acs_guardian` (required) | Registers the middleware via NAT's `register_middleware` decorator. |
 | `guardian_url` | `http://127.0.0.1:8787/acs` | Guardian endpoint. http/https only. |
-| `default_deny` | `true` | `true`: a call with no usable decision is denied; `acs-nat-wire` writes `true`, and `--all-fail-open` writes `false`. `false`: the call proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins); this is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless — input gate blocks, output gate redacts. See spec issue #32. |
+| `default_deny` | `true` | `true`: a call with no usable decision is denied. `acs-nat-wire` writes `true`, and `--all-fail-open` writes `false`. `false`: the call proceeds, audited, unless the ServerHello declares `on_decision_failure: deny` (most-restrictive-wins). This is the only setting that opts into proceed. Guardian refusals (bad signature, replay, malformed/oversized envelope) always fail closed regardless. Input gate blocks, output gate redacts. See [D-040](../../../docs/decisions/index.md#d-040-split-decision-failures-from-refusals). |
 | `timeout_s` | `5.0` | Per-request Guardian round-trip timeout. A ServerHello `timeout_config` replaces it for the session, per method where `per_method_ms` names one. |
 | `target_function_or_group` | (unset) | Optional metadata label; derives `agent_id` if `ACS_AGENT_ID` env is unset. |
 
@@ -328,7 +329,7 @@ The adapter works across multiple NAT releases by feature-detecting the block me
 | `acs-nat-wire` errors out with "ruamel.yaml" missing | Install the `nat` extra: `pip install "$ACS_REPO/adapters[nat]"`. |
 | NAT runs functions as if no Guardian exists | NAT loaded the workflow before `acs-nat-wire --write` ran. **Restart your NAT process.** |
 | Every call gets denied | Likely the Guardian is down: a session whose handshake gets no answer refuses its calls unless `ACS_STARTUP_POSTURE=proceed`, and a call with no usable decision is denied unless the YAML sets `default_deny: false`. Check the Guardian process is running. |
-| Adapter says `SecretFilePermissionsError` | HMAC secret file is mode > 0600. `chmod 600 ~/.acs/hmac.key`. |
+| Adapter says `SecretFilePermissionsError` | The secret file failed one of the checks, and the message names which. Group or other access: `chmod 600 ~/.acs/hmac.key` (0600 or 0400). A symlink, FIFO, or anything but a regular file: point `ACS_HMAC_SECRET_FILE` at the real file. A file or directory owned by another user: give both to the user that runs the adapter, or to root. A world-writable directory without the sticky bit: `chmod o-w ~/.acs`. The file's directory must also be readable by the adapter, not only traversable: a 0711 directory fails with `its directory ... cannot be opened` (`SecretFileUnreadableError`). Fix: `chmod a+r` on that directory. |
 | Guardian returns `-32004 SIGNATURE_INVALID` | Adapter and Guardian aren't reading the same secret. `cat ~/.acs/hmac.key` on both sides should match. Audit log shows `cause=signature_invalid_response`. |
 | Guardian returns `-32005 REPLAY_DETECTED` | Same `request_id` sent twice. Audit log shows `cause=replay_detected_response`. Usually a retry loop bug. |
 | Guardian returns `-32006 TIMESTAMP_OUT_OF_WINDOW` | Clock skew between adapter and Guardian > 5 minutes. Sync time. Audit log shows `cause=timestamp_out_of_window_response`. |

@@ -60,7 +60,7 @@ class GuardianUrlSchemeAllowlist(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt",
                      "POSIX mode bits and unprivileged symlinks do not exist on Windows; the "
-                     "Windows branch of the secret-file check is covered in tests/client/test_secrets.py")
+                     "Windows branch of the secret-file check is covered in tests/client/test_secret_files.py")
 class HmacSecretFilePermissions(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = tempfile.mkdtemp()

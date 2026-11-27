@@ -14,6 +14,30 @@ This log leaves out private vulnerability reports and anything about an unfixed 
 
 ## Decisions
 
+### D-053: Give four workstream leads the project leads' review rights outside the specification
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+The three project leads can approve a change to any path. Fred Wilmot, Evgeniy Kokuykin, Lance Dye, and Helen Oakley approve on the same terms on every path except the specification. That includes `.github/`, `GOVERNANCE.md`, the roadmap trust code, and the reference implementations. The specification, meaning `specification/` and the pages under `docs/spec/`, stays with the three project leads. Helen Oakley keeps the AgBOM and inspect paths she owns under [D-044](#d-044-manage-agbom-as-an-acs-sub-stream-and-map-it-to-cyclonedx-first): `docs/spec/inspect/`, `specification/v0.1.0/agbom/`, and `specification/v0.1.0/inspect/`. The AgBOM Viewer under `docs/spec/inspect/agbom-viewer/` is tooling, so it takes the wider owner set. Before this, several governance paths needed a project lead.
+
+**Source:** [PR #679](https://github.com/GenAI-Security-Project/agent-control-standard/pull/679).
+
+### D-052: Land 0.2 specification work on `release/0.2`
+
+**Date:** 2026-11-26 · **Decided by:** a project lead · **Status:** decided
+
+`release/0.2` carries out [D-049](#d-049-promote-integration-as-015-then-branch-02). It starts from the 0.1.5 work on `integration`. A pull request targets `release/0.2` when it changes normative text under `docs/spec/`, a schema under `specification/`, or a conformance requirement, or when its issue is in the v0.2.0 milestone, because [D-048](#d-048-version-by-what-changed-until-10) makes a specification change a minor release. Code that carries out a specification change on `release/0.2` goes there with it, such as an adapter that enforces a rule only the 0.2 specification has. Other fixes to shipped code, adapters, reference implementation work, and documentation of shipped behavior stay on `integration` and ship in 0.1.x. A workflow opens a pull request that merges `integration` into `release/0.2` whenever `integration` moves ahead, so those fixes reach both lines ([PR #677](https://github.com/GenAI-Security-Project/agent-control-standard/pull/677)).
+
+**Source:** [Issue #99](https://github.com/GenAI-Security-Project/agent-control-standard/issues/99), which tracks how release branches are versioned.
+
+### D-051: Adopt Part 2 of the Code of Conduct
+
+**Date:** 2026-11-20 · **Decided by:** a project lead · **Status:** decided
+
+[Part 2 of the Code of Conduct](https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CODE_OF_CONDUCT.md#part-2-how-work-enters-the-repository) sets how work enters the repository. It caps how many open pull requests and assigned issues one account holds, and it sets a review bar: an approval names the commit, what the reviewer ran, and what they did not check. A person answers for everything their account posts, and nothing posts unattended. Repeated breaches follow an enforcement ladder of notice, restriction, and removal. Part 2 enforces [D-041](#d-041-review-a-pull-request-only-when-it-closes-assigned-accepted-work) and [D-042](#d-042-start-schema-hook-and-event-changes-with-a-discussion), and it ends assignment after the fact, so a pull request opened before a lead assigns the work is closed with an invitation to reopen. The other project leads review Part 2 at the next milestone review, as the Code of Conduct says.
+
+**Source:** [PR #636](https://github.com/GenAI-Security-Project/agent-control-standard/pull/636).
+
 ### D-050: Require an SDK for 1.0
 
 **Date:** 2026-11-12 · **Decided by:** project leads · **Status:** decided

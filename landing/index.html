@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <!--ACS:CSP-->
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OWASP Agent Control Standard (ACS)</title>
+<title>OWASP GenAI Security Project Agent Control Standard (ACS)</title>
 <meta name="description" content="The open standard for runtime agent control. Declarative hooks, policy enforcement, and observability across AI agent frameworks.">
 <link rel="icon" href="assets/icon.svg">
 <link rel="stylesheet" href="assets/acs.css">
@@ -17,7 +17,10 @@
       <img src="assets/icon.svg" alt="" width="32" height="32">
     </a>
     <button id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect class="menu-line menu-line--top" x="3" y="7.5" width="18" height="2" rx="1"/>
+        <rect class="menu-line menu-line--bottom" x="3" y="14.5" width="18" height="2" rx="1"/>
+      </svg>
       <span class="visually-hidden">Menu</span>
     </button>
     <a class="wordmark" href="./"><span><!--ACS:SITE_NAME--></span></a>
@@ -59,31 +62,47 @@
     <section class="hero">
       <div>
         <h1>The runtime control plane for AI agents.</h1>
-        <p>OWASP Agent Control Standard (ACS) is the open standard that defines how agent
+        <p>OWASP GenAI Security Project Agent Control Standard (ACS) is the open standard that defines how agent
         platforms expose middleware hooks and how open-source tooling enforces safety
         policy through those hooks. Declarative controls. Portable across frameworks.
         Enforced at runtime.</p>
         <div class="cta-row">
           <a class="cta cta-primary" href="docs/">Read the specification</a>
+          <a class="cta" href="docs/topics/reference-implementations/">Run a Guardian</a>
           <a class="cta" href="https://github.com/GenAI-Security-Project/agent-control-standard">View on GitHub</a>
-          <a class="cta" href="https://owasp.slack.com">Join the conversation</a>
+          <a class="cta" href="https://owasp.org/slack/invite">Join the conversation</a>
         </div>
       </div>
-      <div><!--ACS:STARBURST--></div>
+      <div class="hero-diagram">
+        <!--ACS:STARBURST-->
+        <button id="diagram-motion-toggle" type="button" class="diagram-motion-toggle">Pause animation</button>
+      </div>
     </section>
 
     <figure class="film">
-      <video controls muted playsinline preload="metadata" poster="assets/video/demo-poster.jpg"
-             aria-label="Terminal recording of the ACS reference implementation">
+      <video controls muted playsinline preload="metadata" width="3024" height="1900"
+             poster="assets/video/demo-poster.jpg"
+             aria-label="Terminal recording of the ACS reference implementation"
+             aria-details="demo-transcript">
         <source src="assets/video/demo.mp4" type="video/mp4">
       </video>
       <figcaption>
         <strong>One Guardian. Two coding agents. The same destructive command, blocked in both before it runs.</strong>
         You write the control once, and it holds no matter which agent shows up. OpenCode and Claude Code
         each try the command, and the same policy denies both. Then the conformance harness prints what
-        ACS can express of AGT. Run it yourself from the
-        <a href="https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/reference-implementations/agt">reference implementation</a>.
+        ACS can express of AGT, Microsoft's Agent Governance Toolkit, the policy engine the reference
+        Guardian runs. Run it yourself, or connect Claude Code, Cursor, NVIDIA NAT or an
+        OpenAI Responses client to a Guardian, with <a href="docs/topics/reference-implementations/">Run a Guardian</a>.
       </figcaption>
+      <details id="demo-transcript" class="film-transcript">
+        <summary>Text description of the demo video</summary>
+        <p>The three-minute silent terminal recording has three panes: top left shows the Inspector, top right shows the Guardian, and the bottom pane runs each agent client.</p>
+        <ol>
+          <li>OpenCode sends a harmless <code>echo</code> whose text matches AGT's destructive-shell pattern. The Guardian answers <code>deny</code>. The Inspector prints the envelope, the reason code <code>destructive_shell_command_blocked</code>, and the policy reference <code>agt_stock</code>.</li>
+          <li>Claude Code sends the same command from the same directory through a hook subprocess instead of an in-process plugin. The same Guardian returns the same <code>deny</code> under a new request ID.</li>
+          <li><code>bun run conformance</code> prints the mapping table, the coverage matrix, and the trace rows, then runs six live checks, including a deny that fails closed over the wire.</li>
+        </ol>
+      </details>
     </figure>
 
     <section id="problem">
@@ -103,15 +122,16 @@
       <div class="cards">
         <div class="card">
           <h3>Instrument</h3>
-          <p>ACS defines standardized middleware hooks at every agent decision point. A
-          Guardian Agent intercepts the action and returns a verdict: allow, deny, or
-          modify.</p>
+          <p>ACS defines hooks at the agent's decision points. The agent asks a separate
+          Guardian before it acts, and the Guardian answers allow, deny, modify, ask, or
+          defer.</p>
         </div>
         <div class="card">
           <h3>Trace</h3>
-          <p>Agents emit structured trace data through OpenTelemetry, the pipeline your
-          teams already run. ACS maps those traces to OCSF so security events land in the
-          SIEM without a custom parser.</p>
+          <p>ACS defines how each step maps to an OpenTelemetry span and an OCSF event.
+          In release 0.1.5, the gateway and the TypeScript AGT Guardian
+          export OpenTelemetry spans. No component emits OCSF yet, and OCSF output is
+          planned.</p>
         </div>
         <div class="card">
           <h3>Inspect</h3>
@@ -125,17 +145,30 @@
     <section id="architecture">
       <h2>How it works</h2>
       <div class="tier tier-1">
-        <h3>Tier 1: Platform layer</h3>
-        <p>Agent frameworks expose standardized middleware hooks.</p>
+        <h3>1. The agent asks</h3>
+        <p>Before a step runs, the agent sends it to the Guardian as a signed JSON-RPC
+        request over HTTP. Adapters do this for Claude Code, Cursor, and NVIDIA NAT through
+        each host's own hook configuration, and a gateway does it for any OpenAI Responses
+        client without code changes.</p>
       </div>
       <div class="tier tier-2">
-        <h3>Tier 2: Enforcement layer</h3>
-        <p>An open-source SDK reads declarative policy and returns verdicts through those hooks.</p>
+        <h3>2. The Guardian decides</h3>
+        <p>A separate Guardian evaluates declarative policy and returns one of five
+        dispositions. The two AGT-based Guardians use Rego, a policy language. The example
+        Guardian uses a short built-in rule table by default, or, if you opt in, an OPA
+        (Open Policy Agent) server running Rego. When no usable answer arrives, the
+        adapters and the gateway block the step by default.</p>
       </div>
       <div class="tier tier-3">
-        <h3>Tier 3: Enterprise layer</h3>
-        <p>Custom classifiers and domain-specific logic plug in behind the same interface.</p>
+        <h3>3. The record holds</h3>
+        <p>The Guardian keeps a hash-chained audit record of every decision. The gateway
+        also writes a transcript of every envelope, each signed message it exchanged with the
+        Guardian, which <code>acs-verify</code>, the project's verification tool, checks
+        offline.</p>
       </div>
+      <p>Release <!--ACS:RELEASE_VERSION--> ships three Guardians, three adapters, and
+      the gateway. <a href="docs/topics/reference-implementations/">Run a Guardian</a>
+      shows where to start.</p>
     </section>
 
     <section id="why-now">
@@ -162,15 +195,15 @@
         </li>
         <li>
           <a href="https://aivss.owasp.org/">AIVSS</a>
-          <span>Severity scoring for the findings ACS surfaces.</span>
+          <span>A complementary OWASP system for scoring agentic AI risk.</span>
         </li>
         <li>
           <a href="https://opentelemetry.io/">OpenTelemetry</a>
-          <span>The transport ACS emits its trace data over.</span>
+          <span>One way ACS records trace data.</span>
         </li>
         <li>
           <a href="https://ocsf.io/">OCSF</a>
-          <span>The event schema ACS maps traces onto for the SIEM.</span>
+          <span>The event schema ACS maps each step onto for the SIEM.</span>
         </li>
         <li>
           <a href="https://cyclonedx.org/">CycloneDX</a>
@@ -186,7 +219,8 @@
         </li>
         <li>
           <a href="https://a2a-protocol.org/">A2A</a>
-          <span>An agent-to-agent protocol ACS hooks wrap without modifying.</span>
+          <span>An agent-to-agent protocol. Specification v0.1.0 reserves its namespace,
+          and wrapping is planned for v0.2.0.</span>
         </li>
       </ul>
     </section>
@@ -218,11 +252,14 @@
       <a href="https://github.com/GenAI-Security-Project/agent-control-standard/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22"><code>help
       wanted</code> label</a>. Ask a lead to assign it to you before you start.</p>
       <ul>
-        <li>Join <a href="https://owasp.slack.com">owasp.slack.com</a> and the
+        <li>Join <a href="https://owasp.org/slack/invite">OWASP Slack</a> and the
         <code>#team-genai-asi-acs-general</code> channel.</li>
         <li>Propose new work through the
         <a href="https://github.com/GenAI-Security-Project/agent-control-standard/issues/new/choose">issue
         forms</a>. Only an accepted issue enters the backlog.</li>
+        <li>Read the <a href="docs/decisions/">decision log</a> for what the project has
+        decided and why, including choices the specification text does not reflect
+        yet.</li>
         <li>General questions about the project:
         <a href="mailto:rock.lambros@owasp.org">rock.lambros@owasp.org</a></li>
       </ul>
@@ -245,8 +282,9 @@
   <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a>.
   Documentation licensed under
   <a href="https://creativecommons.org/licenses/by-sa/4.0/">CC BY-SA 4.0</a>.</p>
-  <p>ACS is vendor neutral and community governed. A project of the OWASP GenAI Security
-  Project.</p>
+  <p>ACS is vendor neutral and community governed. A project of the
+  <a href="https://genai.owasp.org/resource/agent-control-standard-acs/">OWASP GenAI Security
+  Project</a>.</p>
   <nav aria-label="Project documents">
     <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/GOVERNANCE.md">Governance</a>
     <a href="https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/SECURITY.md">Security</a>
@@ -297,10 +335,27 @@
     var sidebar = document.querySelector(".sidebar");
     if (!button || !sidebar) return;
     root.classList.add("has-drawer");
+    var drawerQuery = window.matchMedia("(max-width: 76.234375em)");
+
+    function syncInert() {
+      sidebar.inert = drawerQuery.matches && !body.classList.contains("nav-open");
+    }
 
     function setOpen(open) {
       body.classList.toggle("nav-open", open);
       button.setAttribute("aria-expanded", open ? "true" : "false");
+      syncInert();
+    }
+
+    syncInert();
+    if (drawerQuery.addEventListener) {
+      drawerQuery.addEventListener("change", function () {
+        if (!drawerQuery.matches && body.classList.contains("nav-open")) {
+          setOpen(false);
+        } else {
+          syncInert();
+        }
+      });
     }
 
     button.addEventListener("click", function () {
@@ -330,6 +385,115 @@
     });
     sidebar.addEventListener("focusout", function (event) {
       if (body.classList.contains("nav-open") && outside(event.relatedTarget)) setOpen(false);
+    });
+  })();
+
+  // Hero diagram motion control (WCAG 2.2.2 Pause, Stop, Hide).
+  (function () {
+    var diagram = document.querySelector(".acs-starburst");
+    var toggle = document.getElementById("diagram-motion-toggle");
+    if (!diagram || !toggle) return;
+    document.documentElement.classList.add("has-motion-control");
+    var reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+    function setPaused(paused) {
+      diagram.setAttribute("data-motion", paused ? "paused" : "playing");
+      toggle.textContent = paused ? "Play animation" : "Pause animation";
+    }
+
+    setPaused(reduceQuery.matches);
+    toggle.addEventListener("click", function () {
+      setPaused(diagram.getAttribute("data-motion") !== "paused");
+    });
+    if (reduceQuery.addEventListener) {
+      reduceQuery.addEventListener("change", function (event) {
+        if (event.matches) setPaused(true);
+      });
+    }
+  })();
+
+  // Arrow-key, Home/End navigation for the left navigation pane.
+  (function () {
+    var nav = document.getElementById("site-nav");
+    if (!nav) return;
+
+    function isVisible(el) {
+      var parent = el.parentNode;
+      while (parent && parent !== nav) {
+        if (parent.tagName === "DETAILS" && !parent.open) {
+          if (el.tagName !== "SUMMARY" || el.parentNode !== parent) return false;
+        }
+        parent = parent.parentNode;
+      }
+      return el.getClientRects().length > 0;
+    }
+
+    function visibleItems(root) {
+      var all = root.querySelectorAll("a[href], summary");
+      var out = [];
+      for (var i = 0; i < all.length; i++) {
+        if (isVisible(all[i])) out.push(all[i]);
+      }
+      return out;
+    }
+
+    function focusItem(el) {
+      if (!el) return;
+      el.focus();
+      if (el.scrollIntoView) el.scrollIntoView({ block: "nearest" });
+    }
+
+    nav.addEventListener("keydown", function (event) {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      var target = event.target.closest("a[href], summary");
+      if (!target || !nav.contains(target)) return;
+
+      var key = event.key;
+      if (key === "ArrowDown" || key === "ArrowUp" || key === "Home" || key === "End") {
+        var items = visibleItems(nav);
+        var idx = items.indexOf(target);
+        if (idx === -1) return;
+        event.preventDefault();
+        if (key === "ArrowDown") focusItem(items[Math.min(idx + 1, items.length - 1)]);
+        else if (key === "ArrowUp") focusItem(items[Math.max(idx - 1, 0)]);
+        else if (key === "Home") focusItem(items[0]);
+        else if (key === "End") focusItem(items[items.length - 1]);
+        return;
+      }
+
+      if (key === "ArrowRight") {
+        var details = target.tagName === "SUMMARY"
+          ? target.parentNode
+          : (target.closest(".nav-home") ? target.closest(".nav-home").querySelector("details") : null);
+        if (!details || details.tagName !== "DETAILS") return;
+        event.preventDefault();
+        if (!details.open) {
+          details.open = true;
+        } else {
+          var children = visibleItems(details).filter(function (el) { return el !== details.firstElementChild; });
+          if (children.length > 0) focusItem(children[0]);
+        }
+        return;
+      }
+
+      if (key === "ArrowLeft") {
+        if (target.tagName === "SUMMARY" && target.parentNode.tagName === "DETAILS" && target.parentNode.open) {
+          event.preventDefault();
+          target.parentNode.open = false;
+          return;
+        }
+        var enclosing = target.parentNode && target.parentNode.closest ? target.parentNode.closest("details") : null;
+        if (enclosing && enclosing.contains(target) && target.parentNode === enclosing && target.tagName === "SUMMARY") {
+          enclosing = enclosing.parentNode ? enclosing.parentNode.closest("details") : null;
+        }
+        if (enclosing) {
+          var summary = enclosing.querySelector(":scope > summary");
+          if (summary && summary !== target) {
+            event.preventDefault();
+            focusItem(summary);
+          }
+        }
+      }
     });
   })();
 </script>

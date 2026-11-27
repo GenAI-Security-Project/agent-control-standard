@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { SpanStatusCode } from "@opentelemetry/api";
 import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from "@opentelemetry/sdk-trace-base";
 import type { PolicyBridge } from "agt-bridge";
@@ -227,6 +227,27 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
     expect(attributes?.["acs.policy.ids"]).toEqual(["a", "b"]);
     expect(attributes?.["acs.policy.rule_ids"]).toEqual(["r", ""]);
     expect(attributes?.["acs.policy.versions"]).toEqual(["", ""]);
+  });
+
+  // The other side of that rule, and acs.reason_codes follows it too. The
+  // wire can carry an empty array, as an envelope-invalid deny does with
+  // `policy_references: []`. An empty array tells a reader nothing, so the
+  // event carries no attribute for it.
+  it("emits neither acs.reason_codes nor any policy column for an empty array", async () => {
+    const { exporter, spans } = memoryExporter();
+    exporter.end(
+      exporter.start(toolCallEnvelope("rm -rf /", { id: 7 }), "steps/toolCallRequest", TRUSTED),
+      decisionResponse(7, { ...DENY, reason_codes: [], policy_references: [] }),
+    );
+    await exporter.flush();
+
+    const events = spans()[0]?.events ?? [];
+    expect(events.map((event) => event.name)).toEqual([MAPPING.decisionEventName]);
+    const attributes = events[0]?.attributes ?? {};
+    expect(attributes["acs.decision"]).toBe("deny");
+    for (const name of ["acs.reason_codes", "acs.policy.ids", "acs.policy.versions", "acs.policy.rule_ids"]) {
+      expect({ name, present: name in attributes }).toEqual({ name, present: false });
+    }
   });
 
   it("carries acs.chain_hash only when the response does", async () => {
@@ -630,6 +651,11 @@ describe("createOtelTraceExporter -- what one exchange becomes", () => {
 });
 
 describe("Guardian trace export wiring", () => {
+  // One test below moves the working directory. A test that times out skips
+  // its own finally, so the directory is put back here as well.
+  const suiteCwd = process.cwd();
+  afterEach(() => process.chdir(suiteCwd));
+
   it("emits one span per decided step, carrying the session and the decision event", async () => {
     const { exporter, spans } = memoryExporter();
     const guardian = await startGuardian({ ...baseOptions, traceExporter: exporter });
@@ -1132,16 +1158,35 @@ describe("Guardian trace export wiring", () => {
     }
   }, 20_000);
 
+  // Off by default has two parts, and each can fail here. The factory hands
+  // back the null exporter when no output is named. A Guardian started with
+  // no trace option then writes no file: it runs from an empty directory, so
+  // a default path relative to it, like the `.acs/` paths main.ts passes for
+  // the other logs, would show up in the listing. startGuardian has no
+  // default for the envelope log or the session-context log either, so the
+  // listing is empty, and nothing has to be filtered out of it.
   it("writes nothing when neither output is configured", async () => {
+    expect(createOtelTraceExporter({ methodsEvaluated: METHODS_EVALUATED })).toBe(NULL_OTEL_TRACE_EXPORTER);
+
     const dir = mkdtempSync(join(tmpdir(), "acs-otel-off-"));
-    const path = join(dir, "traces.jsonl");
-    const guardian = await startGuardian(baseOptions);
+    // Resolved before the move, because it is relative to where the suite runs.
+    const manifestPath = resolve(baseOptions.manifestPath);
+    const cwd = process.cwd();
     try {
-      await postRaw(guardian.url, toolCallEnvelope("ls -la"));
-      expect(existsSync(path)).toBe(false);
+      process.chdir(dir);
+      const guardian = await startGuardian({ ...baseOptions, manifestPath });
+      try {
+        const response = await postRaw(guardian.url, toolCallEnvelope("ls -la"));
+        expect((response.result as { decision?: string }).decision).toBe("allow");
+      } finally {
+        // Closed before the listing: with export on, close is what writes the file.
+        await guardian.close();
+      }
+      expect(readdirSync(dir)).toEqual([]);
     } finally {
-      await guardian.close();
-      rmdirSync(dir);
+      // Every later test in the run shares the process, and its working directory.
+      process.chdir(cwd);
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

@@ -8,11 +8,17 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-ROSTER_OWNERS = ["@rocklambros", "@afogel", "@bar-capsule", "@GangGreenTemperTatum", "@mamicidal", "@sclintonowasp"]
+# D-053: the project leads own everything, four workstream leads join them on every
+# path except the specification, and the OWASP organization owners sit on every line.
+PROJECT_LEADS = ["@rocklambros", "@afogel", "@bar-capsule"]
+ORG_OWNERS = ["@GangGreenTemperTatum", "@mamicidal", "@sclintonowasp"]
+SPEC_OWNERS = PROJECT_LEADS + ORG_OWNERS
+LEAD_OWNERS = PROJECT_LEADS + ["@fewdisc", "@artmaro", "@Lrd0036", "@e2hln"] + ORG_OWNERS
 LEAD_PATHS = (
     "/GOVERNANCE.md", "/project.owasp.yaml", "/.github/",
     "/tools/roadmap_model.py", "/tools/fetch_roadmap.py", "/tools/closing_choice.py",
 )
+SPEC_PATHS = ("/specification/", "/docs/spec/")
 
 
 def codeowner_rules() -> list[tuple[str, list[str]]]:
@@ -25,10 +31,32 @@ def codeowner_rules() -> list[tuple[str, list[str]]]:
     return rules
 
 
-def test_roster_files_and_trust_code_need_a_project_lead():
+def test_roster_files_and_trust_code_take_the_lead_owner_set():
     rules = dict(codeowner_rules())
     for path in LEAD_PATHS:
-        assert rules[path] == ROSTER_OWNERS, path
+        assert rules[path] == LEAD_OWNERS, path
+
+
+def test_only_the_project_leads_own_the_specification():
+    rules = codeowner_rules()
+    for path in SPEC_PATHS:
+        assert dict(rules)[path] == SPEC_OWNERS, path
+    # No later line may hand a specification path to anyone else, except the AgBOM lead's
+    # D-044 paths and the AgBOM Viewer, which is tooling rather than specification text.
+    agbom = SPEC_OWNERS + ["@e2hln"]
+    later = {p: o for p, o in rules if p.startswith(SPEC_PATHS) and p not in SPEC_PATHS}
+    assert later == {
+        "/specification/v0.1.0/agbom/": agbom,
+        "/specification/v0.1.0/inspect/": agbom,
+        "/docs/spec/inspect/": agbom,
+        "/docs/spec/inspect/agbom-viewer/": LEAD_OWNERS,
+    }
+
+
+def test_every_project_lead_owns_every_line():
+    for pattern, owners in codeowner_rules():
+        for lead in PROJECT_LEADS:
+            assert lead in owners, (pattern, lead)
 
 
 def test_trust_code_lines_come_after_tools_so_they_win():

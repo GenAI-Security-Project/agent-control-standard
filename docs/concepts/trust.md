@@ -18,7 +18,7 @@ Framework code, not the LLM, attaches the fact from a structural property of how
 
 ### Cryptographically attested
 
-The fact is bound by a signature or a hash chain and is verifiable without trusting the emitter at evaluation time. Signed envelopes (ACS-Crypto), the SessionContext audit chain via `previous_hash` and `request_hash` (ACS-Audit), and the future Policy Attestation profile are attested. An attested fact survives a compromised or replayed emitter.
+The fact is bound by a signature or a hash chain and is verifiable without trusting the emitter at evaluation time. Signed envelopes (ACS-Crypto), the SessionContext audit chain via `previous_hash` and `request_hash` (ACS-Audit), and the future Policy Attestation profile are attested. An attested fact survives a compromised or replayed emitter. The strength depends on the signature. An HMAC-SHA256 signature, the ACS-Core baseline, proves integrity, but both parties hold its key, so it does not show which of them emitted the message ([§10](../spec/instrument/specification.md#10-cryptographic-signatures)). Attributing a fact to one party takes an asymmetric signature.
 
 ## Invariants
 
@@ -32,15 +32,15 @@ When a fact is summarized, written to memory, or passed across a boundary, its t
 
 *Example.* An agent reads an untrusted email (asserted) and writes a summary to memory. If the summary keeps the email's basis, a second agent that retrieves it still treats it as asserted. If the basis is dropped, the memory reads like trusted recall.
 
-## Availability in v0.1
+## Availability in v0.1.0
 
 The spectrum is the design frame; conformance profiles declare which rungs a deployment actually provides.
 
-| Rung | v0.1 status |
+| Rung | v0.1.0 status |
 |---|---|
 | Asserted | Always; the default. |
 | Deterministically attached | Available; Provenance `origin`/`source_id`/`derived_from` are framework-assigned under `provenance_producer: deterministic`, required under **ACS-Provenance** (with `registration_provenance` on components). |
-| Cryptographically attested | Profile-gated: **ACS-Crypto** (signatures), **ACS-Audit** (`request_hash` chain), and partly future (Policy Attestation, v0.2). |
+| Cryptographically attested | Profile-gated: **ACS-Crypto** (signatures), **ACS-Audit** (`request_hash` chain), and partly future (Policy Attestation, v0.2.0). |
 
 A deployment is conformant without the top rung. The point of naming the spectrum is that policy can *require* a rung where the stakes justify it, and the Guardian can tell which rung a given fact actually has.
 

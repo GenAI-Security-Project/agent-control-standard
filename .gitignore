@@ -4,6 +4,7 @@ book/
 site/
 references/
 .DS_Store
+/inventory/
 
 # Python build artifacts from `uv pip install -e .`
 *.egg-info/
@@ -15,8 +16,9 @@ __pycache__/
 .superpowers/
 _site/
 
-# Browser session logs. Never committed.
+# Local browser test artifacts. Never committed.
 .playwright-mcp/
+/tests/agbom_viewer/node_modules/
 
 # Adapter manual-test scratch dirs (project-level hook configs with
 # machine-specific paths from local probing — must never land in commits)

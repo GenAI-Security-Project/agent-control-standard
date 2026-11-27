@@ -19,7 +19,7 @@ RUN = (
 )
 EXPECTED = {
     "name": "Closing choice",
-    True: {"pull_request_target": {"types": ["opened", "edited", "synchronize", "reopened"], "branches": ["integration"]}},
+    True: {"pull_request_target": {"types": ["opened", "edited", "synchronize", "reopened"], "branches": ["integration", "release/*"]}},
     "permissions": {},
     "concurrency": {"group": "closing-choice-${{ github.event.pull_request.number }}", "cancel-in-progress": True},
     "jobs": {"closing-choice": {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import http.client
 import json
 import math
@@ -8,23 +9,91 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from acs.client import _key_document
 from acs.client._audit import audit_event
 from acs.client._config import FailPosture, Resolution
 from acs.client._outcome import Decided, Outcome, Refused, Undecided
 from acs.client._signing import sign_envelope, verify_signature
 from acs.client._urls import validate_guardian_url
 from acs.core import (
+    BINDING_REQUEST,
+    BINDING_SHAPE,
     MAX_REQUEST_BODY_BYTES,
     guardian_error_cause,
     is_guardian_refusal,
     modify_composition_violation,
     normalize_decision,
-    response_matches_request,
+    request_binding_problem,
+    response_binding_problem,
+    response_shape_problem,
     schemas_dir,
 )
+
+if TYPE_CHECKING:
+    from acs.client._key_document import ResponseKeys
+
+# Called with "req" and the signed request just before it is sent, and with "resp" and every decoded
+# answer before it is classified (PREMORTEM P6). It gets a deep copy, so it can't change what is sent
+# or judged. No "resp" call means no answer arrived, and the outcome's cause says why.
+OnWire = Callable[[str, Any], None]
+# The cause for a callback that raised. A local failure, so the handshake never stores it.
+ON_WIRE_FAILED = "on_wire_failed"
+
+
+def report_on_wire(on_wire: OnWire | None, direction: str, envelope: Any, method: Any) -> dict[str, Any] | None:
+    """Hand a copy of the envelope to on_wire. When the callback raises, audit it and return the failure's fields."""
+    if on_wire is None:
+        return None
+    return _hand_to_on_wire(on_wire, direction, copy.deepcopy(envelope), method)
+
+
+def _hand_to_on_wire(on_wire: OnWire, direction: str, envelope: Any, method: Any) -> dict[str, Any] | None:
+    """Call on_wire with an envelope nothing else holds. When the callback raises, audit it and return the fields."""
+    try:
+        on_wire(direction, envelope)
+    except Exception as e:  # noqa: BLE001
+        # A record of the exchange the caller asked for is missing, so the step must not go on as if it existed.
+        fields = {"dir": direction, "method": method, "error": str(e)}
+        audit_event("on_wire_failed", **fields)
+        return fields
+    return None
+
+
+def keyring_verified(response: Any, request: Mapping[str, Any], response_keys: ResponseKeys) -> bool:
+    """Whether the answer verifies under the key document's pinned key, as the answer to request.
+
+    The key comes from the document by key_id (issue #308, RFC 8725 section 3.1). The envelope's
+    algorithm never selects it, and D-026 applies per key_id: an exact match, no fallback. The
+    answer must also answer request (D-029), and an HMAC signature never passes. It must also
+    carry the hash of request's signed input, since one key signs every session and ids alone
+    let an answer be relayed between sessions (lab convention, issue #13 is the closest issue).
+    The key must be live now, so one that expires or is revoked while the process runs stops
+    verifying then.
+    """
+    # Read through the module so a test that replaces the one clock reaches it here too.
+    if not response_keys.is_live(_key_document.utcnow()):
+        return False
+    # The lazy public export loads cryptography only on this path.
+    import acs.core
+    return acs.core.verify_with_keyring(response, response_keys.keyring, expected_key_id=response_keys.key_id,
+                                        request=request, require_request_digest=True)
+
+
+def response_verified(response: Any, request: Mapping[str, Any], session_id: str | None,
+                      response_keys: ResponseKeys | None) -> bool:
+    """The one signature check for the step exchange and the handshake: the key document's pinned key with
+    response_keys, else HMAC under the session key."""
+    if response_keys is None:
+        return verify_signature(response, session_id=session_id)
+    return keyring_verified(response, request, response_keys)
+
+
+def _on_wire_refusal(fields: dict[str, Any]) -> Refused:
+    return Refused(ON_WIRE_FAILED, fields, f"on_wire callback failed on {fields['dir']}: {fields['error']}")
 
 
 class RequestTooLargeError(Exception):
@@ -44,19 +113,43 @@ class GuardianHTTPError(Exception):
         super().__init__(f"HTTP {status}")
 
 
-def is_jsonrpc_response(body: Any) -> bool:
-    """True for a JSON-RPC 2.0 response: "jsonrpc": "2.0", and a result or error, each present one an object."""
-    if not isinstance(body, dict) or body.get("jsonrpc") != "2.0":
-        return False
-    members = [body[k] for k in ("result", "error") if k in body]
-    return bool(members) and all(isinstance(m, dict) for m in members)
-
-
-def post(request: dict[str, Any], *, guardian_url: str, timeout_s: float) -> Any:
-    """POST the request and return the decoded JSON body; raises on oversize, a non-2xx status, transport failure or bad JSON."""
+def encode_request(request: dict[str, Any]) -> bytes:
+    """The request body post() sends. Raises RequestTooLargeError past the Guardian's body cap."""
     body = json.dumps(request).encode("utf-8")
     if len(body) > MAX_REQUEST_BODY_BYTES:
         raise RequestTooLargeError(len(body))
+    return body
+
+
+class OnWireFailed(Exception):
+    """The on_wire callback raised on "req". fields say which direction and why."""
+
+    def __init__(self, fields: dict[str, Any]) -> None:
+        super().__init__(fields["error"])
+        self.fields = fields
+
+
+def wire_body(request: dict[str, Any], on_wire: OnWire | None, method: Any) -> bytes:
+    """Encode the request once, hand on_wire exactly those bytes decoded, and return them for post() to send.
+
+    The step exchange and the handshake both use it, so what the transcript records is what goes out, and a request
+    post() would refuse never reaches on_wire (reviews CR6, CR3-7). Raises RequestTooLargeError past the body cap,
+    OnWireFailed when the callback raises, and whatever json.dumps raises for an envelope it can't encode.
+    """
+    body = encode_request(request)
+    if on_wire is not None:
+        # Decoded from the bytes just encoded, so nothing else holds this object and no copy is needed.
+        failed = _hand_to_on_wire(on_wire, "req", json.loads(body), method)
+        if failed is not None:
+            raise OnWireFailed(failed)
+    return body
+
+
+def post(body: bytes, *, guardian_url: str, timeout_s: float) -> Any:
+    """POST the encoded request and return the decoded JSON body. Raises on a non-2xx status, transport failure or bad JSON.
+
+    body comes from wire_body, which checked the cap and encoded the request once (review round 4 CR8).
+    """
     req = urllib.request.Request(
         guardian_url, data=body,
         headers={"Content-Type": "application/json"}, method="POST",
@@ -245,8 +338,12 @@ def _normalize(request: dict[str, Any]) -> str | None:
 
 
 def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPosture,
-               session_id: str | None, gate: bool = False) -> Decided | Resolution:
-    """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture; on a gate an unsignable request fails closed."""
+               session_id: str | None, gate: bool = False, response_keys: ResponseKeys | None = None,
+               on_wire: OnWire | None = None) -> Decided | Resolution:
+    """Sign, exchange within the method's timeout, and resolve anything but a usable decision with the posture. On a gate an unsignable request fails closed.
+
+    response_keys and on_wire go to exchange() unchanged. Both default to None, which is today's path.
+    """
     collision = _normalize(request)
     try:
         if collision is not None:
@@ -256,7 +353,8 @@ def round_trip(request: dict[str, Any], *, guardian_url: str, posture: FailPostu
         outcome = Undecided("envelope_not_signable", {"error": str(e)}, f"envelope not signable: {e}")
         return (posture.closed() if gate else posture).resolve(outcome)
     outcome = exchange(request, guardian_url=guardian_url,
-                       timeout_s=posture.timeout_for(request.get("method", "")), session_id=session_id)
+                       timeout_s=posture.timeout_for(request.get("method", "")), session_id=session_id,
+                       response_keys=response_keys, on_wire=on_wire)
     if not isinstance(outcome, Decided):
         return posture.resolve(outcome)
     result = outcome.response.get("result")
@@ -315,8 +413,21 @@ def result_problem(result: Any) -> str | None:
 
 
 def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
-             session_id: str | None) -> Outcome:
-    """POST one request and classify the answer; never raises."""
+             session_id: str | None, response_keys: ResponseKeys | None = None,
+             on_wire: OnWire | None = None) -> Outcome:
+    """POST one request and classify the answer. Never raises.
+
+    With response_keys, every answer must verify under the key document's pinned key (issue #576).
+    on_wire sees the signed request before it is sent and every decoded answer before it is
+    classified. A callback that raises refuses the step, and on "req" nothing is sent.
+    """
+    # A request no answer could bind is the adapter's own error. The rule's own request check
+    # refuses it here, before any I/O and before anything below reads it, so exchange() never
+    # raises on it.
+    problem = request_binding_problem(request)
+    if problem is not None:
+        return Refused("request_envelope_invalid", {"error": problem},
+                       f"request can't bind a Guardian answer: {problem}")
     params = request.get("params") or {}
     method, request_id = request.get("method"), params.get("request_id")
     try:
@@ -324,14 +435,27 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
     except ValueError as e:
         return Undecided("guardian_url_rejected", {"method": method, "error": str(e)},
                          f"Guardian URL rejected: {e}")
-    http_status = None
     try:
-        response = post(request, guardian_url=guardian_url, timeout_s=timeout_s)
+        body = wire_body(request, on_wire, method)
     except RequestTooLargeError as e:
         return Refused("request_exceeds_max_payload", {"body_bytes": e.args[0], "method": method},
                        f"envelope exceeds body cap: {e}")
+    except OnWireFailed as e:
+        return _on_wire_refusal(e.fields)
+    except Exception as e:  # noqa: BLE001
+        return Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
+    http_status, reported = None, False
+    try:
+        response = post(body, guardian_url=guardian_url, timeout_s=timeout_s)
     except GuardianHTTPError as e:
-        if not is_jsonrpc_response(e.body):
+        # Any decoded body is an answer that arrived, so on_wire sees it whatever its shape.
+        if e.body is not None:
+            reported = True
+            failed = report_on_wire(on_wire, "resp", e.body, method)
+            if failed is not None:
+                return _on_wire_refusal(failed)
+        # The rule's own shape check: a body that isn't a JSON-RPC answer stays an HTTP outcome.
+        if response_shape_problem(e.body) is not None:
             fields = {"http_status": e.status, "method": method}
             if e.status in HTTP_REFUSAL_STATUSES:
                 return Refused(f"http_{e.status}_refusal", fields, f"Guardian refused at HTTP layer ({e.status})")
@@ -349,8 +473,12 @@ def exchange(request: dict[str, Any], *, guardian_url: str, timeout_s: float,
                          f"Guardian response is not JSON: {e}")
     except Exception as e:  # noqa: BLE001
         return Undecided("adapter_exception", {"error": str(e)}, f"adapter error: {e}")
+    if not reported:
+        failed = report_on_wire(on_wire, "resp", response, method)
+        if failed is not None:
+            return _on_wire_refusal(failed)
     try:
-        outcome = classify_response(request, response, session_id=session_id)
+        outcome = classify_response(request, response, session_id=session_id, response_keys=response_keys)
     except Exception as e:  # noqa: BLE001
         outcome = Refused("response_unverifiable", {"request_id": request_id, "method": method, "error": str(e)},
                           f"Guardian response could not be verified: {e}")
@@ -364,15 +492,43 @@ def key_id_rejected(error: Any) -> bool:
     return isinstance(error, dict) and error.get("code") == -32004 and "signature" not in error
 
 
-def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None) -> Outcome:
-    """Classify a decoded Guardian answer; mis-bound or unverifiable answers and refusal codes fail closed."""
-    params = request.get("params") or {}
+def claims_json_rpc_answer(body: Any) -> bool:
+    """A JSON-RPC 2.0 object whose result or error, each present one, is an object: the shape accepted before the binding rule."""
+    if not isinstance(body, Mapping) or body.get("jsonrpc") != "2.0":
+        return False
+    members = [body[k] for k in ("result", "error") if k in body]
+    return bool(members) and all(isinstance(m, Mapping) for m in members)
+
+
+def classify_response(request: dict[str, Any], response: Any, *, session_id: str | None,
+                      response_keys: ResponseKeys | None = None) -> Outcome:
+    """Classify a decoded Guardian answer. Mis-bound or unverifiable answers and refusal codes fail closed.
+
+    With response_keys, every signature is checked under the key document's pinned key instead of HMAC.
+    """
+    # The one binding rule decides. A request it can't accept is the caller's error, so nothing
+    # here reads the request until the rule has.
+    binding = response_binding_problem(request, response)
+    if binding == BINDING_REQUEST:
+        return Refused("request_envelope_invalid", {}, "request can't bind a Guardian answer")
+    params = request.get("params")
+    # An error binds by id alone, so params may still be anything here.
+    params = params if isinstance(params, Mapping) else {}
     method, request_id = request.get("method"), params.get("request_id")
-    if not is_jsonrpc_response(response):
+    # A malformed response is undecided, so the fail posture applies, as for a transport
+    # failure. Any other reason refuses the step. A JSON-RPC answer the rule rejects only for a
+    # method or for carrying both members is refused, since its signature is never checked and
+    # altering a signed answer this way must not let an attacker choose the fail posture.
+    if binding == BINDING_SHAPE:
+        if claims_json_rpc_answer(response):
+            return Refused("response_shape_invalid", {"request_id": request_id, "method": method},
+                           "Guardian response is a JSON-RPC answer with a method or with both a result and an error")
         return Undecided("malformed_response", {"request_id": request_id, "method": method},
-                         "Guardian response is not a JSON-RPC 2.0 response with an object result or error")
-    if not response_matches_request(request, response):
-        claimed = response["error"].get("code") if "error" in response else None
+                         "Guardian response is not a JSON-RPC 2.0 response with exactly one object result or "
+                         "error and no method")
+    if binding is not None:
+        error = response.get("error") if isinstance(response, Mapping) else None
+        claimed = error.get("code") if isinstance(error, Mapping) else None
         return Refused("response_binding_mismatch",
                        {"claimed_error_code": claimed} if claimed is not None else {},
                        "response not bound to request")
@@ -380,7 +536,7 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         err = response["error"]
         code = err.get("code")
         # Errors are signed too; an unverifiable error under fail-open would be an allow.
-        if not verify_signature(response, session_id=session_id):
+        if not response_verified(response, request, session_id, response_keys):
             if key_id_rejected(err):
                 return Refused("key_id_rejected", {"claimed_error_code": code},
                                "Guardian answered an unsigned SIGNATURE_INVALID, how it reports a key_id it does not "
@@ -395,6 +551,6 @@ def classify_response(request: dict[str, Any], response: Any, *, session_id: str
         if is_guardian_refusal(code):
             return Refused(cause, fields, message)
         return Undecided(cause, fields, message)
-    if not verify_signature(response, session_id=session_id):
+    if not response_verified(response, request, session_id, response_keys):
         return Refused("response_signature_invalid", {}, "response signature invalid")
     return Decided(response)

@@ -5,7 +5,7 @@ community:
   - name: agent-control-standard
     platform: github-discussions
     url: https://github.com/GenAI-Security-Project/agent-control-standard/discussions
-    description: Specification discussion, questions, and proposals for the OWASP Agent Control Standard.
+    description: Specification discussion, questions, and proposals for the OWASP GenAI Security Project Agent Control Standard.
 # The nest-schema caps `leaders` at 5 entries and gives Person no `role` field,
 # so this list carries the three project leads and the two creators, which
 # fills the cap. The full leadership roster, workstream assignments, and
@@ -25,7 +25,7 @@ level: 2
 license:
   - Apache-2.0
   - CC-BY-SA-4.0
-name: OWASP Agent Control Standard
+name: OWASP GenAI Security Project Agent Control Standard
 pitch: >-
   The open standard for runtime agent control. ACS makes AI agents inspectable,
   traceable, and instrumentable through declarative hooks, policy enforcement,
@@ -34,7 +34,7 @@ pitch: >-
 repositories:
   - name: agent-control-standard
     url: https://github.com/GenAI-Security-Project/agent-control-standard
-    description: Specification, JSON Schema, and documentation for the OWASP Agent Control Standard.
+    description: Specification, JSON Schema, and documentation for the OWASP GenAI Security Project Agent Control Standard.
     code_of_conduct: https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CODE_OF_CONDUCT.md
     contribution_guide: https://github.com/GenAI-Security-Project/agent-control-standard/blob/main/CONTRIBUTING.md
 tags:

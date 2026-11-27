@@ -1,0 +1,132 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.7",
+  "serialNumber": "urn:uuid:f3a4c016-bd22-4092-8ed3-5d44d63c8360",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-11-24T20:02:21+00:00",
+    "tools": {
+      "components": [
+        {
+          "bom-ref": "pkg:generic/owasp-genai/owasp-aibom-generator@1.0.2",
+          "type": "application",
+          "name": "owasp-aibom-generator",
+          "version": "1.0.2",
+          "manufacturer": {
+            "name": "OWASP GenAI Security Project"
+          }
+        }
+      ]
+    },
+    "component": {
+      "bom-ref": "pkg:generic/OWASP-AIBOM-Generator/job-2026-11-24-20:02:21@1795550541",
+      "type": "application",
+      "name": "job-2026-11-24-20:02:21",
+      "description": "Generating SBOM for Qwen/Qwen2.5-0.5B-Instruct",
+      "version": "1795550541",
+      "purl": "pkg:generic/OWASP-AIBOM-Generator/job-2026-11-24-20:02:21@1795550541",
+      "manufacturer": {
+        "name": "OWASP AIBOM Generator"
+      },
+      "supplier": {
+        "name": "OWASP AIBOM Generator"
+      }
+    }
+  },
+  "components": [
+    {
+      "bom-ref": "pkg:huggingface/Qwen/Qwen2.5-0.5B-Instruct@7ae55760",
+      "type": "machine-learning-model",
+      "group": "Qwen",
+      "name": "Qwen2.5-0.5B-Instruct",
+      "version": "7ae55760",
+      "purl": "pkg:huggingface/Qwen/Qwen2.5-0.5B-Instruct@7ae55760",
+      "description": "No description available",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "modelCard": {
+        "modelParameters": {
+          "task": "text-generation",
+          "modelArchitecture": "qwen2",
+          "inputs": [
+            {
+              "format": "string"
+            }
+          ],
+          "outputs": [
+            {
+              "format": "string"
+            }
+          ]
+        },
+        "properties": [
+          {
+            "name": "genai:aibom:modelcard:vocabSize",
+            "value": "151936"
+          },
+          {
+            "name": "genai:aibom:modelcard:tokenizerClass",
+            "value": "Qwen2Tokenizer"
+          },
+          {
+            "name": "serialNumber",
+            "value": "urn:uuid:Qwen-Qwen2.5-0.5B-Instruct"
+          },
+          {
+            "name": "safetyRiskAssessment",
+            "value": "and tied word embeddings - Number of Parameters: 0"
+          }
+        ]
+      },
+      "manufacturer": {
+        "name": "Qwen",
+        "url": [
+          "https://huggingface.co/Qwen"
+        ]
+      },
+      "supplier": {
+        "name": "Qwen"
+      },
+      "authors": [
+        {
+          "name": "Qwen"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct",
+          "comment": "Model repository"
+        },
+        {
+          "type": "distribution",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/tree/main",
+          "comment": "Model files"
+        },
+        {
+          "type": "vcs",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/commit/7ae557604adf67be50417f59c2c2f167def9a775",
+          "comment": "Specific commit"
+        },
+        {
+          "type": "documentation",
+          "url": "https://arxiv.org/abs/2407.10671",
+          "comment": "ArXiv Paper"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:generic/Qwen/Qwen2.5-0.5B-Instruct@7ae55760",
+      "dependsOn": [
+        "pkg:huggingface/Qwen/Qwen2.5-0.5B-Instruct@7ae55760"
+      ]
+    }
+  ]
+}

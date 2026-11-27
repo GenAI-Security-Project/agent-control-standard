@@ -1,0 +1,201 @@
+"""Tracing setup (LAB-09, issue #582): off unless OTEL_EXPORTER_OTLP_ENDPOINT is set, straight to Jaeger, never in a
+request's way."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+import sys
+import uuid
+from typing import Any
+
+import pytest
+
+from acs_gateway.config import GatewayConfig
+
+
+def test_tracing_is_off_without_an_endpoint():
+    from acs_gateway.telemetry import Tracing
+
+    config = GatewayConfig.from_env({})
+    assert config.otlp_endpoint is None
+    assert Tracing.from_config(config).enabled is False
+
+
+def test_off_imports_no_opentelemetry_and_answers_a_governed_request(guardian, upstream):
+    # A fresh interpreter, so no other test's import hides one this path makes.
+    script = f"""
+import json, os, sys
+from starlette.testclient import TestClient
+from acs_gateway.app import create_app
+from acs_gateway.config import GatewayConfig
+env = {{"ACS_LAB_MODE": "enforce", "ACS_GUARDIAN_URL": {guardian!r}, "ACS_UPSTREAM_URL": {upstream.url!r},
+       "ACS_GATEWAY_STATE_DIR": os.environ["ACS_GATEWAY_STATE_DIR"], "ACS_GUARDIAN_READY_TIMEOUT_S": "5"}}
+body = {{"model": "gpt-5-nano", "input": [{{"role": "user", "content": "hi"}}]}}
+with TestClient(create_app(GatewayConfig.from_env(env))) as client:
+    status = client.post("/v1/responses", json=body).status_code
+print(json.dumps({{"status": status, "otel": sorted(m for m in sys.modules if m.startswith("opentelemetry"))}}))
+"""
+    env = {k: v for k, v in os.environ.items() if k != "OTEL_EXPORTER_OTLP_ENDPOINT"}
+    out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=env, check=True)
+    result = json.loads(out.stdout.strip().splitlines()[-1])
+    assert result == {"status": 200, "otel": []}
+
+
+@pytest.mark.parametrize("value", ["ftp://jaeger:4318", "jaeger:4318", "http://", "http://jaeger:4318?x=1"])
+def test_a_bad_endpoint_stops_startup(value):
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_OTLP_ENDPOINT"):
+        GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value})
+
+
+@pytest.mark.parametrize("value", ["http://jaeger:4318", "http://jaeger:4318/", " https://jaeger:4318/ "])
+def test_the_endpoint_exports_to_v1_traces(value):
+    from acs_gateway.telemetry import traces_url
+
+    config = GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value})
+    assert traces_url(config.otlp_endpoint) == value.strip().rstrip("/") + "/v1/traces"
+
+
+def test_an_endpoint_builds_a_live_tracer_of_its_own():
+    from opentelemetry import trace
+
+    from acs_gateway.telemetry import Tracing
+
+    tracing = Tracing.from_config(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}))
+    try:
+        assert tracing.enabled is True
+        # The gateway's provider is its own, so nothing else in the process starts exporting.
+        assert not isinstance(trace.get_tracer_provider(), type(tracing.provider))
+    finally:
+        tracing.close(10.0)
+
+
+def test_a_session_trace_id_is_its_session_id():
+    from acs_gateway.telemetry import session_root_span_id, session_trace_id
+
+    session_id = str(uuid.uuid4())
+    assert session_trace_id(session_id) == uuid.UUID(session_id).int
+    assert session_root_span_id(session_id) == session_root_span_id(session_id) != 0
+    assert session_root_span_id(session_id) != session_root_span_id(str(uuid.uuid4()))
+
+
+def test_a_failing_exporter_never_touches_a_request_and_logs_once(gateway, upstream, caplog, monkeypatch):
+    from conftest import finbot_request, message_item, response_body
+
+    # Nothing listens on port 9, so every export fails. A short timeout keeps the flush quick.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TIMEOUT", "1")
+    client = gateway(OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:9")
+    tracing = client.app.state.gateway.tracing
+    assert tracing.enabled
+    try:
+        with caplog.at_level(logging.DEBUG):
+            for _ in range(2):
+                for _ in range(3):
+                    response = client.post("/v1/responses", json=finbot_request())
+                    assert response.status_code == 200
+                    assert response.json() == response_body(message_item("ok"))
+                assert tracing.provider.force_flush(10_000)
+    finally:
+        tracing.close(10.0)
+    failing = [r for r in caplog.records if r.name == "acs_gateway.telemetry"]
+    assert [r.getMessage() for r in failing] == [
+        "acs-gateway: span export to http://127.0.0.1:9 is failing, so spans are dropped until it recovers"]
+    assert not [r for r in caplog.records if r.name.startswith("opentelemetry") and r.levelno >= logging.WARNING]
+
+
+def test_export_failures_log_once_per_window_and_never_raise(caplog):
+    from opentelemetry.sdk.trace.export import SpanExportResult
+
+    from acs_gateway.telemetry import quiet_exporter
+
+    results: list[Any] = [SpanExportResult.FAILURE, RuntimeError("boom"), SpanExportResult.SUCCESS,
+                          RuntimeError("boom"), SpanExportResult.FAILURE]
+
+    class Flaky:
+        def export(self, spans):
+            result = results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def shutdown(self):
+            return None
+
+        def force_flush(self, timeout_millis=30000):
+            return True
+
+    exporter = quiet_exporter(Flaky(), "http://jaeger:4318/v1/traces")
+    with caplog.at_level(logging.DEBUG, logger="acs_gateway.telemetry"):
+        outcomes = [exporter.export([]) for _ in range(5)]
+    assert outcomes == [SpanExportResult.FAILURE, SpanExportResult.FAILURE, SpanExportResult.SUCCESS,
+                        SpanExportResult.FAILURE, SpanExportResult.FAILURE]
+    assert len([r for r in caplog.records if r.name == "acs_gateway.telemetry"]) == 2
+    assert "boom" not in caplog.text
+
+
+@pytest.mark.parametrize("value", ["http://user:s3cr3t-pw@jaeger:4318", "https://tok3n-only@jaeger:4318/v1/traces",
+                                   "http://:s3cr3t-pw@jaeger:4318"])
+def test_an_endpoint_with_credentials_is_refused_without_echoing_them(value):
+    # Credentials go in OTEL_EXPORTER_OTLP_HEADERS, which the gateway never logs (CR5).
+    with pytest.raises(ValueError, match="OTEL_EXPORTER_OTLP_HEADERS") as raised:
+        GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value})
+    assert "s3cr3t" not in str(raised.value) and "tok3n" not in str(raised.value)
+
+
+def test_a_bad_endpoint_error_never_echoes_the_value():
+    with pytest.raises(ValueError) as raised:
+        GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "ftp://s3cr3t-host-part:99999"})
+    assert "s3cr3t" not in str(raised.value)
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("http://jaeger:4318/v1/traces", "http://jaeger:4318/v1/traces"),
+    ("http://jaeger:4318/v1/traces/", "http://jaeger:4318/v1/traces"),
+    ("http://jaeger:4318/otlp", "http://jaeger:4318/otlp/v1/traces"),
+])
+def test_an_endpoint_already_naming_v1_traces_is_not_doubled(value, expected):
+    from acs_gateway.telemetry import traces_url
+
+    assert traces_url(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": value}).otlp_endpoint) == expected
+
+
+def test_the_export_log_names_only_scheme_host_and_port():
+    from acs_gateway.telemetry import display_endpoint
+
+    assert display_endpoint("https://jaeger.example:4318/otlp/v1/traces") == "https://jaeger.example:4318"
+    assert display_endpoint("http://jaeger/v1/traces") == "http://jaeger"
+
+
+def test_tracing_leaves_the_exporter_loggers_level_alone(caplog):
+    import logging as logging_module
+
+    from acs_gateway.telemetry import Tracing
+
+    names = ["opentelemetry.exporter.otlp.proto.http", "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+             "opentelemetry.exporter.otlp.common.http"]
+    before = {name: logging_module.getLogger(name).level for name in names}
+    tracing = Tracing.from_config(GatewayConfig.from_env({"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9"}))
+    tracing.close(10.0)
+    assert {name: logging_module.getLogger(name).level for name in names} == before
+    # Another exporter's records on the same logger still get through (CR7).
+    with caplog.at_level(logging_module.WARNING):
+        logging_module.getLogger("opentelemetry.exporter.otlp.proto.http.trace_exporter").warning("someone else's")
+    assert "someone else's" in caplog.text
+
+
+def test_long_client_strings_are_capped_on_spans():
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from acs_gateway.telemetry import ATTRIBUTE_LIMIT, Tracing, new_provider
+
+    exporter = InMemorySpanExporter()
+    provider = new_provider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    with Tracing(provider, "off").model_call(None, {"model": "m" * 5000}, stream=False):
+        pass
+    (span,) = exporter.get_finished_spans()
+    assert ATTRIBUTE_LIMIT == 256
+    assert len(span.attributes["gen_ai.request.model"]) == 256
+    assert len(span.name) <= len("chat ") + 256

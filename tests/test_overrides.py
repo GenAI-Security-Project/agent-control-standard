@@ -108,7 +108,7 @@ def test_override_source_has_no_nav_literals():
     """The pane's content lives in mkdocs.yml. A copy in a template drifts silently."""
     for name in PARTIALS:
         source = (OVERRIDES / name).read_text(encoding="utf-8")
-        for literal in ("#problem", "owasp.slack.com", "Roadmap"):
+        for literal in ("#problem", "owasp.org/slack/invite", "Roadmap"):
             assert literal not in source, f"{literal} is hard-coded in overrides/partials/{name}"
 
 

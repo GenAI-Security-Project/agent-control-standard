@@ -434,7 +434,7 @@ def test_render_nav_emits_the_pane_in_order():
     expected += [(2, r["title"], r["url"]) for r in NAV.external_resources]
     assert [(depth, label, url) for depth, label, url, _group, _section in rows] == expected
     # The design's count, so a walker and a renderer that drop the same row still fail.
-    assert len(rows) == 53
+    assert len(rows) == 58
     by_label = {row[1]: row for row in rows}
     assert by_label["Trustworthy Agents"][2] == LANDING_ROOT + "docs/"
     assert by_label["FAQ"][2] == LANDING_ROOT + "docs/topics/faq/"
@@ -512,7 +512,9 @@ def test_url_with_backslash_or_userinfo_raises(url):
     "https://evil.example/",
     "http://github.com/",
     "https://github.com.evil.example/",
-    "https://owasp.slack.com.evil.example",
+    "https://owasp.org.evil.example/slack/invite",
+    "https://owasp.org/",
+    "https://owasp.slack.com",
     "//github.com/x",
     "/docs/",
     "ftp://github.com/",

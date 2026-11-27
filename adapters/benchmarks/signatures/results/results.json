@@ -1,0 +1,49 @@
+{
+  "environment": {
+    "machine": "Apple M3 Max (arm64, 16 logical CPUs)",
+    "os": "Darwin 25.5.0",
+    "python": "3.12.2",
+    "cryptography": "50.0.2",
+    "openssl": "OpenSSL 4.0.3 29 Sep 2026",
+    "source_sha256": "5f19bcd078b4b0ec219c2c8239a9f9e08c4d2a56e237518ef756f7633f6f9f32",
+    "acs_adapters": "0.2.0",
+    "date": "2026-11-18",
+    "iterations": 1000,
+    "warmup": 100
+  },
+  "rows": [
+    {
+      "algorithm": "HMAC-SHA256",
+      "signature_bytes": 32,
+      "public_key_bytes": 32,
+      "envelope_bytes": 366,
+      "sign_median_us": 9.417,
+      "sign_p95_us": 10.0,
+      "verify_median_us": 9.875,
+      "verify_p95_us": 10.917
+    },
+    {
+      "algorithm": "ML-DSA-65",
+      "signature_bytes": 3309,
+      "public_key_bytes": 1952,
+      "envelope_bytes": 4732,
+      "sign_median_us": 391.709,
+      "sign_p95_us": 1134.666,
+      "verify_median_us": 106.625,
+      "verify_p95_us": 119.416
+    },
+    {
+      "algorithm": "ECDSA-P256",
+      "signature_bytes": 64,
+      "public_key_bytes": 65,
+      "envelope_bytes": 409,
+      "sign_median_us": 26.334,
+      "sign_p95_us": 29.833,
+      "verify_median_us": 52.5,
+      "verify_p95_us": 53.417
+    }
+  ],
+  "not_measured": {
+    "hybrid": "acs.core has no hybrid signature yet (PR #564 would settle its form)"
+  }
+}
