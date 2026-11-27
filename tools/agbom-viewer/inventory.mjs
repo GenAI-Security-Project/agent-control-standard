@@ -1,12 +1,26 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
+import { modelEntries } from './src/local-evidence.mjs';
 
 const record = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const list = (value) => Array.isArray(value) ? value : [];
 const fold = (name) => name.toLowerCase();
 
-function containsModel(components) {
-  return list(components).some((component) => component?.type === 'machine-learning-model' || containsModel(component?.components));
+function hasAcsProperties(entry) {
+  return list(entry?.properties).some((property) => typeof property?.name === 'string' && property.name.startsWith('acs:')) ||
+    list(entry?.components).some(hasAcsProperties);
+}
+
+function modelOnlyComponents(components) {
+  return list(components).every((component) =>
+    component?.type === 'machine-learning-model' && modelOnlyComponents(component.components));
+}
+
+function isModelOnlyBom(value) {
+  return !Array.isArray(value.inventories) && modelEntries(value).length > 0 &&
+    !list(value.services).length && !list(value.compositions).length &&
+    modelOnlyComponents(value.components) && modelOnlyComponents(value.metadata?.component?.components) &&
+    ![value, value.metadata, value.metadata?.component].some(hasAcsProperties);
 }
 
 function classify(value, filename) {
@@ -14,7 +28,7 @@ function classify(value, filename) {
   if (Object.hasOwn(value, 'agbom') || Object.hasOwn(value, 'full_snapshot') || Object.hasOwn(value, 'diff')) return 'event';
   if (value.specFormat === 'CycloneDX' || value.bomFormat === 'CycloneDX') {
     if (typeof value.specVersion !== 'string') throw new Error('CycloneDX specVersion is missing or invalid');
-    if (filename.endsWith('.aibom.json') || (!Array.isArray(value.inventories) && containsModel(value.components))) return 'aibom';
+    if (filename.endsWith('.aibom.json') || isModelOnlyBom(value)) return 'aibom';
     if (!['2.0', '2.0-dev'].includes(value.specVersion)) return 'unsupported';
     if (!Array.isArray(value.inventories) || !value.inventories.every((inventory) =>
       record(inventory) && (!Object.hasOwn(inventory, 'components') || Array.isArray(inventory.components)))) {

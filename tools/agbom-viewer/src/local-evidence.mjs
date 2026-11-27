@@ -69,8 +69,11 @@ export function compareSnapshots(baseline, comparison, relationshipRules) {
         const children = [];
         fields(object(change.before) ? change.before : {}, object(change.after) ? change.after : {},
           change.path, children, relation);
-        for (const child of children.filter(({edge}) => edge)) {
-          result.relationships.push({ ...child, id, beforeEntry: before, afterEntry: after });
+        if (children.some(({edge}) => edge)) {
+          for (const child of children) {
+            result[child.edge ? 'relationships' : 'changed'].push({ ...child, id, beforeEntry: before, afterEntry: after });
+          }
+          continue;
         }
       }
       result[change.edge ? 'relationships' : 'changed'].push({ ...change, id, beforeEntry: before, afterEntry: after });
@@ -125,20 +128,36 @@ export function corroborateDiff(diff, baseline, target) {
 }
 
 export function modelEntries(bom) {
-  function visit(entries, prefix) {
-    return items(entries).flatMap((entry, i) => {
-      const path = [...prefix, i];
-      return [
-        ...(entry?.type === 'machine-learning-model' ? [{entry, path}] : []),
-        ...visit(entry?.components, [...path, 'components']),
-      ];
-    });
+  function visitEntry(entry, path) {
+    return [
+      ...(entry?.type === 'machine-learning-model' ? [{entry, path}] : []),
+      ...visit(entry?.components, [...path, 'components']),
+    ];
   }
+
+  function visit(entries, prefix) {
+    return items(entries).flatMap((entry, i) => visitEntry(entry, [...prefix, i]));
+  }
+
   return [
+    ...visitEntry(bom.metadata?.component, ['metadata', 'component']),
     ...visit(bom.components, ['components']),
     ...items(bom.inventories).flatMap((inventory, i) => visit(inventory?.components, ['inventories', i, 'components'])),
   ];
 }
+
+function bomReferenceKey(value) {
+  if (typeof value !== 'string') return value;
+  return value.replace(/^(urn:cdx:)([\dA-Fa-f]{8}(?:-[\dA-Fa-f]{4}){3}-[\dA-Fa-f]{12})(?=\/[1-9]\d*(?:#.+)?$)/,
+    (_, prefix, uuid) => prefix + uuid.toLowerCase());
+}
+
+export function sameBomReference(before, after) {
+  return bomReferenceKey(before) === bomReferenceKey(after);
+}
+
+const gitSha1 = /^[\da-f]{7,40}$/i;
+const revisionKey = (value) => gitSha1.test(value) || /^[\da-f]{64}$/i.test(value) ? value.toLowerCase() : value;
 
 function packageIdentity(value) {
   if (typeof value !== 'string') return {};
@@ -157,7 +176,7 @@ export function inspectModelIdentity(model, association) {
   if (!record.aibom && !association.aibomFile) return { status: 'No AIBOM supplied' };
   if (!aibom) return { status: 'AIBOM reference supplied but unavailable' };
   const matches = modelEntries(aibom).filter(({entry}) => !record.aibomComponentRef ||
-    [entry['bom-ref'], entry.refId].includes(record.aibomComponentRef));
+    [entry['bom-ref'], entry.refId].some((reference) => sameBomReference(reference, record.aibomComponentRef)));
   if (matches.length !== 1) {
     return { status: matches.length ? 'Insufficient evidence' : record.aibomComponentRef ? 'Mismatch' : 'Insufficient evidence',
       detail: matches.length ? 'Multiple machine-learning-model entries match.' : 'No matching machine-learning-model entry.' };
@@ -168,21 +187,22 @@ export function inspectModelIdentity(model, association) {
   const declared = typeof record.identifier === 'string' ? packageIdentity(record.identifier).id ?? record.identifier : undefined;
   const acsName = repositoryName(model.name);
   const expected = declared ?? acsName;
-  const revisions = [model.version, record.revision].filter((value) => typeof value === 'string' && value);
+  const revisions = [model.version, record.revision].filter((value) => typeof value === 'string' && value).map(revisionKey);
   const observed = [purl.id, ref.id].filter(Boolean);
   const upstreamCommits = items(entry.externalReferences).flatMap((reference, i) => {
     if (typeof reference?.url !== 'string') return [];
     const match = /^https:\/\/huggingface\.co\/([^/]+\/[^/]+)\/commit\/([\da-f]{40})\/?$/i.exec(reference.url);
     return match ? [{ id: match[1], revision: match[2], path: [...path, 'externalReferences', i, 'url'] }] : [];
   });
-  const observedVersions = [entry.version, purl.revision, ref.revision].filter((value) => typeof value === 'string' && value);
+  const observedVersions = [entry.version, purl.revision, ref.revision]
+    .filter((value) => typeof value === 'string' && value).map(revisionKey);
   const facts = { entry, path, expected, identifier: purl.id ?? ref.id, source: purl.source ?? ref.source, upstreamCommits };
   if ((declared && acsName && declared !== acsName) || new Set(revisions).size > 1 ||
       new Set(observed).size > 1 || new Set(observedVersions).size > 1 ||
       (expected && observed.some((id) => id !== expected)) ||
       (revisions.length && observedVersions.some((version) => version !== revisions[0])) ||
       upstreamCommits.some(({id, revision}) => (observed.length && id !== observed[0]) ||
-        (observedVersions.length && /^[\da-f]{7,40}$/i.test(observedVersions[0]) && !revision.startsWith(observedVersions[0])))) {
+        (observedVersions.length && gitSha1.test(observedVersions[0]) && !revisionKey(revision).startsWith(observedVersions[0])))) {
     return { ...facts, status: 'Mismatch', detail: 'Recorded model identifiers or revisions disagree.' };
   }
   if (!expected || !observed.length || !revisions.length || !entry.version) {
