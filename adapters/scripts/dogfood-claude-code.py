@@ -204,6 +204,8 @@ def main(argv: list[str]) -> int:
             err = e.stderr.decode(errors="replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
         elapsed = round(time.time() - started, 1)
 
+        stub_records = ([json.loads(ln) for ln in stub_log.read_text().splitlines()]
+                        if stub_log.exists() else [])
         target = work / "report.txt"
         steps = [ln.rstrip() for ln in glog
                  if "steps/" in ln or "REFUSING" in ln or "WARNING" in ln or "handshake" in ln]
@@ -218,7 +220,8 @@ def main(argv: list[str]) -> int:
             "files_left": sorted(str(p.relative_to(work)) for p in work.rglob("*") if p.is_file()),
             "claude_stdout": (out or "")[-2000:],
             "claude_stderr": (err or "")[-800:],
-            "stub_requests": [json.loads(ln) for ln in stub_log.read_text().splitlines()] if stub_log.exists() else [],
+            "stub_requests": [r for r in stub_records if r.get("event") != "close"],
+            "stub_responses": [r for r in stub_records if r.get("event") == "close"],
             "guardian_steps": steps,
             "envelopes": [_summarize(json.loads(ln)["body"])
                           for ln in envelopes.read_text().splitlines()] if envelopes.exists() else [],

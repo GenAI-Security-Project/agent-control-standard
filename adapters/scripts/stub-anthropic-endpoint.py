@@ -142,6 +142,7 @@ class Handler(BaseHTTPRequestHandler):
         names = tool_names_of(body)
         follow_up = has_tool_result(body)
         tool = pick_tool(names)
+        self._sent = 0
         self._log({"t": round(time.time(), 3), "mode": mode, "path": self.path, "bytes": len(raw),
                    "endpoint": "messages" if "/v1/messages" in self.path else "other",
                    "stream": bool(body.get("stream")), "turn": "after_tool_result" if follow_up else "first",
@@ -163,12 +164,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             for chunk in self._events(mode, follow_up, tool):
                 if chunk is None:  # reset: stop writing and drop the socket
+                    self._log_close(mode, "RST")
                     self._hard_close()
                     return
                 self.wfile.write(chunk)
+                self._sent += len(chunk)
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
+            self._log_close(mode, "peer went away")
             return
+        self._log_close(mode, "FIN")
         self.close_connection = True
 
     def _message(self, mode: str, follow_up: bool, tool: str) -> bytes:
@@ -207,20 +212,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if mode in ("drop", "reset"):
             try:
-                self.wfile.write(payload[: len(payload) // 2])
+                head = payload[: len(payload) // 2]
+                self.wfile.write(head)
+                self._sent += len(head)
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
+                self._log_close(mode, "peer went away")
                 return
             if mode == "reset":
+                self._log_close(mode, "RST", declared=len(payload))
                 self._hard_close()
             else:
+                self._log_close(mode, "FIN", declared=len(payload))
                 self.close_connection = True  # short body, then a FIN
             return
         try:
             self.wfile.write(payload)
+            self._sent += len(payload)
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
+            self._log_close(mode, "peer went away")
             return
+        self._log_close(mode, "FIN", declared=len(payload))
         self.close_connection = True
 
     def _hard_close(self) -> None:
@@ -232,6 +245,16 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         self.connection.close()
         self.close_connection = True
+
+    def _log_close(self, mode: str, how: str, declared: int | None = None) -> None:
+        """How the response ended, in bytes: the only per-rep record of a FIN versus a RST.
+
+        The client's own message does not separate the two — both surface as a lost connection —
+        so this line is what makes the difference between `drop` and `reset` checkable.
+        """
+        rec = {"t": round(time.time(), 3), "event": "close", "mode": mode, "how": how,
+               "sent": self._sent, "declared": declared}
+        self._log(rec)
 
     def _log(self, rec: dict) -> None:
         path = os.environ.get("BENCH_LOG")
