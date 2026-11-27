@@ -29,7 +29,11 @@ An `annotator` option supplies the function AGT calls for every `annotators.<nam
 
 ## OPA
 
-AGT's native core spawns `opa`. The SDK ships it as a per-platform optional dependency and tries to put it on `PATH` by assigning `process.env`, which under Bun changes nothing a spawned process can see. This package resolves the binary the SDK's own way, publishes it into the real process environment as `ACS_OPA_PATH` through libc, and reads it back. If the readback disagrees, construction throws. A process that cannot reach OPA never gets a bridge, so a Guardian refuses to start rather than starting and denying everything.
+AGT's native core spawns `opa`. The SDK ships it as a per-platform optional dependency and tries to put it on `PATH` by assigning `process.env`, which under Bun on Linux and macOS changes nothing a spawned process can see. This package resolves the binary the SDK's own way and publishes it into the real process environment as `ACS_OPA_PATH`.
+
+On Linux and macOS it publishes through libc and reads the value back. If the readback disagrees, construction throws. A process that cannot reach OPA never gets a bridge, so a Guardian refuses to start rather than starting and denying everything.
+
+On Windows a Bun `process.env` write reaches the real environment, so this package writes `ACS_OPA_PATH` there and loads no C library. Nothing reads the value back. If that write were ever lost, the Guardian would still start, and every evaluation would deny on `runtime_error:policy_invocation_failed`.
 
 | Variable | What it does |
 |---|---|
@@ -48,7 +52,7 @@ AGT's native core spawns `opa`. The SDK ships it as a per-platform optional depe
 | File | What it holds |
 |---|---|
 | `src/index.ts` | `createBridge`, the two roles, and the verdict, evidence and annotator types |
-| `src/opa-path.ts` | The OPA resolution, the libc publish, and the readback |
+| `src/opa-path.ts` | The OPA resolution, the publish, and the Linux and macOS readback |
 
 ## Tests
 
