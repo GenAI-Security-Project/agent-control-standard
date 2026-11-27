@@ -241,7 +241,23 @@ hooks:
     # A REAL field read, not a literal. Claude Code's PostToolUse payload carries
     # no exit code, so claude-code.hookmap.yaml declares `{literal: success}`
     # and records the gap; OpenCode's `metadata.exit` supplies one.
-    exit_status: { from: $.result.metadata.exit }
+    #
+    # TIMEOUT (#466). When bash cuts a command off at its own `timeout`,
+    # OpenCode reports the call `completed` with `metadata.exit: null`, and the
+    # only marker is the notice it appends to the output -- measured on 1.18.30:
+    #   (no output)\n\n<shell_metadata>\nshell tool terminated command after
+    #   exceeding timeout 2000 ms. If this command is expected ...
+    # There is no structured field for it, so the signal is this text, read
+    # from the mirror (`metadata.output`), which carries the notice verbatim.
+    # It is version-coupled: if a future OpenCode rewords the notice, a timeout
+    # arrives as `failure` again, which is where it was before this check --
+    # never as `success`. Whether `timeout` means the effect may already have
+    # happened is Discussion #128's question, not this mapping's.
+    exit_status:
+      from: $.result.metadata.exit
+      timeout_when:
+        path: $.result.metadata.output
+        contains: "shell tool terminated command after exceeding timeout"
     decisions:
       allow:
         output:

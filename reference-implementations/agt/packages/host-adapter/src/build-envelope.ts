@@ -30,7 +30,28 @@ export type HookmapLiteral = { literal: string };
  * resolved the same way `outputs.from` is -- against the raw hook payload, at
  * the same seam.
  */
-export type HookmapFieldRead = { from: string };
+export type HookmapFieldRead = { from: string; timeout_when?: HookmapTimeoutSignal };
+
+/**
+ * How one host says it cut a step off at its own timeout -- declared beside
+ * `exit_status.from`, because each host reports it differently and no shared
+ * rule fits all of them (#466).
+ *
+ * When `from` does not map to `success`, the adapter reads `path` and answers
+ * `timeout` if that value is a string containing `contains`; otherwise the
+ * answer stays `failure`. A step that exited 0 is `success` whatever `path`
+ * holds: the signal can only narrow a failure, never overturn a success.
+ *
+ * `timeout` says the host stopped waiting; it does not say whether the step's
+ * effect already happened. That question is Discussion #128's, not this
+ * field's.
+ */
+export type HookmapTimeoutSignal = {
+  /** JSONPath-lite (`$.foo.bar`) into the raw hook payload. */
+  path: string;
+  /** Substring of the value at `path` that only the host's timeout produces. */
+  contains: string;
+};
 
 /** One tool's own output paths under `HookmapOutputs.by_tool` -- see `outputsFor`. */
 export type HookmapToolOutputs = { from: string; within: string };
@@ -643,6 +664,50 @@ function assertExitStatusNotBothForms(hookmap: Hookmap, path: string): void {
 }
 
 /**
+ * Rejects a malformed `exit_status.timeout_when`, at load time, for the same
+ * reason `assertExitStatusNotBothForms` does: a shape visible from the hookmap
+ * alone, which a throw at `buildEnvelope` time would hand to the negotiated
+ * posture instead of refusing.
+ *
+ * `timeout_when` refines a field read, so it is refused beside a `literal`
+ * (a literal has no failure for it to narrow). When present it is exactly
+ * `{path, contains}`: `path` a usable JSONPath-lite string, `contains` a
+ * non-empty string. An unknown key is refused rather than ignored, so a typo
+ * (`contain:`) cannot silently switch the detection off.
+ */
+function assertExitStatusTimeoutWellFormed(hookmap: Hookmap, path: string): void {
+  for (const [hookEventName, entry] of Object.entries(hookmap.hooks ?? {})) {
+    const exitStatus = isPlainObject(entry) ? (entry as { exit_status?: unknown }).exit_status : undefined;
+    if (!isPlainObject(exitStatus) || !("timeout_when" in exitStatus)) {
+      continue;
+    }
+    const where = `${path}'s "hooks.${hookEventName}.exit_status.timeout_when"`;
+    if (typeof exitStatus.from !== "string" || exitStatus.from.length === 0) {
+      throw new Error(`loadHookmap: ${where} is declared without "exit_status.from" -- it refines a field read only`);
+    }
+    const signal = exitStatus.timeout_when;
+    if (!isPlainObject(signal)) {
+      throw new Error(`loadHookmap: ${where} must be {path, contains}`);
+    }
+    const unknown = Object.keys(signal).filter((key) => key !== "path" && key !== "contains");
+    if (unknown.length > 0) {
+      throw new Error(`loadHookmap: ${where} declares unknown key(s) ${unknown.map((k) => JSON.stringify(k)).join(", ")} -- it is exactly {path, contains}`);
+    }
+    if (typeof signal.path !== "string" || !signal.path.startsWith("$.") || signal.path.length <= 2) {
+      throw new Error(`loadHookmap: ${where}.path is ${JSON.stringify(signal.path)} -- it must be one JSONPath-lite string such as "$.result.metadata.output"`);
+    }
+    try {
+      pathSegments(signal.path);
+    } catch (failure) {
+      throw new Error(`loadHookmap: ${where}.path is not a usable path: ${failure instanceof Error ? failure.message : String(failure)}`);
+    }
+    if (typeof signal.contains !== "string" || signal.contains.length === 0) {
+      throw new Error(`loadHookmap: ${where}.contains must be a non-empty string`);
+    }
+  }
+}
+
+/**
  * Rejects a hookmap entry that declares `arguments` (a request-gate shape)
  * and also declares `outputs` (a result gate's own output/mirror
  * declaration), at load time.
@@ -741,7 +806,8 @@ function normalizeTools(hookmap: Hookmap): Hookmap {
  * anything but `from` and `within`, or a `from` outside its own `within` --
  * see assertByToolWellFormed. Also throws if any entry's `tools` is malformed --
  * see assertToolsWellFormed. Also throws if any entry's `exit_status`
- * declares both `literal` and `from` -- see assertExitStatusNotBothForms.
+ * declares both `literal` and `from` -- see assertExitStatusNotBothForms --
+ * or a malformed `timeout_when` -- see assertExitStatusTimeoutWellFormed.
  * Also throws if a request-gate entry (one declaring `arguments`) also
  * declares `outputs` -- see assertRequestGateDeclaresNoOutputs.
  *
@@ -756,6 +822,7 @@ export function loadHookmap(path: string): Hookmap {
   assertByToolWellFormed(hookmap, path);
   assertToolsWellFormed(hookmap, path);
   assertExitStatusNotBothForms(hookmap, path);
+  assertExitStatusTimeoutWellFormed(hookmap, path);
   assertRequestGateDeclaresNoOutputs(hookmap, path);
   assertPairingPathWellFormed(hookmap, path);
   return normalizeTools(hookmap);
@@ -832,8 +899,10 @@ export function modificationDocumentOf(envelope: AcsRequestEnvelope): Record<str
 }
 
 /**
- * `success` / `failure`, per ACS's own enum -- from whichever form this
- * hook's `exit_status` declares.
+ * `success` / `failure` / `timeout`, per ACS's own enum -- from whichever form
+ * this hook's `exit_status` declares. `timeout` is reachable only through a
+ * field read's `timeout_when` (see HookmapTimeoutSignal); `blocked` is not
+ * produced here.
  *
  * A host that reports a numeric exit code is mapped here, in the adapter,
  * rather than in the hookmap: the hookmap is data, and "0 means success" is a
@@ -873,7 +942,20 @@ function exitStatusOf(event: string, rawExitStatus: unknown, payload: Record<str
           `no value in this payload, so this gate cannot say whether the step succeeded`,
       );
     }
-    return raw === 0 || raw === "0" || raw === "success" ? "success" : "failure";
+    if (raw === 0 || raw === "0" || raw === "success") {
+      return "success";
+    }
+    // A failure the host attributes to its own timeout is reported as one.
+    // An unresolved or non-string signal path is not a fault: the signal is
+    // evidence of a timeout, and its absence just leaves the step a failure.
+    const signal = (rawExitStatus as { timeout_when?: HookmapTimeoutSignal }).timeout_when;
+    if (signal !== undefined) {
+      const evidence = resolvePath(payload, signal.path);
+      if (typeof evidence === "string" && evidence.includes(signal.contains)) {
+        return "timeout";
+      }
+    }
+    return "failure";
   }
 
   throw new Error(
