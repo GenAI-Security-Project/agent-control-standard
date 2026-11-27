@@ -1,6 +1,7 @@
 package guardian_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -504,6 +505,68 @@ func TestPolicyStateFollowsTheSession(t *testing.T) {
 	}
 }
 
+// An engine's state describes the decision the engine made. When the
+// Guardian answers with another disposition, the session keeps the state it
+// had. An engine's own DENY keeps its new state.
+func TestPolicyStateFollowsTheAnswer(t *testing.T) {
+	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
+	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "r"}, Question: "q", TimeoutSeconds: 30}}
+	deferral := acs.Decision{Disposition: acs.Defer, Reasoning: "wait", DeferDetails: &acs.DeferDetails{Reason: acs.DeferPendingDependency, ResolutionMethod: acs.ResolveTimeout, ResolutionTimeoutMS: 1000, TimeoutDecision: acs.Deny}}
+	for name, tt := range map[string]struct {
+		config func(*guardian.Config)
+		method string
+		pd     acs.Decision
+		client guardian.ClientCapability
+		reason string
+		// answer is the final disposition; empty means DENY.
+		answer acs.Disposition
+		want   string
+	}{
+		"compact_modify_unsupported": {method: acs.StepPostCompact, pd: modify, client: guardian.ClientCapability{CannotApplyModify: true}, reason: disposition.ReasonModifyUnsupported, answer: acs.Allow, want: `{"step":"kept"}`},
+		"modify_unsupported":         {method: acs.StepToolCallRequest, pd: modify, client: guardian.ClientCapability{CannotApplyModify: true}, reason: disposition.ReasonModifyUnsupported, want: `{"step":"kept"}`},
+		"ask_deferred":               {method: acs.StepToolCallRequest, pd: ask, client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: acs.Defer}, reason: disposition.ReasonApproverUnavailable, answer: acs.Defer, want: `{"step":"kept"}`},
+		"ask_substituted":            {method: acs.StepToolCallRequest, pd: ask, client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: acs.Deny}, reason: disposition.ReasonApproverUnavailable, want: `{"step":"kept"}`},
+		"deferral_bound":             {config: func(c *guardian.Config) { c.MaxDeferrals = 1 }, method: acs.StepToolCallRequest, pd: deferral, reason: disposition.ReasonDeferralBoundExceeded, want: `{"step":"kept"}`},
+		"not_permitted":              {method: acs.StepPreCompact, pd: ask, reason: disposition.ReasonDispositionNotPermitted, want: `{"step":"kept"}`},
+		"audit_unavailable":          {config: func(c *guardian.Config) { c.AuditLog = &auditRecorder{requiredFails: true} }, method: acs.StepToolCallRequest, pd: modify, client: guardian.ClientCapability{CannotApplyModify: true}, reason: disposition.ReasonAuditUnavailable, want: `{"step":"kept"}`},
+		"engine_denies":              {method: acs.StepToolCallRequest, pd: acs.Decision{Disposition: acs.Deny, Reasoning: "no"}, want: `{"step":"denied"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var configs []option
+			if tt.config != nil {
+				configs = append(configs, tt.config)
+			}
+			h := newHarness(t, configs...)
+			c := h.session()
+			first := acs.Decision{Disposition: acs.Allow}
+			if tt.pd.Disposition == acs.Defer {
+				first = tt.pd
+			}
+			h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+				return guardian.PolicyDecision{Decision: first, State: json.RawMessage(`{"step":"kept"}`)}, nil
+			})
+			h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+			h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+				return guardian.PolicyDecision{Decision: tt.pd, Client: tt.client, State: json.RawMessage(`{"step":"denied"}`)}, nil
+			})
+			payload := any(toolCall("ls"))
+			if tt.method != acs.StepToolCallRequest {
+				payload = hookPayloads[tt.method]
+			}
+			r := h.decision(c, tt.method, payload)
+			answer := cmp.Or(tt.answer, acs.Deny)
+			if r.Disposition != answer || (tt.reason != "" && !slices.Contains(r.ReasonCodes, tt.reason)) {
+				t.Fatalf("got %+v, want %s %s", r, answer, tt.reason)
+			}
+			h.engine.set(nil)
+			h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+			if got := string(h.engine.last().Session.PolicyState); got != tt.want {
+				t.Fatalf("the next step saw policy state %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 // End to end, a decision altered on the way fails verification, and the
 // Observed Agent denies it even under the proceed posture (#32).
 func TestTamperedDecisionIsDenied(t *testing.T) {
@@ -872,45 +935,104 @@ func TestCallerDeadlineStopsRecording(t *testing.T) {
 	}
 }
 
-// TestStoreFailureKeepsTheSubstitutionCode: a store that fails to keep a
-// substituted decision's state answers DENY with the substitution's reason
-// code still in it (§6.5).
+// TestStoreFailureKeepsTheSubstitutionCode: a store that fails to record a
+// substituted deferral answers DENY with the substitution's reason code and
+// reasoning still in it (§9.2).
 func TestStoreFailureKeepsTheSubstitutionCode(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) {
 		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludeErr: errors.New("disk failed")}
 	})
 	c := h.session()
-	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
 	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
-		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
+		return askDeferred(), nil
 	})
 	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonModifyUnsupported, disposition.ReasonStoreUnavailable}) || !strings.Contains(r.Reasoning, "redact /command") {
-		t.Fatalf("got %+v; §6.5 keeps the code and the reasoning that names the modification", r)
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonApproverUnavailable, disposition.ReasonStoreUnavailable}) || !strings.Contains(r.Reasoning, "cannot route an approval") {
+		t.Fatalf("got %+v; §9.2 keeps the code and the reasoning that names the substitution", r)
 	}
 }
 
 // TestStorePanicKeepsTheSubstitutionCode: a store that panics while it
-// keeps a substituted decision's state is answered with the substitution's
-// reason code and reasoning still in the answer (§6.5).
+// records a substituted deferral is answered with the substitution's reason
+// code and reasoning still in the answer (§9.2).
 func TestStorePanicKeepsTheSubstitutionCode(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) {
 		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludePanics: true}
 	})
 	c := h.session()
-	modify := acs.Decision{Disposition: acs.Modify, Reasoning: "rewrite", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/command"}}}}
 	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
-		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
+		return askDeferred(), nil
 	})
 	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonModifyUnsupported, disposition.ReasonEvaluationFailed}) || !strings.Contains(r.Reasoning, "redact /command") {
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, []string{disposition.ReasonApproverUnavailable, disposition.ReasonEvaluationFailed}) || !strings.Contains(r.Reasoning, "cannot route an approval") {
 		t.Fatalf("got %+v", r)
 	}
 }
 
+// askDeferred is an ASK the client cannot route, which §9.2 answers as DEFER.
+func askDeferred() guardian.PolicyDecision {
+	ask := acs.Decision{Disposition: acs.Ask, Reasoning: "approve", AskDetails: &acs.AskDetails{Approver: acs.Approver{Type: acs.ApproverHuman, ID: "r"}, Question: "q", TimeoutSeconds: 30}}
+	return guardian.PolicyDecision{Decision: ask, Client: guardian.ClientCapability{CannotResolveAsk: true, AskSubstitute: acs.Defer}}
+}
+
 // TestStoreFailureKeepsAuditUnavailable: a store failure after a required
-// audit event failed keeps both the substitution code and audit_unavailable.
+// audit event failed keeps the substitution code and audit_unavailable. A
+// wrapped MCP response still concludes after a substituted DENY, because it
+// closes its call.
 func TestStoreFailureKeepsAuditUnavailable(t *testing.T) {
+	store, audit := &slowStore{}, &auditRecorder{}
+	h := newHarness(t, func(c *guardian.Config) {
+		store.MemorySessionContextStore = c.Store.(*guardian.MemorySessionContextStore)
+		c.Store, c.AuditLog = store, audit
+	})
+	c := mcpSession(h)
+	h.engine.set(nil)
+	if r := h.decision(c, wrappedCall, mcpRequest(3, "Read")); r.Disposition != acs.Allow {
+		t.Fatalf("opening call 3 got %+v", r)
+	}
+	store.concludeErr = errors.New("disk failed")
+	audit.mu.Lock()
+	audit.requiredFails = true
+	audit.mu.Unlock()
+	redact := acs.Decision{Disposition: acs.Modify, Reasoning: "redact", Modifications: &acs.Modifications{Redactions: []acs.Redaction{{Path: "/result/content/0/text"}}}}
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: redact, Client: guardian.ClientCapability{CannotApplyModify: true}}, nil
+	})
+	r := h.decision(c, wrappedCall, mcpResponse(3))
+	want := []string{disposition.ReasonModifyUnsupported, disposition.ReasonAuditUnavailable, disposition.ReasonStoreUnavailable}
+	if r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, want) {
+		t.Fatalf("got %s %v, want DENY %v", r.Disposition, r.ReasonCodes, want)
+	}
+}
+
+// A grant the Guardian refuses discards the engine's decision, so its state
+// is not kept, also at postCompact, where the refusal stands as ALLOW (§6.5).
+func TestRefusedGrantKeepsTheStateItHad(t *testing.T) {
+	h := newHarness(t)
+	c := h.session()
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}, State: json.RawMessage(`{"step":"kept"}`)}, nil
+	})
+	h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
+		return guardian.PolicyDecision{Decision: acs.Decision{Disposition: acs.Allow}, State: json.RawMessage(`{"step":"granted"}`),
+			Grant: &guardian.IntentGrant{AskStepID: "never-asked"}}, nil
+	})
+	r := h.decision(c, acs.StepPostCompact, hookPayloads[acs.StepPostCompact])
+	if !slices.Contains(r.ReasonCodes, disposition.ReasonGrantInvalid) {
+		t.Fatalf("got %+v, want grant_invalid", r)
+	}
+	h.engine.set(nil)
+	h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
+	if got := string(h.engine.last().Session.PolicyState); got != `{"step":"kept"}` {
+		t.Fatalf("the next step saw policy state %s, want the state before the refused grant", got)
+	}
+}
+
+// postCompact permits no DENY, so its unapplied MODIFY is ALLOW (§6.5). The
+// engine's state assumed the rewrite, so the Guardian writes nothing, and a
+// failing store and a failing audit log leave the answer ALLOW.
+func TestUnappliedCompactRewriteWritesNothing(t *testing.T) {
 	h := newHarness(t, func(c *guardian.Config) {
 		c.Store = &slowStore{MemorySessionContextStore: c.Store.(*guardian.MemorySessionContextStore), concludeErr: errors.New("disk failed")}
 		c.AuditLog = &auditRecorder{requiredFails: true}
@@ -920,9 +1042,10 @@ func TestStoreFailureKeepsAuditUnavailable(t *testing.T) {
 	h.engine.set(func(context.Context, guardian.PolicyInput) (guardian.PolicyDecision, error) {
 		return guardian.PolicyDecision{Decision: modify, Client: guardian.ClientCapability{CannotApplyModify: true}, State: json.RawMessage(`{}`)}, nil
 	})
-	r := h.decision(c, acs.StepToolCallRequest, toolCall("ls"))
-	if want := []string{disposition.ReasonModifyUnsupported, disposition.ReasonAuditUnavailable, disposition.ReasonStoreUnavailable}; r.Disposition != acs.Deny || !slices.Equal(r.ReasonCodes, want) || !strings.Contains(r.Reasoning, "redact /command") {
-		t.Fatalf("got %+v, want reason codes %v", r, want)
+	r := h.decision(c, acs.StepPostCompact, hookPayloads[acs.StepPostCompact])
+	want := []string{disposition.ReasonModifyUnsupported, disposition.ReasonAuditUnavailable}
+	if r.Disposition != acs.Allow || !slices.Equal(r.ReasonCodes, want) || !strings.Contains(r.Reasoning, "redact /command") {
+		t.Fatalf("got %+v, want ALLOW with reason codes %v", r, want)
 	}
 }
 

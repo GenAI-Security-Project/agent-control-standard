@@ -3,14 +3,13 @@ package guardian
 import (
 	"context"
 	"encoding/json"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
 	"sync"
 	"time"
-
-	jsonv2 "github.com/go-json-experiment/json"
-	"github.com/go-json-experiment/json/jsontext"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/disposition"

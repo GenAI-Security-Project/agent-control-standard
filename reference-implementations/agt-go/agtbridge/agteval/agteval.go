@@ -32,6 +32,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -44,8 +45,6 @@ import (
 	"sync/atomic"
 	"time"
 	"unsafe"
-
-	jsonv2 "github.com/go-json-experiment/json"
 
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/agtbridge"
 )

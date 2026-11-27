@@ -2,22 +2,17 @@ package agtbridge
 
 import (
 	"encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
-	jsonv2 "github.com/go-json-experiment/json"
-
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/acs"
-	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/jcs"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/mcp"
 	"github.com/GenAI-Security-Project/agent-control-standard/reference-implementations/agt-go/internal/method"
 )
-
-// mcpToolsCall is the MCP method a tool call travels in.
-const mcpToolsCall = "tools/call"
 
 // The exit_status values (tool-call-result.json) a projected MCP result
 // takes.
@@ -34,10 +29,6 @@ const (
 // preserved after them.
 type projection struct {
 	req acs.Request
-	// call is the MCP id of a request, and tool its tool's name. An MCP
-	// response does not name its tool, so a request the decision lets
-	// through is remembered in the session's state until its response.
-	call, tool string
 	// arguments are a request's argument names, which a parameter override
 	// must name.
 	arguments []string
@@ -47,16 +38,17 @@ type projection struct {
 	wrapped bool
 }
 
-// errMCPCallPending is a wrapped tools/call whose MCP id names a call still
-// awaiting its response: a response could no longer be told apart.
-var errMCPCallPending = errors.New("a tools/call with this MCP id is still awaiting its response")
+// errMCPResultUnreadable is a wrapped MCP response whose result or error does
+// not decode.
+var errMCPResultUnreadable = errors.New("the wrapped MCP response cannot be read")
 
 // project returns the projection of req, which is req itself for anything
-// but a wrapped MCP tools/call. A response to no request the session let
-// through is an error; its pending call is removed from state.
-func project(req acs.Request, state *policyState) (projection, error) {
+// but a wrapped MCP tools/call. calls is the Guardian's record of the
+// session's open calls (SessionContext.MCPCalls); a response to none of them
+// is an error.
+func project(req acs.Request, calls map[string]string) (projection, error) {
 	protocol, _, m, ok := method.SplitWrapped(req.Method)
-	if !ok || !strings.EqualFold(protocol, mcp.Protocol) || m != mcpToolsCall {
+	if !ok || !strings.EqualFold(protocol, mcp.Protocol) || m != mcp.ToolsCall {
 		return projection{req: req}, nil
 	}
 	msg, err := mcp.Read(m, req.Params.Payload)
@@ -64,29 +56,29 @@ func project(req acs.Request, state *policyState) (projection, error) {
 		return projection{}, err
 	}
 	p := projection{wrapped: true}
-	id, err := mcpCorrelationID(msg.ID)
-	if err != nil {
-		return projection{}, err
-	}
 	var payload any
 	if msg.IsResponse() {
-		tool, ok := state.MCPCalls[id]
+		id, err := mcp.CorrelationID(msg.ID)
+		if err != nil {
+			return projection{}, err
+		}
+		tool, ok := calls[id]
 		if !ok {
+			// The Guardian refuses such a response before the engine
+			// (mcp_call_not_open); reaching here is a defect of the caller.
 			return projection{}, fmt.Errorf("the MCP response answers id %s, and no tools/call with that id was let through in this session", id)
 		}
-		delete(state.MCPCalls, id)
-		var result acs.ToolCallResultPayload
-		result, p.outputs = toolResult(msg, tool)
+		result, outputs, err := toolResult(msg, tool)
+		if err != nil {
+			return projection{}, err
+		}
+		p.outputs = outputs
 		req.Method, payload = acs.StepToolCallResult, result
 	} else {
 		call, err := toolRequest(msg)
 		if err != nil {
 			return projection{}, err
 		}
-		if _, pending := state.MCPCalls[id]; pending && id != "" {
-			return projection{}, fmt.Errorf("%w: %s", errMCPCallPending, id)
-		}
-		p.call, p.tool = id, call.Tool.Name
 		for name := range call.Arguments {
 			p.arguments = append(p.arguments, name)
 		}
@@ -95,29 +87,6 @@ func project(req acs.Request, state *policyState) (projection, error) {
 	req.Params.Payload, err = jsonv2.Marshal(payload)
 	p.req = req
 	return p, err
-}
-
-func mcpCorrelationID(id []byte) (string, error) {
-	if len(id) == 0 {
-		return "", nil
-	}
-	canonical, err := jcs.Canonicalize(id)
-	if err != nil {
-		return "", fmt.Errorf("canonicalize MCP id: %w", err)
-	}
-	return string(canonical), nil
-}
-
-// settle remembers a request the decision lets through, so its response
-// can be matched to its tool.
-func (p projection) settle(state *policyState, d acs.Disposition) {
-	if p.call == "" || (d != acs.Allow && d != acs.Modify) {
-		return
-	}
-	if state.MCPCalls == nil {
-		state.MCPCalls = map[string]string{}
-	}
-	state.MCPCalls[p.call] = p.tool
 }
 
 // readdress fits a modification to the MCP message the Observed Agent
@@ -173,19 +142,32 @@ func toolRequest(msg mcp.Message) (acs.ToolCallRequestPayload, error) {
 	return p, nil
 }
 
-// toolResult carries every MCP content item, structured result and error
-// detail as an output, and returns each output's pointer into the message.
-// Text stays a string so the stock AGT egress policies see the same shape as
-// a native text result. Other content stays in its original JSON shape.
-func toolResult(msg mcp.Message, tool string) (acs.ToolCallResultPayload, []string) {
+// toolResult carries every MCP content item, the input requests, the
+// structured result, the metadata, and the error's message and data as
+// outputs. It returns each output's pointer into the message. Text stays a
+// string, so the stock AGT egress policies see the shape of a native text
+// result. Other content keeps its JSON shape. The request state stays out:
+// it is opaque to everyone but the MCP server. The projection fails on a
+// result that does not decode and on a result that checkResult refuses.
+func toolResult(msg mcp.Message, tool string) (acs.ToolCallResultPayload, []string, error) {
 	p := acs.ToolCallResultPayload{Tool: acs.Tool{Name: tool}, ExitStatus: exitSuccess, Outputs: []acs.ToolOutput{}}
 	var result struct {
+		ResultType        json.RawMessage   `json:"resultType"`
 		Content           []json.RawMessage `json:"content"`
+		InputRequests     json.RawMessage   `json:"inputRequests"`
+		RequestState      json.RawMessage   `json:"requestState"`
 		StructuredContent json.RawMessage   `json:"structuredContent"`
 		Metadata          json.RawMessage   `json:"_meta"`
 		IsError           bool              `json:"isError"`
 	}
-	_ = jsonv2.Unmarshal(msg.Result, &result)
+	if len(msg.Result) > 0 {
+		if err := jsonv2.Unmarshal(msg.Result, &result); err != nil {
+			return acs.ToolCallResultPayload{}, nil, fmt.Errorf("%w: result: %w", errMCPResultUnreadable, err)
+		}
+		if err := checkResult(result.ResultType, result.Content != nil, result.InputRequests, result.RequestState); err != nil {
+			return acs.ToolCallResultPayload{}, nil, fmt.Errorf("%w: result: %w", errMCPResultUnreadable, err)
+		}
+	}
 	if result.IsError || len(msg.Error) > 0 {
 		p.ExitStatus = exitFailure
 	}
@@ -211,6 +193,10 @@ func toolResult(msg mcp.Message, tool string) (acs.ToolCallResultPayload, []stri
 		p.Outputs = append(p.Outputs, acs.ToolOutput{Value: output.value})
 		paths = append(paths, output.path)
 	}
+	if len(result.InputRequests) > 0 {
+		p.Outputs = append(p.Outputs, acs.ToolOutput{Value: slices.Clone(result.InputRequests)})
+		paths = append(paths, "/result/inputRequests")
+	}
 	if len(result.StructuredContent) > 0 {
 		p.Outputs = append(p.Outputs, acs.ToolOutput{Value: slices.Clone(result.StructuredContent)})
 		paths = append(paths, "/result/structuredContent")
@@ -224,7 +210,9 @@ func toolResult(msg mcp.Message, tool string) (acs.ToolCallResultPayload, []stri
 			Message string          `json:"message"`
 			Data    json.RawMessage `json:"data"`
 		}
-		_ = jsonv2.Unmarshal(msg.Error, &e)
+		if err := jsonv2.Unmarshal(msg.Error, &e); err != nil {
+			return acs.ToolCallResultPayload{}, nil, fmt.Errorf("%w: error: %w", errMCPResultUnreadable, err)
+		}
 		text, _ := jsonv2.Marshal(e.Message)
 		p.Outputs = append(p.Outputs, acs.ToolOutput{Value: text})
 		paths = append(paths, "/error/message")
@@ -233,5 +221,36 @@ func toolResult(msg mcp.Message, tool string) (acs.ToolCallResultPayload, []stri
 			paths = append(paths, "/error/data")
 		}
 	}
-	return p, append([]string{}, paths...)
+	return p, append([]string{}, paths...), nil
+}
+
+// checkResult applies MCP 2026-07-28 to a result's type. An absent
+// resultType means "complete", which needs a content list. Any other value
+// than "complete" or "input_required" is invalid, an empty string or null
+// included. An input_required result has an inputRequests object, a
+// requestState string, or both.
+func checkResult(resultType json.RawMessage, hasContent bool, inputRequests, requestState json.RawMessage) error {
+	kind := "complete"
+	if len(resultType) > 0 && (resultType[0] != '"' || jsonv2.Unmarshal(resultType, &kind) != nil) {
+		return errors.New("the resultType is not a string")
+	}
+	switch kind {
+	case "complete":
+		if !hasContent {
+			return errors.New("content is not a list")
+		}
+	case "input_required":
+		if len(inputRequests) > 0 && inputRequests[0] != '{' {
+			return errors.New("inputRequests is not an object")
+		}
+		if len(requestState) > 0 && requestState[0] != '"' {
+			return errors.New("requestState is not a string")
+		}
+		if len(inputRequests) == 0 && len(requestState) == 0 {
+			return errors.New("an input_required result has neither inputRequests nor requestState")
+		}
+	default:
+		return errors.New("the resultType is not one this bridge reads")
+	}
+	return nil
 }

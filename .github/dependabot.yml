@@ -115,9 +115,29 @@ updates:
       - "dependencies"
     groups:
       # The two modules share dependencies, and make check fails while one
-      # go.mod is ahead of the other, so one pull request moves a dependency
-      # in both directories.
+      # go.mod is ahead of the other, so one version update moves a dependency
+      # in both directories. A security update is not grouped and can move one
+      # directory alone; make check then fails until the other follows.
       go-modules:
         patterns:
           - "*"
         group-by: dependency-name
+
+  # Base images of the Go reference Guardian's Dockerfile. The FROM lines pin
+  # each image by digest, so a moved tag never changes a base image. This entry
+  # opens a pull request when an image is rebuilt or gets a newer tag. A new
+  # golang tag must match the go line of both go.mod files, which
+  # scripts/check-tracked-files.sh enforces. The rust image supplies rustup
+  # and the build tools; agt-native.lock selects the Rust toolchain.
+  - package-ecosystem: "docker"
+    directory: "/reference-implementations/agt-go"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
