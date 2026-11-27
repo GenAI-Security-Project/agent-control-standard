@@ -1,10 +1,10 @@
 # Hooks
 
-ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` namespace, the Inspect-pillar `agbom/*` methods, and the `system/ping` liveness method. This page catalogs each hook: when it fires, the canonical schema, the disposition contract, and the audit-chain implications.
+ACS v0.1.0 defines 19 native `steps/*` hooks plus the wrapped `protocols/MCP/*` namespace, the Inspect-pillar `agbom/*` methods, the `system/ping` liveness method, and the `defer/subscribe` resolution method. This page catalogs each hook: when it fires, the canonical schema, the disposition contract, and the audit-chain implications.
 
 The full per-hook payload schemas live under [`specification/v0.1.0/hooks/`](https://github.com/GenAI-Security-Project/agent-control-standard/tree/main/specification/v0.1.0/hooks). Common envelope rules — `request_id`, `timestamp`, `acs_version`, `metadata`, signature handling, replay protection — are documented in [Specification §3](./specification.md#3-wire-format) and [§10.3](./specification.md#103-replay-protection).
 
-The diagram below groups ACS's 22 methods by the boundary each one sits on, without listing every hook.
+The diagram below groups ACS's 23 methods by the boundary each one sits on, without listing every hook.
 
 ```mermaid
 flowchart TB
@@ -20,6 +20,7 @@ flowchart TB
     Wrapped["protocols/MCP/*<br/>wrapped MCP messages"]
     Inspect["agbom/*<br/>2 Inspect-pillar methods"]
     Liveness["system/ping<br/>liveness probe, no audit"]
+    Resolution["defer/subscribe<br/>DEFER resolution"]
 ```
 
 ## Overview
@@ -48,6 +49,7 @@ flowchart TB
 | [`agbom/snapshot`](#agbomsnapshot) | Full AgBOM, once per session | Yes (banned components) | Yes |
 | [`agbom/changed`](#agbomchanged) | Mid-session AgBOM mutation | Yes | Yes |
 | [`system/ping`](#systemping) | Liveness probe | Always ALLOW | No |
+| [`defer/subscribe`](#defersubscribe) | After a DEFER, to learn its resolution | No (returns the resolution) | The resolution only (§6.6) |
 | `protocols/MCP/*` | Wrapped MCP messages | Yes | Yes |
 
 `protocols/A2A/*` is reserved for v0.2. The namespace is recognized in the handshake's `wrapped_protocols` for forward compatibility, but no normative wrapping semantics are defined in v0.1.
@@ -315,7 +317,7 @@ Schema: [`hooks/turn-end.json`](https://genai-security-project.github.io/agent-c
 
 Schema: [`hooks/session-end.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/session-end.json).
 
-Session termination, audit finalization. The Guardian seals the chain at this point.
+Session termination, audit finalization. The Guardian resolves each pending deferral of the session to DENY and appends those resolutions before the `sessionEnd` entry ([Specification §6.6](./specification.md#66-resolving-defer-normative)), then seals the chain.
 
 **Payload:** `reason` (`completed`, `cancelled`, `error`, `timeout`, `abandoned`), and an optional `summary` with the outcome, step count, errors, and `decision_failures`, the number of decision failures in each failure class (Specification §6.4).
 
@@ -354,6 +356,20 @@ Schema: [`hooks/system-ping.json`](https://genai-security-project.github.io/agen
 > **Note:** `system/ping` is in the `system/*` namespace, not `steps/*`. It is not a hook in the enforcement sense: it carries no audit and bypasses signature requirements.
 
 Liveness probe. Always returns `decision: "allow"` regardless of policy, signature, or session state. NOT written into SessionContext. NOT subject to signature requirements even when the session otherwise requires signatures.
+
+---
+
+## defer/subscribe
+
+Schema: [`hooks/defer-subscribe.json`](https://genai-security-project.github.io/agent-control-standard/schema/v0.1.0/hooks/defer-subscribe.json). See [Specification §6.6](./specification.md#66-resolving-defer-normative).
+
+> **Note:** `defer/subscribe` is in the `defer/*` namespace, not `steps/*`. The Guardian evaluates no policy on a `defer/subscribe` request and writes no ContextEntry for that request.
+
+The Observed Agent sends `defer/subscribe` after a DEFER, in the same session. For a pending deferral, the Guardian first sends a `defer/pending` notification. The Guardian then sends a signed response with the resolution in `result`, and that response ends the subscription.
+
+**Payload:** `deferred_request_id`, the `request_id` of the deferred step.
+
+**Decision:** the final decision on the deferred step, with `defer_resolution`. The Guardian makes no decision on the subscription request itself.
 
 ---
 

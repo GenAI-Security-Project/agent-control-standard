@@ -98,7 +98,7 @@ HUMAN_STEPS = {
     ),
     "promote": (
         "Phase 2 Step 8. Promoting integration to main is a merge to the branch that "
-        "publishes the site and all 44 schema $id URIs on merge. That is a merge, and "
+        "publishes the site and all 46 schema $id URIs on merge. That is a merge, and "
         "merging is a human decision this tool will not make."
     ),
     "verify": (

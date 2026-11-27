@@ -14,6 +14,7 @@
     "ContextEntry":         { "$ref": "../v0.1.0/context-entry.json" },
     "AskDetails":           { "$ref": "../v0.1.0/ask-details.json" },
     "DeferDetails":         { "$ref": "../v0.1.0/defer-details.json" },
+    "DeferResolution":      { "$ref": "../v0.1.0/defer-resolution.json" },
     "Modifications":        { "$ref": "../v0.1.0/modifications.json" },
 
     "Hook_SessionStart":           { "$ref": "../v0.1.0/hooks/session-start.json" },
@@ -36,6 +37,8 @@
     "Hook_SkillLoad":              { "$ref": "../v0.1.0/hooks/skill-load.json" },
     "Hook_SkillUnload":            { "$ref": "../v0.1.0/hooks/skill-unload.json" },
     "Hook_SystemPing":             { "$ref": "../v0.1.0/hooks/system-ping.json" },
+    "Hook_DeferSubscribe":         { "$ref": "../v0.1.0/hooks/defer-subscribe.json" },
+    "DeferPendingNotification":    { "$ref": "../v0.1.0/hooks/defer-subscribe.json#/$defs/PendingNotification" },
     "Hook_AgbomSnapshot":          { "$ref": "../v0.1.0/hooks/agbom-snapshot.json" },
     "Hook_AgbomChanged":           { "$ref": "../v0.1.0/hooks/agbom-changed.json" },
 
@@ -49,6 +52,7 @@
 
   "oneOf": [
     { "$ref": "#/$defs/RequestEnvelope" },
-    { "$ref": "#/$defs/ResponseEnvelope" }
+    { "$ref": "#/$defs/ResponseEnvelope" },
+    { "$ref": "#/$defs/DeferPendingNotification" }
   ]
 }
