@@ -134,7 +134,7 @@ bun run inspector
 Envelope Inspector — tailing .acs/envelopes.jsonl, .acs/audit.jsonl, and .acs/session-context.jsonl
 Ctrl-C to stop.
 
-last_observed_posture=(none observed)  fail-open proceeds=0
+last_observed_posture=(none observed)  fail-open proceeds=0  unenforced=0
 ```
 
 The Inspector prints each envelope as it crosses the wire. See [View the events](#view-the-events) and the [Inspector README](packages/inspector/README.md).
@@ -422,10 +422,10 @@ The `.acs/` directory holds four kinds of local file. None is ever committed.
 |---|---|---|
 | `envelopes.jsonl` | Guardian | Every envelope, both directions, before validation, plus a `finding` line for a fact the spec requires the Guardian to record, such as a `request_id_ref` it cannot resolve |
 | `session-context.jsonl` | Guardian | One hash-chain entry per governed step |
-| `audit.jsonl` | Host shim | Every fail-open proceed and every posture-driven block |
+| `audit.jsonl` | Host shim | Every fail-open proceed, every posture-driven block, and every posture-driven deny the host could not carry out (`unenforced`) |
 | `sessions/<session_id>.json` | Host shim, Claude Code only | The negotiated ServerHello, so the next hook subprocess finds it |
 
-The Inspector reads the first three. Its banner shows the last posture an audit entry carried and a count of fail-open proceeds. This is an audit entry, written when the Guardian was not reachable under the default posture:
+The Inspector reads the first three. Its banner shows the last posture an audit entry carried, a count of fail-open proceeds, and a count of denies the host could not carry out (`unenforced`). This is an audit entry, written when the Guardian was not reachable under the default posture:
 
 ```json
 {"seq":1,"recorded_at":"2026-09-07T16:00:57.216Z","session_id":"demo","method":"steps/toolCallRequest","rpc_id":"dd3a9076-eb7c-45c5-bee8-24bbc33aaa72","posture":"proceed","posture_source":"default","outcome":"proceeded","failure":{"kind":"transport","message":"Unable to connect. Is the computer able to access the url?"},"session_failure":{"kind":"handshake_failed","message":"Unable to connect. Is the computer able to access the url?"}}
@@ -562,7 +562,7 @@ Everything above runs with no configuration. These are the variables each proces
 |---|---|---|
 | `ACS_GUARDIAN_URL` | `http://localhost:8787/acs` | Where the shim sends envelopes |
 | `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
-| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
+| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds, posture-driven blocks, and posture-driven denies the host could not carry out (`unenforced`) are written |
 | `ACS_HOOKMAP_PATH` | `hosts/claude-code/claude-code.hookmap.yaml` | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 
 **The OpenCode plugin** (`hosts/opencode/acs-plugin.ts`) reads `ACS_GUARDIAN_URL`, `ACS_AUDIT_LOG` and `ACS_HOOKMAP_PATH` with the same meanings. Its hookmap default is `hosts/opencode/opencode.hookmap.yaml`. It has no `ACS_SESSION_DIR`, because the plugin lives for the whole session and keeps the ServerHello in memory. It also reads `ACS_DEBUG`. When that variable holds any value other than empty or `0`, the plugin prints the decision's reason text on stderr, because OpenCode has no field that reads a reason back.

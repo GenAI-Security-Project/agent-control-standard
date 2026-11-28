@@ -41,7 +41,10 @@
  *     a string `hook_event_name`/`session_id`, the hookmap fails to load,
  *     or `session_id` is unsafe to use as a path segment. Every one of
  *     those is a broken deployment, not a policy question, and a loud,
- *     blocking stop beats a silent, ungoverned proceed.
+ *     blocking stop beats a silent, ungoverned proceed. Exit 2 also ends a
+ *     posture `deny` at PostToolUse that no replacement can be built for,
+ *     such as a Read of an image. There it does not block: Claude Code
+ *     delivers the output, so the step is audited `unenforced` (#568).
  *
  *     Exit 1 never appears anywhere in this file, including for anything
  *     unexpected that escapes `main`. Claude Code reads exit 1
@@ -578,7 +581,19 @@ async function main(): Promise<void> {
   // rules produce for it, is stated once inside `governStep`, host-agnostically,
   // so a second host inherits it by calling the function rather than
   // reimplementing it.
-  const governed = await governStep({ hookEventName, payload, hookmap, guardian, session, sessionId, audit });
+  // Exit 2 at PostToolUse does not withhold: Claude Code "Shows stderr to
+  // Claude; the tool already ran". So a deny this shim cannot render there is
+  // audited as unenforced, not blocked (#568).
+  const governed = await governStep({
+    hookEventName,
+    payload,
+    hookmap,
+    guardian,
+    session,
+    sessionId,
+    audit,
+    resultGateStopWithholds: false,
+  });
 
   process.stdout.write(JSON.stringify(asClaudeCodeOutput(governed.output, hookEventName)));
 }

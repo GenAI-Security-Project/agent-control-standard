@@ -46,7 +46,7 @@ The first hook of a session sends `handshake/hello` and stores the Guardian's an
 |---|---|---|
 | `ACS_GUARDIAN_URL` | `http://localhost:8787/acs` | Where the shim sends envelopes |
 | `ACS_SESSION_DIR` | `.acs/sessions` | Where the negotiated ServerHello is stored, one file per session |
-| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds and posture-driven blocks are written |
+| `ACS_AUDIT_LOG` | `.acs/audit.jsonl` | Where fail-open proceeds, posture-driven blocks, and posture-driven denies the shim could not carry out (`unenforced`) are written |
 | `ACS_HOOKMAP_PATH` | `claude-code.hookmap.yaml`, beside the shim | Which hookmap to load. This changes what governance means for the host. Leave it unset in a deployment |
 
 ## Exit codes
@@ -56,7 +56,7 @@ Claude Code reads the exit code before it reads stdout, so the shim uses exactly
 | Exit | When |
 |---|---|
 | `0`, with a decision on stdout | Every real outcome, including `deny`. The deny travels in the JSON body, not the exit code. A Guardian that is down, a timeout, or a decision the host cannot render are all resolved by the negotiated `on_decision_failure` posture and audited |
-| `2`, with stderr only | The shim cannot trust its own input or configuration: stdin is not JSON, the payload has no string `hook_event_name` or `session_id`, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Claude Code does not accept |
+| `2`, with stderr only | The shim cannot trust its own input or configuration: stdin is not JSON, the payload has no string `hook_event_name` or `session_id`, the session id is unsafe as a path segment, the hookmap fails to load, or the hookmap declares an output Claude Code does not accept. Also a posture `deny` at `PostToolUse` that no replacement can be built for, such as a `Read` of an image: Claude Code still delivers the output, so it is audited `unenforced`, not `blocked` (#568) |
 
 Exit `1` does not come from this shim. The process Claude Code starts is the `bun run` command in `settings.json`, and `bun` exits 1 when it cannot load the script. On Claude Code v2.1.295 or later the shipped `PreToolUse` hook's `onFailure` turns that exit into a blocked tool call. On an older client the same exit is non-blocking, and the tool runs.
 

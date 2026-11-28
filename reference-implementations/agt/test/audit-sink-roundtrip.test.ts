@@ -137,12 +137,17 @@ type SameKeys<Adapter, Inspector> = [keyof Adapter] extends [keyof Inspector]
   : { inspectorIsMissing: Exclude<keyof Adapter, keyof Inspector> };
 
 type PostureArm<Entry> = Extract<Entry, { outcome: "proceeded" | "blocked" }>;
+type UnenforcedArm<Entry> = Extract<Entry, { outcome: "unenforced" }>;
 type UngovernedArm<Entry> = Extract<Entry, { outcome: "ungoverned" }>;
 
 type AdapterPostureArm = Required<PostureArm<AdapterAuditEntry>>;
 type InspectorPostureArm = Required<PostureArm<InspectorAuditEntry>>;
 
 const _postureArmFieldsMatch: SameKeys<AdapterPostureArm, InspectorPostureArm> = true;
+const _unenforcedArmFieldsMatch: SameKeys<
+  Required<UnenforcedArm<AdapterAuditEntry>>,
+  Required<UnenforcedArm<InspectorAuditEntry>>
+> = true;
 const _ungovernedArmFieldsMatch: SameKeys<
   Required<UngovernedArm<AdapterAuditEntry>>,
   Required<UngovernedArm<InspectorAuditEntry>>
@@ -158,6 +163,7 @@ const _ungovernedFieldsMatch: SameKeys<
 > = true;
 const _inspectorAcceptsWhatTheAdapterWrites: Required<InspectorAuditEntry> = {} as Required<AdapterAuditEntry>;
 void _postureArmFieldsMatch;
+void _unenforcedArmFieldsMatch;
 void _ungovernedArmFieldsMatch;
 void _failureFieldsMatch;
 void _sessionFailureFieldsMatch;
@@ -193,6 +199,23 @@ describe("the audit log write and the Inspector's read agree on every field", ()
       });
     });
   }
+
+  it("round-trips an unenforced entry, tool included", async () => {
+    const path = join(scratch(), "audit.jsonl");
+    const event = {
+      session_id: "sess-1",
+      method: null,
+      rpc_id: null,
+      posture: "deny",
+      posture_source: "negotiated",
+      outcome: "unenforced",
+      failure: { kind: "host_configuration", message: "no value at the output leaf" },
+      tool: "Read",
+    } as const;
+    createAuditSink({ path, now: () => new Date("2026-08-10T12:00:00.000Z") }).write(event);
+
+    expect(await firstEntry(path)).toEqual({ seq: 1, recorded_at: "2026-08-10T12:00:00.000Z", ...event });
+  });
 
   // Both fields together: a null `method` (nothing was sent, so no ACS
   // method was ever determined) and a `session_failure` beside the step's

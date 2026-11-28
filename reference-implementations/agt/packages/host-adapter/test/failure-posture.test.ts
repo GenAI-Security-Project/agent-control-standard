@@ -24,10 +24,10 @@ function recordingSink(): { sink: AuditSink; events: PostureAuditEvent[] } {
       path: "test",
       write: (e) => {
         // Checked rather than cast: if this module ever starts writing the
-        // other arm, that is a change to what it records and it should fail
+        // another arm, that is a change to what it records and it should fail
         // here loudly rather than be narrowed away by an assertion.
-        if (e.outcome === "ungoverned") {
-          throw new Error(`applyFailurePosture wrote an ungoverned entry: ${JSON.stringify(e)}`);
+        if (e.outcome !== "proceeded" && e.outcome !== "blocked") {
+          throw new Error(`applyFailurePosture wrote an entry of another arm: ${JSON.stringify(e)}`);
         }
         events.push(e);
         return true;

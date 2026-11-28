@@ -125,6 +125,7 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
         skippedNoMethod: {},
         skippedReplay: 0,
         skippedUngoverned: 0,
+        skippedUnenforced: 0,
         skippedUnreadable: 0,
       });
       const spans = spansIn(otelPath);
@@ -167,6 +168,7 @@ describe("audit-to-otlp: the host's decision failures become acs.decision.failur
         skippedNoMethod: { host_configuration: 1 },
         skippedReplay: 0,
         skippedUngoverned: 1,
+        skippedUnenforced: 0,
         skippedUnreadable: 0,
       });
       expect(spansIn(otelPath)).toHaveLength(0);
@@ -206,6 +208,28 @@ describe("audit-to-otlp: review fixes", () => {
       ...fields,
     })}\n`;
   }
+
+  // A deny the host could not carry out (#568). Not a decision failure the
+  // mapping has a span for, and not unreadable either, so it is counted apart.
+  it("skips unenforced entries and counts them apart from unreadable ones", async () => {
+    await withScratch(async (auditPath, otelPath) => {
+      appendFileSync(
+        auditPath,
+        entryLine({
+          method: null,
+          rpc_id: null,
+          outcome: "unenforced",
+          posture: "deny",
+          failure: { kind: "host_configuration", message: "no value at the output leaf" },
+        }),
+      );
+
+      const summary = await convertAuditLog(auditPath, otelPath);
+
+      expect(summary).toMatchObject({ converted: 0, skippedUnenforced: 1, skippedUnreadable: 0 });
+      expect(spansIn(otelPath)).toHaveLength(0);
+    });
+  });
 
   function numberAttribute(carrier: OtlpEvent | undefined, key: string): number | undefined {
     const value = (carrier?.attributes?.find((a) => a.key === key)?.value as { intValue?: string | number } | undefined)?.intValue;

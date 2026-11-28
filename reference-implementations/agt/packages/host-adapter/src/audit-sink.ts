@@ -160,6 +160,26 @@ type PostureResolvedAuditEntry = AuditEntryIdentity & {
 };
 
 /**
+ * A posture `deny` the host could not carry out (#568): no replacement of the
+ * output could be built, and the host's stop delivers the output anyway, as
+ * the Claude Code shim's exit 2 at PostToolUse does. The step was not
+ * blocked, so writing `blocked` would put a block that never happened in the
+ * one log an incident review reads.
+ *
+ * The posture arm's fields, because the posture did answer, plus the tool:
+ * no request was built, so `method` is null, and the failure names a hookmap
+ * path, not the tool whose output the agent received. Only a host that
+ * declares its stop does not withhold
+ * (`GovernStepInput.resultGateStopWithholds: false`) writes this arm.
+ */
+type UnenforcedAuditEntry = Omit<PostureResolvedAuditEntry, "outcome"> & {
+  outcome: "unenforced";
+  /** From the hookmap's `tool_name` path, the source `buildEnvelope` names the
+   * tool by; null when that path does not resolve to a string. */
+  tool: string | null;
+};
+
+/**
  * A step no gate ever asked about: the hook fired, the gate's own `tools`
  * list did not name this tool, and the step ran with no envelope built, no
  * Guardian contacted and no decision sought.
@@ -211,7 +231,7 @@ type UngovernedAuditEntry = AuditEntryIdentity & {
   ungoverned: { tool: string; tools: string[] };
 };
 
-export type AuditEntry = PostureResolvedAuditEntry | UngovernedAuditEntry;
+export type AuditEntry = PostureResolvedAuditEntry | UnenforcedAuditEntry | UngovernedAuditEntry;
 
 /** `Omit` over a union collapses it to the keys its arms share, which would
  * silently erase both arms' own fields. Distributed, so each arm keeps them. */

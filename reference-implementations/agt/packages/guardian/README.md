@@ -111,7 +111,7 @@ Run it after the agent session has ended, into a file that does not exist when i
 
 `acs.failure.posture` is the deployment's posture, not what became of the step. A refused request shows `fail_open` under a `proceed` deployment even though the host blocked it. The detail sentence says so, and the error code is in `acs.failure.error_code`. The detail is always a sentence the converter writes, never the host's message, which quotes the Guardian's error text.
 
-Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Also skipped, and counted on stdout:
+Entries with `outcome: "ungoverned"` are skipped: those are steps no gate asked about, which the failure classes do not cover. Entries with `outcome: "unenforced"` are skipped and counted apart: a deny the host could not carry out, so the agent received the output. Also skipped, and counted on stdout:
 
 - entries whose method has no `step_to_span` entry;
 - entries with no method, by failure kind, because the host never built a request for them;

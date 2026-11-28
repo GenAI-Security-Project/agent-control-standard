@@ -98,7 +98,7 @@ function recordingSink(): { sink: AuditSink; events: AuditEvent[] } {
  */
 function postureEventAt(events: AuditEvent[], index: number): Extract<AuditEvent, { outcome: "proceeded" | "blocked" }> {
   const event = events[index];
-  if (event === undefined || event.outcome === "ungoverned") {
+  if (event === undefined || (event.outcome !== "proceeded" && event.outcome !== "blocked")) {
     throw new Error(`expected a posture-resolved audit entry at [${index}], got ${JSON.stringify(event)}`);
   }
   return event;

@@ -1173,3 +1173,43 @@ describe("a result-gate decision the hookmap gives no way to withhold with -- th
     expect(result).toEqual(liveResult("rm -rf /"));
   });
 });
+
+describe("a result-gate deny no replacement can be built for, on a host whose stop withholds", () => {
+  // The Claude Code shim audits this case as `unenforced`, because its exit 2
+  // at PostToolUse delivers the output (#568). Here the plugin's throw is the
+  // stop, and acs-plugin.ts's own header records that the model never sees
+  // the output then, so the deny was carried out and stays `blocked`.
+  it("audits the posture's deny as blocked, and the hook throws", async () => {
+    const auditPath = freshAuditLogPath();
+    const denying = await startGuardian({ port: 0, manifestPath: "policy/manifest.yaml", onDecisionFailure: "deny" });
+    // AcsPlugin reads the URL at construction, so it is swapped around this
+    // test alone and put back for the rest of the file.
+    const previousUrl = process.env.ACS_GUARDIAN_URL;
+    process.env.ACS_GUARDIAN_URL = denying.url;
+    try {
+      await withAuditLog(auditPath, async () => {
+        const hooks = await AcsPlugin({} as never);
+        // No `output`: the hookmap's leaf resolves to nothing, so no request
+        // can be built and no replacement either.
+        const result = { title: "cat .env", metadata: { exit: 0, truncated: false }, attachments: [] };
+        await expect(
+          hooks["tool.execute.after"]!(
+            { tool: TOOL, sessionID: "ses-result-gate-no-output", callID: "c1", args: {} },
+            result as never,
+          ),
+        ).rejects.toThrow();
+      });
+
+      const entries = readFileSync(auditPath, "utf8")
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .map((line) => JSON.parse(line) as { outcome: string; posture: string; failure: { kind: string } });
+      expect(entries.map((entry) => [entry.outcome, entry.posture, entry.failure.kind])).toEqual([
+        ["blocked", "deny", "host_configuration"],
+      ]);
+    } finally {
+      process.env.ACS_GUARDIAN_URL = previousUrl;
+      await denying.close();
+    }
+  });
+});
