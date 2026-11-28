@@ -160,6 +160,11 @@ hooks:
     outputs:
       from: $.tool_response.stdout
       within: $.tool_response
+      # stderr is the other text Bash returns. A withholding replaces it with
+      # stdout, so a deny cannot deliver it. A redaction of stdout leaves it as
+      # produced, because the policy evaluates stdout alone.
+      companions:
+        - $.tool_response.stderr
       by_tool:
         # Read's result on a text file, captured with a PostToolUse probe hook
         # on Claude Code 2.1.316 and 2.1.325: {type, file: {filePath, content,
