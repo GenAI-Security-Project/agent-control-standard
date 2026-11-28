@@ -129,6 +129,9 @@ describe("main.ts applies the loopback proxy exemption", () => {
           NO_COLOR: "1",
           ACS_GUARDIAN_PORT: "0",
           ACS_MANIFEST_PATH: MANIFEST,
+          // main.ts refuses to start an ACS-Core Guardian without a key (§10).
+          ACS_HMAC_SECRET: Buffer.alloc(32, 7).toString("base64"),
+          ACS_HMAC_KEY_ID: "test-key",
           ACS_OTEL_ENDPOINT: `http://127.0.0.1:${collector.port}/v1/traces`,
           HTTP_PROXY: proxyUrl,
           http_proxy: proxyUrl,

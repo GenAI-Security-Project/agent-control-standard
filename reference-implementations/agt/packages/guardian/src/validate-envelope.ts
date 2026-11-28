@@ -1,10 +1,9 @@
 /**
  * validateEnvelope checks an incoming ACS request envelope against the
  * v0.1.0 JSON Schemas at the root of this repository
- * (specification/v0.1.0/request-envelope.json), and -- for
- * `steps/toolCallRequest` and `steps/toolCallResult` -- additionally against
- * that method's own hook payload schema (hooks/tool-call-request.json,
- * hooks/tool-call-result.json).
+ * (specification/v0.1.0/request-envelope.json), and -- for each implemented
+ * ACS-Core native hook, `system/ping`, and `handshake/hello` -- additionally
+ * against that method's own payload schema.
  *
  * It returns an `AcsRequestEnvelope`: a request of ANY method, named the
  * same thing the host's own builder names it
@@ -191,6 +190,17 @@ const TOOL_CALL_REQUEST_SCHEMA_ID = `${SCHEMA_BASE}hooks/tool-call-request.json`
 const TOOL_CALL_REQUEST_METHOD = "steps/toolCallRequest";
 const TOOL_CALL_RESULT_SCHEMA_ID = `${SCHEMA_BASE}hooks/tool-call-result.json`;
 const TOOL_CALL_RESULT_METHOD = "steps/toolCallResult";
+const HANDSHAKE_METHOD = "handshake/hello";
+const CLIENT_HELLO_SCHEMA_ID = `${SCHEMA_BASE}handshake.json#/$defs/ClientHello`;
+const PING_METHOD = "system/ping";
+const PING_SCHEMA_ID = `${SCHEMA_BASE}hooks/system-ping.json`;
+
+const HOOK_SCHEMA_BY_METHOD: Record<string, string> = {
+  "steps/sessionStart": `${SCHEMA_BASE}hooks/session-start.json`,
+  "steps/sessionEnd": `${SCHEMA_BASE}hooks/session-end.json`,
+  "steps/userMessage": `${SCHEMA_BASE}hooks/user-message.json`,
+  "steps/agentResponse": `${SCHEMA_BASE}hooks/agent-response.json`,
+};
 
 function listSchemaFiles(dir: string): string[] {
   const out: string[] = [];
@@ -295,20 +305,34 @@ function checkHookPayload(envelope: AcsRequestEnvelope, schemaId: string): void 
  * condition under which it may be read are the same condition, written once
  * per method, in this file.
  */
-export function validateEnvelope(input: unknown): AcsRequestEnvelope {
+export function validateEnvelopeShape(input: unknown): AcsRequestEnvelope {
   const validateTopLevel = getValidator(REQUEST_ENVELOPE_SCHEMA_ID);
   if (!validateTopLevel(input)) {
     throw toValidationError(validateTopLevel.errors, "");
   }
 
-  const envelope = input as AcsRequestEnvelope;
+  return input as AcsRequestEnvelope;
+}
 
+/** Validates the method-specific payload after the wire-security gates have
+ * authenticated the general envelope. */
+export function validateMethodPayload(envelope: AcsRequestEnvelope): void {
   if (envelope.method === TOOL_CALL_REQUEST_METHOD) {
     checkHookPayload(envelope, TOOL_CALL_REQUEST_SCHEMA_ID);
   } else if (envelope.method === TOOL_CALL_RESULT_METHOD) {
     checkHookPayload(envelope, TOOL_CALL_RESULT_SCHEMA_ID);
+  } else if (envelope.method in HOOK_SCHEMA_BY_METHOD) {
+    checkHookPayload(envelope, HOOK_SCHEMA_BY_METHOD[envelope.method]!);
+  } else if (envelope.method === HANDSHAKE_METHOD) {
+    checkHookPayload(envelope, CLIENT_HELLO_SCHEMA_ID);
+  } else if (envelope.method === PING_METHOD) {
+    checkHookPayload(envelope, PING_SCHEMA_ID);
   }
+}
 
+export function validateEnvelope(input: unknown): AcsRequestEnvelope {
+  const envelope = validateEnvelopeShape(input);
+  validateMethodPayload(envelope);
   return envelope;
 }
 

@@ -78,3 +78,12 @@ export { persistIfcLabels, supplySourceLabels } from "./ifc-labels.ts";
 // proxy variables alone, and an embedder that wants main.ts's loopback
 // exemption needs these two to apply it.
 export { keepLoopbackOffProxy, loopbackProxyWarning } from "./loopback-proxy.ts";
+export {
+  jcsCanonicalise,
+  verifyHmacSha256,
+  signingInput,
+  deriveSessionKey,
+  signResponseHmacSha256,
+  responseSigningInput,
+} from "./verify-signature.ts";
+export { ToolUnregisteredError } from "./map-verdict.ts";
