@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
  * repo's own cwd.
  */
 const SHIM = fileURLToPath(new URL("../acs-hook.ts", import.meta.url));
+const SCHEMA_ROOT = fileURLToPath(new URL("../../../../../specification/v0.1.0/", import.meta.url));
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -191,7 +192,9 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: "blocked by policy",
+        permissionDecisionReason: existsSync(SCHEMA_ROOT)
+          ? "blocked by policy"
+          : `this host could not validate the response for steps/toolCallRequest (response_validation_unavailable: Host could not validate the Guardian response: ENOENT: no such file or directory, scandir '${SCHEMA_ROOT}'); the guardian was reachable and answered, so this is not a delivery failure and on_decision_failure=proceed does not apply -- a step without a valid guardian decision is not a step this host may proceed with, so it was blocked.`,
       },
     });
   });

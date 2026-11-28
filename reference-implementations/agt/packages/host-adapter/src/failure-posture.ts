@@ -1,23 +1,25 @@
 /**
- * applyFailurePosture handles the delivery half of ACS's two-failure-domain
- * split: evaluation failures fail closed on their own; this handles a
- * failure of the wire itself, by applying the negotiated posture.
+ * applyFailurePosture handles the host half of ACS's two-failure-domain split:
+ * evaluation failures fail closed on their own; this handles the ways the
+ * host can finish without a usable decision. Delivery failures apply the
+ * negotiated posture, while the post-response failures below fail closed.
  *
- * This function is only ever reached when NO usable decision arrived: the
- * Guardian stayed silent past the negotiated timeout, the transport died, or
- * an error response carried no decision. §6.4 says all three resolve the
- * same way -- apply the deployment's declared posture -- and that every step
+ * This function is only ever reached when the host has no usable decision.
+ * For a delivery failure -- the Guardian stayed silent past the negotiated
+ * timeout, the transport died, or an error response carried no decision --
+ * §6.4 says to apply the deployment's declared posture, and that every step
  * which proceeds without a decision MUST be audited.
  *
- * Two answered-response cases are not §6.4 delivery failures, so this module
- * reads the failure before the posture: a JSON-RPC refusal and a response that
- * fails the canonical ACS schema. The Guardian answered in both cases, but no
- * valid decision exists. Both resolve to `deny` regardless of posture and are
- * audited under distinct failure kinds.
+ * Three cases after a response arrives are not §6.4 delivery failures, so this
+ * module reads the failure before the posture: a JSON-RPC refusal, a response
+ * that fails the canonical ACS schema, and a host that cannot run that schema
+ * validator. In the last case the response may contain a real Guardian deny,
+ * but the host cannot establish that it is valid. All three resolve to `deny`
+ * regardless of posture and are audited under distinct failure kinds.
  *
- * It is NOT reached when a decision arrived. A `deny` that arrives is
- * honoured regardless of posture, and that is enforced by the caller never
- * calling this on a decision.
+ * It is NOT reached when a decision has been accepted as valid. A validated
+ * `deny` is honoured regardless of posture, and that is enforced by the caller
+ * never calling this on an accepted decision.
  *
  * §6.4 makes the audit entry a MUST for a step that proceeds without a
  * decision, and the audit sink is documented total -- it must never throw,
@@ -32,7 +34,8 @@
  *
  * Nothing here knows the policy runtime behind the wire. A delivery failure
  * is a property of the wire; a refusal or invalid response is a property of
- * what the Guardian returned. None is a property of the policy runtime.
+ * what the Guardian returned; validator unavailability is a host fault. None
+ * is a property of the policy runtime.
  */
 import type { AuditEvent, AuditSink } from "./audit-sink.ts";
 import type {
@@ -324,14 +327,16 @@ export function applyFailurePosture({
 }: ApplyFailurePostureInput): FailureResolvedAcsDecision {
   const { config: sessionConfig, failure: sessionFailure } = session;
   const posture = sessionConfig?.on_decision_failure ?? DEFAULT_POSTURE;
-  // Classified BEFORE the resolution is read, because two answered-response
-  // kinds decide it. A refusal and an invalid response both came from a live
-  // Guardian, and a governance tool does not proceed on either.
+  // Classified BEFORE the resolution is read, because three failures after a
+  // response arrives decide it. A refusal and an invalid response came from a
+  // live Guardian; validator unavailability means this host cannot establish
+  // what the live Guardian returned. A governance tool does not proceed on
+  // any of the three.
   const classified = classifyStepFailure(stage, failure);
   const refused = classified.kind === "refused";
   const invalidResponse = classified.kind === "invalid_response";
   const validationUnavailable = classified.kind === "response_validation_unavailable";
-  const failClosed = refused || invalidResponse;
+  const failClosed = refused || invalidResponse || validationUnavailable;
   // One resolution, read once, in the three vocabularies it is expressed in --
   // see RESOLUTION_BY_POSTURE.
   const { decision, outcome } = failClosed ? FAIL_CLOSED_RESOLUTION : RESOLUTION_BY_POSTURE[posture];
@@ -387,15 +392,15 @@ export function applyFailurePosture({
   // against a live Guardian.
   // It is not to be reworded without re-capturing them.
   const cause = failClosed
-    ? invalidResponse
-      ? `the guardian returned an invalid response for ${method ?? "this step"} ` +
-        `(${classified.kind}: ${classified.message})`
-      : `the guardian refused the envelope for ${method ?? "this step"} rather than deciding it ` +
-        `(${classified.kind}: ${classified.message})`
-    : validationUnavailable
+    ? validationUnavailable
       ? `this host could not validate the response for ${method ?? "this step"} ` +
         `(${classified.kind}: ${classified.message})`
-      : stage === "request"
+      : invalidResponse
+        ? `the guardian returned an invalid response for ${method ?? "this step"} ` +
+          `(${classified.kind}: ${classified.message})`
+        : `the guardian refused the envelope for ${method ?? "this step"} rather than deciding it ` +
+          `(${classified.kind}: ${classified.message})`
+    : stage === "request"
       ? `this host could not build a request for this step, so no decision was ever sought ` +
         `(${classified.kind}: ${classified.message})`
       : stage === "render"
@@ -411,10 +416,11 @@ export function applyFailurePosture({
 
   // Returns before both of the two exits below, because both of them speak
   // about `on_decision_failure` -- what this deployment declared should happen
-  // when no response arrives. A refusal or invalid response is an answer, not
-  // a lost delivery. Saying "on_decision_failure=proceed, so this step was
-  // blocked" would read as a posture contradicting itself; saying it was
-  // blocked for want of an audit entry would name the wrong reason entirely.
+  // when no response arrives. A refusal, invalid response, or response this
+  // host cannot validate is not a lost delivery. Saying
+  // "on_decision_failure=proceed, so this step was blocked" would read as a
+  // posture contradicting itself; saying it was blocked for want of an audit
+  // entry would name the wrong reason entirely.
   // It is still audited -- the write above already happened -- and an
   // unauditable fail-closed outcome needs no downgrade: the step is blocked
   // either way, and the failed write is reported by the sink's own error path.
@@ -425,7 +431,13 @@ export function applyFailurePosture({
         `${cause};${sessionNote} the guardian was reachable and answered, so this is not a delivery failure ` +
         `and on_decision_failure=${posture} does not apply -- a step without a valid guardian decision is not ` +
         "a step this host may proceed with, so it was blocked.",
-      reason_codes: [invalidResponse ? INVALID_RESPONSE_REASON_CODE : REFUSAL_REASON_CODE],
+      reason_codes: [
+        validationUnavailable
+          ? "response_validation_unavailable"
+          : invalidResponse
+            ? INVALID_RESPONSE_REASON_CODE
+            : REFUSAL_REASON_CODE,
+      ],
     };
   }
 
@@ -477,9 +489,11 @@ export function applyFailurePosture({
  * word no posture can ever resolve to, admitted into the one table whose job
  * is that the posture, the decision and the outcome agree by construction.
  *
- * Consulted for delivery and host failures. Refusals and invalid responses use
- * FAIL_CLOSED_RESOLUTION instead because they are answered-response failures,
- * outside the posture's declaration about missing delivery.
+ * Consulted for delivery and host failures other than response-validator
+ * unavailability. Refusals, invalid responses, and an unavailable validator
+ * use FAIL_CLOSED_RESOLUTION instead because a response arrived and the host
+ * cannot establish a valid decision, outside the posture's declaration about
+ * missing delivery.
  */
 type PostureResolvedAuditEvent = Extract<AuditEvent, { outcome: "proceeded" | "blocked" }>;
 
@@ -498,7 +512,8 @@ const RESOLUTION_BY_POSTURE: Record<
  * reports what became of the step and the step was blocked -- inventing
  * A new outcome word would give the Inspector another badge stem for a fact
  * already carried by `failure.kind`. These blocks stay distinguishable from
- * posture-driven ones because the kind is `refused` or `invalid_response`.
+ * posture-driven ones because the kind is `refused`, `invalid_response`, or
+ * `response_validation_unavailable`.
  *
  * Shaped like a RESOLUTION_BY_POSTURE row, and read off the same
  * `PostureResolvedAuditEvent` arm, so the two cannot drift into disagreeing

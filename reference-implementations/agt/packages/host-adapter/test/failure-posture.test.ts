@@ -446,33 +446,43 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
 });
 
 describe("applyFailurePosture — local response validation is unavailable", () => {
-  it("uses the negotiated posture without blaming the Guardian", () => {
-    const proceeding = recordingSink();
-    const proceed = applyFailurePosture({
+  it("fails closed under a negotiated proceed posture without blaming the Guardian", () => {
+    const blocked = recordingSink();
+    const decision = applyFailurePosture({
       failure: new GuardianResponseValidatorError("schema files are unavailable"),
       session: SESSION("proceed"),
-      audit: proceeding.sink,
+      audit: blocked.sink,
       ...CALL,
     });
-    expect(proceed.decision).toBe("allow");
-    expect(proceed.reason_codes).toEqual(["response_validation_unavailable"]);
-    expect(proceed.reasoning).toMatch(/this host could not validate/i);
-    expect(proceed.reasoning).not.toMatch(/guardian returned an invalid response/i);
-    expect(proceeding.events[0]).toMatchObject({
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason_codes).toEqual(["response_validation_unavailable"]);
+    expect(decision.reasoning).toMatch(/this host could not validate/i);
+    expect(decision.reasoning).not.toMatch(/guardian returned an invalid response/i);
+    expect(decision.reasoning).toContain("on_decision_failure=proceed does not apply");
+    expect(blocked.events[0]).toMatchObject({
       posture: "proceed",
-      outcome: "proceeded",
+      outcome: "blocked",
       failure: { kind: "response_validation_unavailable" },
     });
+  });
 
-    const denying = recordingSink();
+  it("fails closed under the ACS default proceed posture too", () => {
+    const blocked = recordingSink();
+    expect(DEFAULT_POSTURE).toBe("proceed");
     expect(
       applyFailurePosture({
         failure: new GuardianResponseValidatorError("schema files are unavailable"),
-        session: SESSION("deny"),
-        audit: denying.sink,
+        session: SESSION(undefined),
+        audit: blocked.sink,
         ...CALL,
       }).decision,
     ).toBe("deny");
+    expect(blocked.events[0]).toMatchObject({
+      posture: "proceed",
+      posture_source: "default",
+      outcome: "blocked",
+      failure: { kind: "response_validation_unavailable" },
+    });
   });
 });
 

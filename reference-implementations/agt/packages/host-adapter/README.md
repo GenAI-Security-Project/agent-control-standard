@@ -28,7 +28,7 @@ A hook may carry a `tools` list. A tool outside that list is not governed, and `
 | Situation | What the adapter does |
 |---|---|
 | A decision arrives | It is honoured. The posture never touches it |
-| For a decision request, the canonical `response-envelope.json` validator or shared decision-result (`AcsResult`) validator rejects the response | A `deny`, regardless of `on_decision_failure` |
+| For a decision request, the canonical `response-envelope.json` validator or shared decision-result (`AcsResult`) validator rejects the response, or the adapter cannot load or run those validators | A `deny`, regardless of `on_decision_failure` |
 | The Guardian returns a recognized refusal error, including refusal of a schema-invalid request envelope | A `deny`, regardless of `on_decision_failure` |
 | A timeout, a transport failure, or another error with no decision | The negotiated posture applies. `proceed` proceeds and writes an audit entry. `deny` blocks. The three cases write three different audit entries |
 | The posture says proceed and the audit entry cannot be written | A block |
@@ -36,7 +36,7 @@ A hook may carry a `tools` list. A tool outside that list is not governed, and `
 | Malformed `modifications` | Fails closed |
 | A modification the host cannot apply | Refused. At the result gate the refusal withholds the output |
 
-The validator-rejection and recognized-refusal cases above are intentionally stricter than the current [§6.4](../../../../docs/spec/instrument/specification.md#64-honoring-decisions-normative), which treats a malformed response or an error instead of a decision as a decision failure resolved by `on_decision_failure`. Here, either schema-validator rejection or a recognized refusal error results in `deny`, regardless of posture.
+The validator-rejection, validator-unavailable, and recognized-refusal cases above are intentionally stricter than the current [§6.4](../../../../docs/spec/instrument/specification.md#64-honoring-decisions-normative), which treats a malformed response or an error instead of a decision as a decision failure resolved by `on_decision_failure`. Here, schema-validator rejection, inability to run the validator, or a recognized refusal error results in `deny`, regardless of posture.
 
 `DEFAULT_POSTURE` and `DEFAULT_TIMEOUT_MS` are exported so both shims agree without one copying the other's number. The stage at which a failure happened, before the request was built, after it went out, or after a decision arrived that the host could not express, is recorded on the audit entry, because the three are different incidents.
 
