@@ -9,6 +9,7 @@ import {
 import { GuardianTimeoutError } from "../src/guardian-client.ts";
 import { SessionConfigStoreFailedError, type ResolvedSessionConfig } from "../src/handshake.ts";
 import type { SessionConfig } from "../src/session-config.ts";
+import { GuardianResponseValidatorError } from "../src/validate-response.ts";
 
 /** The arm of `AuditEvent` this module writes. `applyFailurePosture` answers
  * a failure with a posture, and every entry it files is that; the other arm
@@ -376,6 +377,13 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
     expect(classifyDeliveryFailure(new GuardianTimeoutError(5000)).kind).toBe("timeout");
   });
 
+  it("classifies local validator unavailability as a host fault", () => {
+    expect(classifyDeliveryFailure(new GuardianResponseValidatorError("schema files are unavailable"))).toEqual({
+      kind: "response_validation_unavailable",
+      message: "Host could not validate the Guardian response: schema files are unavailable",
+    });
+  });
+
   // MUST NOT be replaced with a synthetic error. A hand-built
   // `new TypeError(...)` would only prove classifyDeliveryFailure handles a
   // TypeError correctly, never that a real refused connection produces one.
@@ -434,6 +442,47 @@ describe("classifyDeliveryFailure — what came back instead of a decision", () 
   it("never throws on an unknown shape", () => {
     expect(classifyDeliveryFailure(Object.create(null)).kind).toBe("unknown");
     expect(classifyDeliveryFailure(undefined).kind).toBe("unknown");
+  });
+});
+
+describe("applyFailurePosture — local response validation is unavailable", () => {
+  it("fails closed under a negotiated proceed posture without blaming the Guardian", () => {
+    const blocked = recordingSink();
+    const decision = applyFailurePosture({
+      failure: new GuardianResponseValidatorError("schema files are unavailable"),
+      session: SESSION("proceed"),
+      audit: blocked.sink,
+      ...CALL,
+    });
+    expect(decision.decision).toBe("deny");
+    expect(decision.reason_codes).toEqual(["response_validation_unavailable"]);
+    expect(decision.reasoning).toMatch(/this host could not validate/i);
+    expect(decision.reasoning).not.toMatch(/guardian returned an invalid response/i);
+    expect(decision.reasoning).toContain("on_decision_failure=proceed does not apply");
+    expect(blocked.events[0]).toMatchObject({
+      posture: "proceed",
+      outcome: "blocked",
+      failure: { kind: "response_validation_unavailable" },
+    });
+  });
+
+  it("fails closed under the ACS default proceed posture too", () => {
+    const blocked = recordingSink();
+    expect(DEFAULT_POSTURE).toBe("proceed");
+    expect(
+      applyFailurePosture({
+        failure: new GuardianResponseValidatorError("schema files are unavailable"),
+        session: SESSION(undefined),
+        audit: blocked.sink,
+        ...CALL,
+      }).decision,
+    ).toBe("deny");
+    expect(blocked.events[0]).toMatchObject({
+      posture: "proceed",
+      posture_source: "default",
+      outcome: "blocked",
+      failure: { kind: "response_validation_unavailable" },
+    });
   });
 });
 

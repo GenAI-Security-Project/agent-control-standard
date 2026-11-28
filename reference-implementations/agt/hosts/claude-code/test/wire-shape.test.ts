@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
  * repo's own cwd.
  */
 const SHIM = fileURLToPath(new URL("../acs-hook.ts", import.meta.url));
+const SCHEMA_ROOT = fileURLToPath(new URL("../../../../../specification/v0.1.0/", import.meta.url));
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -87,7 +88,11 @@ async function renderedBy(decision: Record<string, unknown>, command: string): P
   const stub = Bun.serve({
     port: 0,
     async fetch(req) {
-      const body = (await req.json()) as { id: string | number; method: string };
+      const body = (await req.json()) as {
+        id: string | number;
+        method: string;
+        params: { request_id: string };
+      };
       if (body.method === "handshake/hello") {
         return Response.json({
           jsonrpc: "2.0",
@@ -101,7 +106,16 @@ async function renderedBy(decision: Record<string, unknown>, command: string): P
           },
         });
       }
-      return Response.json({ jsonrpc: "2.0", id: body.id, result: decision });
+      return Response.json({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          type: "final",
+          acs_version: "0.1.0",
+          request_id: body.params.request_id,
+          ...decision,
+        },
+      });
     },
   });
   try {
@@ -178,7 +192,9 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: "blocked by policy",
+        permissionDecisionReason: existsSync(SCHEMA_ROOT)
+          ? "blocked by policy"
+          : `this host could not validate the response for steps/toolCallRequest (response_validation_unavailable: Host could not validate the Guardian response: ENOENT: no such file or directory, scandir '${SCHEMA_ROOT}'); the guardian was reachable and answered, so this is not a delivery failure and on_decision_failure=proceed does not apply -- a step without a valid guardian decision is not a step this host may proceed with, so it was blocked.`,
       },
     });
   });
@@ -198,7 +214,11 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
         {
           decision: "ask",
           reasoning: "this needs a human",
-          ask_details: { approver: "security-team", question: "run this?", timeout_seconds: 300 },
+          ask_details: {
+            approver: { type: "human", id: "security-team" },
+            question: "run this?",
+            timeout_seconds: 300,
+          },
         },
         "curl example.com",
       ),
@@ -225,8 +245,8 @@ describe("the wire shape this host writes to stdout, pinned decision by decision
           decision: "defer",
           reasoning: "waiting on an out-of-band approval",
           defer_details: {
-            reason: "awaiting change ticket",
-            resolution_method: "external",
+            reason: "pending_dependency",
+            resolution_method: "human_approval",
             resolution_timeout_ms: 300_000,
           },
         },
